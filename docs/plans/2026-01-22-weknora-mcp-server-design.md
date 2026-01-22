@@ -2,52 +2,49 @@
 
 ## 概述
 
-本文档描述 WeKnora MCP Server 的设计方案，该服务器将 WeKnora 的知识库搜索能力封装为 MCP 工具，使 AgentStudio 中的 Claude Agent 能够调用 WeKnora 进行知识检索。
+本文档描述 WeKnora MCP Server 的完整设计方案，包括 WeKnora-UI 前端修改和 AgentStudio 后端集成。该方案将 WeKnora 的知识库搜索能力封装为 MCP 工具，使 AgentStudio 中的 Claude Agent 能够通过 A2A 协议调用 WeKnora 进行知识检索。
 
 ## 1. 整体架构
 
-### 1.1 架构选择：独立 MCP Server（SDK MCP 进程内模式）
+### 1.1 架构图
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        WeKnora-UI                               │
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐  │
 │  │ @ 选择知识库  │    │  登录获取     │    │   A2A Chat      │  │
-│  │   kb_ids     │    │  api_key     │    │   Interface     │  │
+│  │ MentionSelector│   │  api_key     │    │   index.vue     │  │
 │  └──────┬───────┘    └──────┬───────┘    └────────┬─────────┘  │
 │         │                   │                      │            │
 │         └───────────────────┼──────────────────────┘            │
 │                             │                                   │
 │                             ▼                                   │
-│              POST /a2a/:agentId/messages                        │
-│              { message, context: { api_key, kb_ids } }          │
+│     sendMessage(config, { message, context: { weknora: {...} }})│
 └─────────────────────────────┼───────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                       AgentStudio                               │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │                    A2A Routes                             │  │
-│  │  1. 接收请求，提取 context                                │  │
-│  │  2. buildQueryOptions(context)                            │  │
+│  │  a2a.ts: POST /a2a/{agentId}/messages?stream=true        │  │
+│  │  提取 context.weknora → 传递给 buildQueryOptions          │  │
 │  └──────────────────────────┬───────────────────────────────┘  │
 │                             │                                   │
 │                             ▼                                   │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │              WeKnora SDK MCP Server                       │  │
-│  │  ┌────────────────────────────────────────────────────┐  │  │
-│  │  │  weknora_search tool                               │  │  │
-│  │  │  - 闭包捕获: api_key, kb_ids, weknora_base_url     │  │  │
-│  │  │  - 调用 WeKnora /api/v1/knowledge-search           │  │  │
-│  │  └────────────────────────────────────────────────────┘  │  │
+│  │  claudeUtils.ts: buildQueryOptions(..., extendedOptions) │  │
+│  │  集成 WeKnora SDK MCP Server                              │  │
 │  └──────────────────────────┬───────────────────────────────┘  │
 │                             │                                   │
 │                             ▼                                   │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │                   Claude Agent                            │  │
-│  │  - 分析用户问题                                           │  │
-│  │  - 调用 mcp__weknora__weknora_search                      │  │
-│  │  - 根据结果决定是否重试                                   │  │
+│  │  weknoraIntegration.ts: createWeKnoraSdkMcpServer        │  │
+│  │  weknora_search tool（闭包捕获 api_key, kb_ids, base_url）│  │
+│  └──────────────────────────┬───────────────────────────────┘  │
+│                             │                                   │
+│                             ▼                                   │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  Claude Agent 调用 mcp__weknora__weknora_search          │  │
 │  └──────────────────────────────────────────────────────────┘  │
 └─────────────────────────────┼───────────────────────────────────┘
                               │
@@ -55,9 +52,8 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                     WeKnora Backend                             │
 │  POST /api/v1/knowledge-search                                  │
-│  - HybridSearch (向量 + 关键词)                                 │
-│  - Rerank                                                       │
-│  - 返回结构化结果                                               │
+│  Authorization: Bearer ${api_key}                               │
+│  Body: { question, knowledge_base_ids, ... }                    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -66,286 +62,601 @@
 | 决策点 | 选择 | 理由 |
 |--------|------|------|
 | 架构模式 | SDK MCP 进程内 | 无需外部进程，部署简单，与 A2A 模式兼容 |
-| 认证方式 | 动态参数传递 | 每次调用传入 api_key 和 kb_ids，支持多租户 |
-| API 选择 | /knowledge-search | 纯搜索 API，支持 HybridSearch，可控性强 |
-| 重试策略 | 结构化反馈 | 返回 total_count 和 suggestion，引导 Claude 智能重试 |
+| 认证方式 | 动态参数传递（context.weknora） | 每次调用传入 api_key 和 kb_ids，支持多租户 |
+| API 选择 | /api/v1/knowledge-search | 纯搜索 API，支持 HybridSearch，可控性强 |
+| 参数传递 | 闭包捕获 | 安全，不暴露在 system prompt 中 |
+| 兼容性 | extendedOptions 可选参数 | 不影响现有 buildQueryOptions 调用 |
 
-## 2. MCP Tool 定义
+## 2. 数据来源
 
-### 2.1 工具规范
+| 数据 | 来源 | 获取方式 |
+|------|------|----------|
+| `api_key` | WeKnora 登录时返回 | `authStore.tenant?.api_key` |
+| `kb_ids` | 用户通过 @ Mention 选择 | `selectedKnowledgeBases.map(kb => kb.id)` |
+| `base_url` | 环境变量 | `import.meta.env.VITE_WEKNORA_API_URL` |
 
-```typescript
-import { tool } from '@anthropic-ai/claude-agent-sdk';
-import { z } from 'zod';
+## 3. WeKnora-UI 修改
 
-const weknoraSearchTool = tool(
-  'weknora_search',
-  `Search knowledge bases for relevant information using hybrid search (vector + keyword).
+### 3.1 修改文件清单
 
-This tool queries WeKnora knowledge bases to find documents and chunks matching your query.
-It supports both semantic understanding and keyword matching for comprehensive results.
-
-**When to use:**
-- Answer questions requiring specific knowledge from documents
-- Find relevant context for complex topics
-- Verify facts against stored knowledge
-
-**Query strategies:**
-- Use specific keywords for precise matches
-- Use natural language for semantic search
-- Combine both for best results
-
-**Response interpretation:**
-- High relevance (score > 0.8): Directly relevant content
-- Medium relevance (0.5-0.8): Related but may need verification
-- Low relevance (< 0.5): Tangentially related
-
-If results are insufficient, consider:
-1. Rephrasing with different keywords
-2. Breaking complex queries into simpler parts
-3. Using more specific terminology from the domain`,
-
-  {
-    query: z
-      .string()
-      .min(1)
-      .max(2000)
-      .describe('Search query. Can be natural language question or keywords. For best results, include domain-specific terms.'),
-
-    search_mode: z
-      .enum(['hybrid', 'vector', 'keyword'])
-      .optional()
-      .default('hybrid')
-      .describe('Search mode: "hybrid" (recommended) combines vector and keyword search, "vector" for semantic similarity, "keyword" for exact matches.'),
-
-    top_k: z
-      .number()
-      .int()
-      .min(1)
-      .max(50)
-      .optional()
-      .default(10)
-      .describe('Maximum number of results to return (1-50). Use smaller values for focused queries, larger for exploratory searches.'),
-
-    min_score: z
-      .number()
-      .min(0)
-      .max(1)
-      .optional()
-      .default(0.5)
-      .describe('Minimum relevance score threshold (0-1). Higher values return more relevant but fewer results.'),
-
-    rerank: z
-      .boolean()
-      .optional()
-      .default(true)
-      .describe('Whether to apply reranking for improved relevance ordering. Recommended for important queries.'),
-  },
-
-  async (args, context) => {
-    // Implementation - see section 2.2
-  }
-);
+```
+weknora-ui/
+├── .env.development              # 新增
+├── .env.production               # 新增
+├── src/
+│   ├── utils/
+│   │   └── weknora.ts            # 新增
+│   └── views/
+│       └── a2a-chat/
+│           └── index.vue         # 修改
 ```
 
-### 2.2 工具实现
+### 3.2 环境变量配置
 
+**.env.development**
+```bash
+VITE_WEKNORA_API_URL=http://192.168.100.30:8080
+```
+
+**.env.production**
+```bash
+VITE_WEKNORA_API_URL=https://your-weknora-domain.com
+```
+
+### 3.3 工具函数
+
+**src/utils/weknora.ts**
 ```typescript
-async (args) => {
-  const { query, search_mode, top_k, min_score, rerank } = args;
+/**
+ * WeKnora 配置工具函数
+ */
 
-  // api_key, kb_ids, baseUrl 通过闭包从服务器创建时捕获
-  // 这些值来自 A2A context
+export interface WeknoraContext {
+  api_key: string
+  kb_ids: string[]
+  base_url: string
+}
 
-  try {
-    const response = await fetch(`${baseUrl}/api/v1/knowledge-search`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${api_key}`,
-      },
-      body: JSON.stringify({
-        question: query,
-        knowledge_base_ids: kb_ids,
-        search_mode: search_mode,
-        top_k: top_k,
-        min_score: min_score,
-        rerank: rerank,
-      }),
-    });
+/**
+ * 获取 WeKnora API 基地址
+ */
+export function getWeknoraBaseUrl(): string {
+  return import.meta.env.VITE_WEKNORA_API_URL || 'http://192.168.100.30:8080'
+}
 
-    if (!response.ok) {
-      const error = await response.text();
-      return {
-        content: [{
-          type: 'text',
-          text: `Search failed: ${response.status} - ${error}`
-        }],
-        isError: true,
-      };
-    }
+/**
+ * 构建 WeKnora Context
+ */
+export function buildWeknoraContext(
+  apiKey: string | undefined,
+  kbIds: string[]
+): WeknoraContext | undefined {
+  if (!apiKey || kbIds.length === 0) {
+    return undefined
+  }
 
-    const data = await response.json();
-    const results = data.results || [];
-
-    // 构建结构化响应
-    const content: any[] = [];
-
-    // 1. 搜索摘要
-    content.push({
-      type: 'text',
-      text: `## Search Results\n\n` +
-            `**Query:** ${query}\n` +
-            `**Total Found:** ${data.total_count || results.length}\n` +
-            `**Returned:** ${results.length}\n` +
-            `**Search Mode:** ${search_mode}\n\n`
-    });
-
-    // 2. 结果列表
-    if (results.length > 0) {
-      let resultText = '### Matched Documents\n\n';
-
-      for (let i = 0; i < results.length; i++) {
-        const r = results[i];
-        resultText += `#### [${i + 1}] ${r.knowledge_title || 'Untitled'}\n`;
-        resultText += `- **Score:** ${(r.score * 100).toFixed(1)}%\n`;
-        resultText += `- **Source:** ${r.knowledge_filename || 'Unknown'}\n`;
-        resultText += `- **Match Type:** ${r.match_type || 'hybrid'}\n\n`;
-        resultText += `> ${r.content?.substring(0, 500)}${r.content?.length > 500 ? '...' : ''}\n\n`;
-      }
-
-      content.push({ type: 'text', text: resultText });
-    }
-
-    // 3. 智能建议（当结果不足时）
-    if (results.length < 3) {
-      let suggestion = '\n### Suggestions for Better Results\n\n';
-
-      if (results.length === 0) {
-        suggestion += '- Try different keywords or rephrase your query\n';
-        suggestion += '- Use more general terms if query is too specific\n';
-        suggestion += '- Check if the topic exists in the knowledge bases\n';
-      } else {
-        suggestion += '- Consider lowering min_score to get more results\n';
-        suggestion += '- Try breaking the query into smaller parts\n';
-        suggestion += '- Use "keyword" mode if looking for exact terms\n';
-      }
-
-      content.push({ type: 'text', text: suggestion });
-    }
-
-    return { content };
-
-  } catch (error) {
-    return {
-      content: [{
-        type: 'text',
-        text: `Search error: ${error instanceof Error ? error.message : String(error)}`
-      }],
-      isError: true,
-    };
+  return {
+    api_key: apiKey,
+    kb_ids: kbIds,
+    base_url: getWeknoraBaseUrl()
   }
 }
 ```
 
-## 3. Context 传递机制
+### 3.4 index.vue 修改
 
-### 3.1 数据流
+#### 3.4.1 新增导入
 
-```
-┌─────────────────┐
-│   WeKnora-UI    │
-│                 │
-│ 1. 用户登录     │──→ tenant.api_key
-│ 2. @ 选择知识库 │──→ kb_ids[]
-│ 3. 发送消息     │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────────────────────────────┐
-│        A2A Request Body                 │
-│                                         │
-│ {                                       │
-│   "message": "用户问题",                │
-│   "context": {                          │
-│     "api_key": "xxx",                   │
-│     "kb_ids": ["kb1", "kb2"],           │
-│     "weknora_base_url": "https://..."   │
-│   }                                     │
-│ }                                       │
-└────────┬────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────┐
-│     AgentStudio A2A Routes              │
-│                                         │
-│ // a2a.ts                               │
-│ const { message, context } = req.body;  │
-│                                         │
-│ // 传递给 buildQueryOptions             │
-│ buildQueryOptions(..., {                │
-│   weknoraContext: context               │
-│ });                                     │
-└────────┬────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────┐
-│     integrateWeKnoraMcpServer           │
-│                                         │
-│ // 通过闭包捕获 context                 │
-│ const server = createWeKnoraSdkMcp({    │
-│   api_key: context.api_key,             │
-│   kb_ids: context.kb_ids,               │
-│   baseUrl: context.weknora_base_url     │
-│ });                                     │
-└────────┬────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────┐
-│     Tool Handler (闭包访问)             │
-│                                         │
-│ async (args) => {                       │
-│   // api_key, kb_ids, baseUrl           │
-│   // 来自闭包，不在 args 中             │
-│   fetch(`${baseUrl}/api/v1/...`, {      │
-│     headers: { Authorization: api_key } │
-│   });                                   │
-│ }                                       │
-└─────────────────────────────────────────┘
+```typescript
+import { useAuthStore } from '@/stores/auth'
+import MentionSelector from '@/components/MentionSelector.vue'
+import { listKnowledgeBases } from '@/api/knowledge-base'
+import { getCaretCoordinates } from '@/utils/caret'
+import { buildWeknoraContext, type WeknoraContext } from '@/utils/weknora'
 ```
 
-### 3.2 安全考虑
+#### 3.4.2 新增状态变量
 
-- `api_key` 不暴露在 system prompt 中
-- `api_key` 不作为工具参数，Claude 无法直接访问
-- 通过闭包安全传递，仅在 HTTP 请求时使用
+```typescript
+// Auth Store
+const authStore = useAuthStore()
 
-## 4. 部署与注册
+// Mention 相关状态
+const showMention = ref(false)
+const mentionQuery = ref('')
+const mentionItems = ref<Array<{ id: string; name: string; type: 'kb' | 'file'; kbType?: 'document' | 'faq'; count?: number }>>([])
+const mentionActiveIndex = ref(0)
+const mentionStyle = ref<Record<string, string>>({})
+const mentionStartPos = ref(0)
+const isComposing = ref(false)
 
-### 4.1 SDK MCP 进程内模式
+// 当前会话选中的知识库
+const selectedKnowledgeBases = ref<Array<{ id: string; name: string }>>([])
 
-**实现位置：** `backend/src/services/weknora/weknoraIntegration.ts`
+// 知识库列表缓存
+const knowledgeBaseList = ref<Array<{ id: string; name: string; type?: 'document' | 'faq'; knowledge_count?: number }>>([])
+```
+
+#### 3.4.3 新增函数
+
+```typescript
+// 加载知识库列表
+async function loadKnowledgeBases() {
+  try {
+    const res = await listKnowledgeBases()
+    if (res.success && res.data) {
+      knowledgeBaseList.value = res.data
+    }
+  } catch (e) {
+    console.error('加载知识库列表失败:', e)
+  }
+}
+
+// 过滤 mention 选项
+function filterMentionItems(query: string) {
+  const lowerQuery = query.toLowerCase()
+  mentionItems.value = knowledgeBaseList.value
+    .filter(kb => kb.name.toLowerCase().includes(lowerQuery))
+    .filter(kb => !selectedKnowledgeBases.value.some(s => s.id === kb.id))
+    .map(kb => ({
+      id: kb.id,
+      name: kb.name,
+      type: 'kb' as const,
+      kbType: kb.type || 'document',
+      count: kb.knowledge_count || 0
+    }))
+    .slice(0, 10)
+  mentionActiveIndex.value = 0
+}
+
+// 处理 mention 选择
+function onMentionSelect(item: { id: string; name: string; type: string }) {
+  if (item.type === 'kb') {
+    selectedKnowledgeBases.value.push({ id: item.id, name: item.name })
+  }
+
+  const textarea = document.querySelector('.rich-input-container textarea') as HTMLTextAreaElement
+  if (textarea) {
+    const cursor = textarea.selectionStart
+    const textBefore = inputText.value.slice(0, mentionStartPos.value)
+    const textAfter = inputText.value.slice(cursor)
+    inputText.value = textBefore + textAfter
+
+    nextTick(() => {
+      textarea.setSelectionRange(mentionStartPos.value, mentionStartPos.value)
+      textarea.focus()
+    })
+  }
+
+  showMention.value = false
+}
+
+// 移除已选知识库
+function removeKnowledgeBase(id: string) {
+  selectedKnowledgeBases.value = selectedKnowledgeBases.value.filter(kb => kb.id !== id)
+}
+
+// 处理输入事件（检测 @）
+function handleInput(event: Event) {
+  if (isComposing.value) return
+
+  const textarea = event.target as HTMLTextAreaElement
+  const value = textarea.value
+  const cursor = textarea.selectionStart
+
+  const lastAtIndex = value.lastIndexOf('@', cursor - 1)
+  if (lastAtIndex !== -1 && (lastAtIndex === 0 || /\s/.test(value[lastAtIndex - 1]))) {
+    const query = value.slice(lastAtIndex + 1, cursor)
+    if (!/\s/.test(query)) {
+      mentionStartPos.value = lastAtIndex
+      mentionQuery.value = query
+      filterMentionItems(query)
+
+      const coords = getCaretCoordinates(textarea, lastAtIndex)
+      const rect = textarea.getBoundingClientRect()
+      mentionStyle.value = {
+        position: 'fixed',
+        left: `${rect.left + coords.left}px`,
+        top: `${rect.top + coords.top - 200}px`,
+        zIndex: '9999'
+      }
+
+      showMention.value = true
+      return
+    }
+  }
+
+  showMention.value = false
+}
+
+function handleCompositionStart() {
+  isComposing.value = true
+}
+
+function handleCompositionEnd() {
+  isComposing.value = false
+}
+```
+
+#### 3.4.4 修改 handleKeydown
+
+```typescript
+function handleKeydown(event: KeyboardEvent) {
+  // Mention 键盘导航
+  if (showMention.value) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      mentionActiveIndex.value = Math.min(mentionActiveIndex.value + 1, mentionItems.value.length - 1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      mentionActiveIndex.value = Math.max(mentionActiveIndex.value - 1, 0)
+      return
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      if (mentionItems.value[mentionActiveIndex.value]) {
+        onMentionSelect(mentionItems.value[mentionActiveIndex.value])
+      }
+      return
+    }
+    if (event.key === 'Escape') {
+      showMention.value = false
+      return
+    }
+  }
+
+  // 现有的发送逻辑
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault()
+    handleSend()
+  }
+}
+```
+
+#### 3.4.5 修改 handleSend
+
+```typescript
+async function handleSend() {
+  const text = inputText.value.trim()
+  if (!text || !configStore.isValid || isStreaming.value) return
+
+  if (isNewChat.value && !selectedProject.value) {
+    MessagePlugin.warning('请先选择项目')
+    return
+  }
+
+  // ✅ 构建 WeKnora context
+  const weknoraContext = buildWeknoraContext(
+    authStore.tenant?.api_key,
+    selectedKnowledgeBases.value.map(kb => kb.id)
+  )
+  const requestContext = weknoraContext
+    ? { weknora: weknoraContext }
+    : undefined
+
+  const projectSnapshot = selectedProject.value
+    ? { ...selectedProject.value }
+    : null
+
+  const userMessage: A2AChatMessage = {
+    id: generateId(),
+    role: 'user',
+    content: text,
+    timestamp: new Date()
+  }
+  messages.value.push(userMessage)
+  inputText.value = ''
+  scrollToBottom()
+
+  // ✅ 发送请求时传入 context
+  const response = await sendMessage(
+    configStore.config,
+    {
+      message: text,
+      context: requestContext
+    },
+    async (updatedMessage) => {
+      // ...现有逻辑
+    },
+    async (newSessionId) => {
+      // ...现有逻辑
+    }
+  )
+}
+```
+
+#### 3.4.6 模板修改
+
+```vue
+<!-- 输入区域添加已选知识库标签 -->
+<div class="rich-input-container">
+  <!-- 已选知识库标签 -->
+  <div v-if="selectedKnowledgeBases.length > 0" class="selected-kbs">
+    <span
+      v-for="kb in selectedKnowledgeBases"
+      :key="kb.id"
+      class="kb-tag"
+    >
+      <t-icon name="folder" size="14px" />
+      {{ kb.name }}
+      <t-icon name="close" size="12px" class="remove-btn" @click="removeKnowledgeBase(kb.id)" />
+    </span>
+  </div>
+
+  <t-textarea
+    v-model="inputText"
+    placeholder="输入消息，使用 @ 选择知识库，Enter 发送"
+    :autosize="false"
+    @keydown="handleKeydown"
+    @input="handleInput"
+    @compositionstart="handleCompositionStart"
+    @compositionend="handleCompositionEnd"
+  />
+  <!-- control-bar -->
+</div>
+
+<!-- Mention 弹出层 -->
+<Teleport to="body">
+  <MentionSelector
+    :visible="showMention"
+    :style="mentionStyle"
+    :items="mentionItems"
+    v-model:activeIndex="mentionActiveIndex"
+    @select="onMentionSelect"
+  />
+</Teleport>
+```
+
+## 4. AgentStudio 修改
+
+### 4.1 修改文件清单
+
+```
+agentstudio/backend/src/
+├── routes/
+│   └── a2a.ts                    # 修改：提取 context
+├── utils/
+│   └── claudeUtils.ts            # 修改：添加 extendedOptions 参数
+└── services/
+    └── weknora/
+        └── weknoraIntegration.ts # 新增：WeKnora MCP Server
+```
+
+### 4.2 兼容性设计
+
+为不影响现有功能，使用可选的 `extendedOptions` 参数：
+
+| 调用方 | 是否需要修改 | 说明 |
+|--------|-------------|------|
+| `agents.ts` | ❌ 不需要 | extendedOptions 默认为 undefined |
+| `a2a.ts` | ✅ 仅此处修改 | 传入 `{ weknoraContext }` |
+| `slackAIService.ts` | ❌ 不需要 | extendedOptions 默认为 undefined |
+| `taskWorker.ts` | ❌ 不需要 | extendedOptions 默认为 undefined |
+
+### 4.3 a2a.ts 修改
+
+```typescript
+// 第197行：提取 context
+const { message, sessionId, sessionMode = 'new', context } = validation.data;
+
+// 第230行：传入 extendedOptions
+const { queryOptions } = await buildQueryOptions(
+  {
+    systemPrompt: agentConfig.systemPrompt || undefined,
+    allowedTools: agentConfig.allowedTools || [],
+    maxTurns: 30,
+    workingDirectory: a2aContext.workingDirectory,
+    permissionMode: 'bypassPermissions',
+  },
+  a2aContext.workingDirectory,
+  undefined,
+  'bypassPermissions',
+  'sonnet',
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  false,
+  context?.weknora ? { weknoraContext: context.weknora as WeknoraContext } : undefined
+);
+```
+
+### 4.4 claudeUtils.ts 修改
+
+```typescript
+import { integrateWeKnoraMcpServer, type WeknoraContext } from '../services/weknora/weknoraIntegration.js';
+
+/**
+ * 扩展选项接口
+ */
+export interface BuildQueryExtendedOptions {
+  weknoraContext?: WeknoraContext;
+}
+
+export async function buildQueryOptions(
+  agent: any,
+  projectPath?: string,
+  mcpTools?: string[],
+  permissionMode?: string,
+  model?: string,
+  claudeVersion?: string,
+  defaultEnv?: Record<string, string>,
+  userEnv?: Record<string, string>,
+  sessionIdForAskUser?: string,
+  agentIdForAskUser?: string,
+  a2aStreamEnabled?: boolean,
+  extendedOptions?: BuildQueryExtendedOptions  // 新增
+): Promise<BuildQueryOptionsResult> {
+
+  // ... 现有逻辑 ...
+
+  // 集成 A2A MCP Server
+  await integrateA2AMcpServer(queryOptions, currentProjectId, a2aStreamEnabled ?? false);
+
+  // 集成 WeKnora MCP Server（仅当 context 存在且有效时）
+  const weknoraContext = extendedOptions?.weknoraContext;
+  if (weknoraContext?.api_key && weknoraContext?.kb_ids?.length > 0) {
+    await integrateWeKnoraMcpServer(queryOptions, weknoraContext);
+    console.log('✅ [WeKnora] MCP Server integrated with', weknoraContext.kb_ids.length, 'knowledge bases');
+  }
+
+  return { queryOptions, askUserSessionRef };
+}
+```
+
+### 4.5 weknoraIntegration.ts（新建）
 
 ```typescript
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
-interface WeKnoraContext {
+export interface WeknoraContext {
   api_key: string;
   kb_ids: string[];
-  weknora_base_url: string;
+  base_url: string;
 }
 
-export async function createWeKnoraSdkMcpServer(context: WeKnoraContext) {
-  const { api_key, kb_ids, weknora_base_url } = context;
+/**
+ * 集成 WeKnora MCP Server 到 queryOptions
+ */
+export async function integrateWeKnoraMcpServer(
+  queryOptions: any,
+  context: WeknoraContext
+) {
+  const { server } = await createWeKnoraSdkMcpServer(context);
+
+  queryOptions.mcpServers = {
+    ...queryOptions.mcpServers,
+    "weknora": server
+  };
+
+  const toolName = 'mcp__weknora__weknora_search';
+  if (!queryOptions.allowedTools) {
+    queryOptions.allowedTools = [toolName];
+  } else if (!queryOptions.allowedTools.includes(toolName)) {
+    queryOptions.allowedTools.push(toolName);
+  }
+}
+
+/**
+ * 创建 WeKnora SDK MCP Server
+ */
+async function createWeKnoraSdkMcpServer(context: WeknoraContext) {
+  const { api_key, kb_ids, base_url } = context;
 
   const weknoraSearchTool = tool(
     'weknora_search',
-    // ... description ...
-    // ... schema ...
+    `Search knowledge bases for relevant information using hybrid search (vector + keyword).
+
+This tool queries WeKnora knowledge bases to find documents matching your query.
+
+**When to use:**
+- Answer questions requiring specific knowledge from documents
+- Find relevant context for complex topics
+
+**Query strategies:**
+- Use specific keywords for precise matches
+- Use natural language for semantic search
+
+If results are insufficient, consider rephrasing or breaking the query into smaller parts.`,
+
+    {
+      query: z
+        .string()
+        .min(1)
+        .max(2000)
+        .describe('Search query. Can be natural language or keywords.'),
+
+      search_mode: z
+        .enum(['hybrid', 'vector', 'keyword'])
+        .optional()
+        .default('hybrid')
+        .describe('Search mode: hybrid (recommended), vector, or keyword.'),
+
+      top_k: z
+        .number()
+        .int()
+        .min(1)
+        .max(50)
+        .optional()
+        .default(10)
+        .describe('Maximum results to return (1-50).'),
+
+      min_score: z
+        .number()
+        .min(0)
+        .max(1)
+        .optional()
+        .default(0.5)
+        .describe('Minimum relevance score (0-1).'),
+
+      rerank: z
+        .boolean()
+        .optional()
+        .default(true)
+        .describe('Apply reranking for better relevance.'),
+    },
+
     async (args) => {
-      // 闭包访问 api_key, kb_ids, weknora_base_url
-      // ... implementation ...
+      const { query, search_mode, top_k, min_score, rerank } = args;
+
+      try {
+        const response = await fetch(`${base_url}/api/v1/knowledge-search`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${api_key}`,
+          },
+          body: JSON.stringify({
+            question: query,
+            knowledge_base_ids: kb_ids,
+            search_mode: search_mode,
+            top_k: top_k,
+            min_score: min_score,
+            rerank: rerank,
+          }),
+        });
+
+        if (!response.ok) {
+          const error = await response.text();
+          return {
+            content: [{ type: 'text', text: `Search failed: ${response.status} - ${error}` }],
+            isError: true,
+          };
+        }
+
+        const data = await response.json();
+        const results = data.results || [];
+
+        // 构建响应
+        let text = `## Search Results\n\n`;
+        text += `**Query:** ${query}\n`;
+        text += `**Found:** ${results.length} results\n\n`;
+
+        if (results.length > 0) {
+          text += '### Matched Documents\n\n';
+          for (let i = 0; i < results.length; i++) {
+            const r = results[i];
+            text += `#### [${i + 1}] ${r.knowledge_title || 'Untitled'}\n`;
+            text += `- **Score:** ${(r.score * 100).toFixed(1)}%\n`;
+            text += `- **Source:** ${r.knowledge_filename || 'Unknown'}\n\n`;
+            text += `> ${r.content?.substring(0, 500)}${r.content?.length > 500 ? '...' : ''}\n\n`;
+          }
+        } else {
+          text += 'No results found. Try different keywords or rephrasing your query.\n';
+        }
+
+        return { content: [{ type: 'text', text }] };
+
+      } catch (error) {
+        return {
+          content: [{ type: 'text', text: `Search error: ${error instanceof Error ? error.message : String(error)}` }],
+          isError: true,
+        };
+      }
     }
   );
 
@@ -358,87 +669,91 @@ export async function createWeKnoraSdkMcpServer(context: WeKnoraContext) {
   return { server, tool: weknoraSearchTool };
 }
 
-export function getWeKnoraToolName(): string {
+export function getWeknoraToolName(): string {
   return 'mcp__weknora__weknora_search';
 }
 ```
 
-### 4.2 集成到 buildQueryOptions
+## 5. 完整数据流
 
-**修改文件：** `backend/src/utils/claudeUtils.ts`
-
-```typescript
-import { integrateWeKnoraMcpServer } from '../services/weknora/weknoraIntegration.js';
-
-export async function buildQueryOptions(
-  agent: any,
-  projectPath?: string,
-  // ... other params ...
-  weknoraContext?: WeKnoraContext  // 新增参数
-): Promise<BuildQueryOptionsResult> {
-  // ... existing code ...
-
-  // 集成 WeKnora MCP Server（如果有 context）
-  if (weknoraContext?.api_key && weknoraContext?.kb_ids?.length > 0) {
-    await integrateWeKnoraMcpServer(queryOptions, weknoraContext);
-  }
-
-  return { queryOptions, askUserSessionRef };
-}
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. WeKnora-UI: 用户选择知识库并发送消息                                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  - authStore.tenant?.api_key → 从登录信息获取                               │
+│  - selectedKnowledgeBases → 用户通过 @ Mention 选择                         │
+│  - getWeknoraBaseUrl() → 从环境变量获取                                     │
+│                                                                             │
+│  sendMessage(config, {                                                      │
+│    message: "用户问题",                                                     │
+│    context: {                                                               │
+│      weknora: { api_key, kb_ids, base_url }                                │
+│    }                                                                        │
+│  })                                                                         │
+└─────────────────────────────────────────┬───────────────────────────────────┘
+                                          │
+                                          ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. AgentStudio a2a.ts: 提取 context                                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  const { message, context } = validation.data;                              │
+│  // context.weknora = { api_key, kb_ids, base_url }                        │
+└─────────────────────────────────────────┬───────────────────────────────────┘
+                                          │
+                                          ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3. AgentStudio claudeUtils.ts: 传递 extendedOptions                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  buildQueryOptions(..., { weknoraContext: context.weknora })               │
+└─────────────────────────────────────────┬───────────────────────────────────┘
+                                          │
+                                          ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 4. AgentStudio weknoraIntegration.ts: 创建 MCP Server                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  createWeKnoraSdkMcpServer(context)                                         │
+│  // 闭包捕获: api_key, kb_ids, base_url                                    │
+└─────────────────────────────────────────┬───────────────────────────────────┘
+                                          │
+                                          ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 5. Claude Agent 调用 weknora_search tool                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  Tool Handler 通过闭包访问 api_key, kb_ids, base_url                        │
+│  调用 WeKnora /api/v1/knowledge-search API                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 4.3 A2A 路由修改
+## 6. 实现计划
 
-**修改文件：** `backend/src/routes/a2a.ts`
+### Phase 1: WeKnora-UI 修改
 
-```typescript
-// 提取 context
-const { message, sessionId, sessionMode, context } = validation.data;
+1. 创建 `.env.development` 和 `.env.production`
+2. 创建 `src/utils/weknora.ts`
+3. 修改 `src/views/a2a-chat/index.vue`
+   - 添加 Mention 状态和函数
+   - 修改 handleSend 传入 context
+   - 添加模板和样式
 
-// 传递给 buildQueryOptions
-const { queryOptions } = await buildQueryOptions(
-  // ... existing params ...
-  context?.weknora  // WeKnora specific context
-);
-```
+### Phase 2: AgentStudio 修改
 
-## 5. 实现计划
+1. 修改 `backend/src/routes/a2a.ts` - 提取 context
+2. 修改 `backend/src/utils/claudeUtils.ts` - 添加 extendedOptions 参数
+3. 创建 `backend/src/services/weknora/weknoraIntegration.ts`
 
-### Phase 1: 核心实现
-
-1. 创建 `backend/src/services/weknora/weknoraIntegration.ts`
-   - WeKnora SDK MCP Server 创建函数
-   - weknora_search 工具定义与实现
-
-2. 修改 `backend/src/utils/claudeUtils.ts`
-   - 添加 WeKnora MCP Server 集成逻辑
-
-3. 修改 `backend/src/routes/a2a.ts`
-   - 提取并传递 context
-
-### Phase 2: 测试与优化
+### Phase 3: 测试
 
 1. 单元测试
-   - 工具参数验证
-   - API 调用 mock 测试
+   - weknoraIntegration.ts 工具定义测试
+   - buildQueryOptions 兼容性测试
 
 2. 集成测试
-   - 完整 A2A 流程测试
-   - 错误处理测试
+   - A2A 端到端流程测试
+   - 知识库搜索结果验证
 
-3. 性能优化
-   - 添加请求超时
-   - 结果缓存（可选）
+## 7. 附录
 
-### Phase 3: 扩展功能（未来）
-
-- 支持图谱查询（需 WeKnora 新增 API）
-- 支持多轮对话上下文
-- 支持搜索结果高亮
-
-## 6. 附录
-
-### 6.1 WeKnora /api/v1/knowledge-search API
+### 7.1 WeKnora /api/v1/knowledge-search API
 
 **请求：**
 ```json
@@ -470,8 +785,16 @@ const { queryOptions } = await buildQueryOptions(
 }
 ```
 
-### 6.2 相关文件引用
+### 7.2 相关文件引用
 
-- WeKnora 搜索实现: `weknora/internal/application/service/session.go:SearchKnowledge()`
-- AgentStudio SDK MCP 参考: `agentstudio/backend/src/services/a2a/a2aSdkMcp.ts`
-- AgentStudio MCP 集成: `agentstudio/backend/src/services/a2a/a2aIntegration.ts`
+**WeKnora:**
+- 搜索实现: `weknora/internal/application/service/session.go:SearchKnowledge()`
+- API Handler: `weknora/internal/handler/session/qa.go:SearchKnowledge()`
+
+**WeKnora-UI:**
+- MentionSelector 参考: `weknora-ui/src/components/Input-field.vue`
+- Auth Store: `weknora-ui/src/stores/auth.ts`
+
+**AgentStudio:**
+- SDK MCP 参考: `agentstudio/backend/src/services/a2a/a2aSdkMcp.ts`
+- MCP 集成: `agentstudio/backend/src/services/a2a/a2aIntegration.ts`
