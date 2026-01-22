@@ -194,7 +194,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       });
     }
 
-    const { message, sessionId, sessionMode = 'new' } = validation.data;
+    const { message, sessionId, sessionMode = 'new', context } = validation.data;
     const stream = req.query.stream === 'true' || req.headers.accept === 'text/event-stream';
 
     console.info('[A2A] Message received:', {
@@ -234,29 +234,36 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       console.info('[A2A] MCP tools found:', { mcpTools });
     }
 
+    // Extract WeKnora context if present
+    const weknoraContext = context?.weknora as import('../services/weknora/weknoraIntegration.js').WeknoraContext | undefined;
+
     // Build query options for Claude using the shared utility
     // This automatically handles A2A SDK MCP server integration
-    // Model and provider will be resolved by buildQueryOptions using resolveConfig
-    // which prioritizes: channel > agent > project > system default
+    // Note: model is now resolved through configResolver, not from agent config
     const { queryOptions } = await buildQueryOptions(
       {
         systemPrompt: agentConfig.systemPrompt || undefined,
         allowedTools: agentConfig.allowedTools || [],
         maxTurns: 30,
         workingDirectory: a2aContext.workingDirectory,
-        permissionMode: 'default',
+        permissionMode: 'acceptEdits', // A2A 使用 acceptEdits 模式（bypassPermissions 有 SDK bug）
       },
       a2aContext.workingDirectory,
       mcpTools.length > 0 ? mcpTools : undefined, // Pass extracted MCP tools
-      undefined, // permissionMode
+      'acceptEdits', // permissionMode - 使用 acceptEdits（bypassPermissions 有 SDK bug）
       undefined, // model - let resolveConfig determine from project/system defaults
       undefined, // claudeVersion - let resolveConfig determine from agent/project/system
-      undefined  // defaultEnv
+      undefined, // defaultEnv
+      undefined, // userEnv
+      undefined, // sessionIdForAskUser
+      undefined, // agentIdForAskUser
+      undefined, // a2aStreamEnabled
+      weknoraContext ? { weknoraContext } : undefined // extendedOptions
     );
 
     // Override specific options for A2A
-    // User requested includePartialMessages = false for A2A streaming to get complete messages
-    queryOptions.includePartialMessages = false;
+    // Enable streaming for real-time text output
+    queryOptions.includePartialMessages = true;
 
     const startTime = Date.now();
 
@@ -280,6 +287,18 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
 
         let capturedSessionId: string | null = null;
 
+        // Save user message to history first (before getting session ID from SDK)
+        // We'll update with actual sessionId once we capture it
+        const userMessageEvent = {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [{ type: 'text', text: message }]
+          },
+          sessionId: sessionId || 'pending', // Will be updated when we get actual session ID
+          timestamp: Date.now(),
+        };
+
         try {
           const result = await executeA2AQueryStreaming(
             message,
@@ -289,6 +308,14 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
               // Capture session ID
               if ((sdkMessage as any).session_id && !capturedSessionId) {
                 capturedSessionId = (sdkMessage as any).session_id;
+
+                // Now save user message with actual session ID
+                userMessageEvent.sessionId = capturedSessionId!;
+                a2aHistoryService.appendEvent(
+                  a2aContext.workingDirectory,
+                  capturedSessionId!,
+                  userMessageEvent
+                ).catch(err => console.error('[A2A] Failed to write user message to history:', err));
               }
 
               const eventData = {
@@ -330,20 +357,62 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       } else {
         // Synchronous Mode with one-shot Query
         try {
+          // Save user message to history first (if sessionId provided for resume)
+          if (sessionId) {
+            const userHistoryEvent = {
+              type: 'user',
+              message: {
+                role: 'user',
+                content: [{ type: 'text', text: message }]
+              },
+              sessionId: sessionId,
+              timestamp: Date.now(),
+            };
+            try {
+              await a2aHistoryService.appendEvent(a2aContext.workingDirectory, sessionId, userHistoryEvent);
+            } catch (err) {
+              console.error('[A2A] Failed to write user message to history:', err);
+            }
+          }
+
+          let capturedSessionId: string | null = sessionId || null;
           const result = await executeA2AQuery(
             message,
             undefined, // images
             queryOptions,
             async (sdkMessage: SDKMessage) => {
+              // Capture session ID if not already captured
+              if ((sdkMessage as any).session_id && !capturedSessionId) {
+                capturedSessionId = (sdkMessage as any).session_id;
+
+                // Save user message for new sessions (no initial sessionId)
+                if (!sessionId) {
+                  const userHistoryEvent = {
+                    type: 'user',
+                    message: {
+                      role: 'user',
+                      content: [{ type: 'text', text: message }]
+                    },
+                    sessionId: capturedSessionId!,
+                    timestamp: Date.now() - 1, // slightly before to ensure ordering
+                  };
+                  try {
+                    await a2aHistoryService.appendEvent(a2aContext.workingDirectory, capturedSessionId!, userHistoryEvent);
+                  } catch (err) {
+                    console.error('[A2A] Failed to write user message to history:', err);
+                  }
+                }
+              }
+
               // Persist to history
               const eventData = {
                 ...sdkMessage,
-                sessionId: sessionId,
+                sessionId: capturedSessionId || sessionId,
                 timestamp: Date.now(),
               };
-              if (sessionId) {
+              if (capturedSessionId || sessionId) {
                 try {
-                  await a2aHistoryService.appendEvent(a2aContext.workingDirectory, sessionId, eventData);
+                  await a2aHistoryService.appendEvent(a2aContext.workingDirectory, (capturedSessionId || sessionId)!, eventData);
                 } catch (err) {
                   console.error('[A2A] Failed to write history event:', err);
                 }
@@ -417,6 +486,20 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
           }
         };
 
+        // Save user message to history first
+        if (actualSessionId) {
+          const userHistoryEvent = {
+            ...userMessage,
+            sessionId: actualSessionId,
+            timestamp: Date.now(),
+          };
+          try {
+            await a2aHistoryService.appendEvent(a2aContext.workingDirectory, actualSessionId, userHistoryEvent);
+          } catch (err) {
+            console.error('[A2A] Failed to write user message to history:', err);
+          }
+        }
+
         try {
           await claudeSession.sendMessage(userMessage, async (sdkMessage: SDKMessage) => {
             const eventData = {
@@ -455,15 +538,29 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
         let tokensUsed = 0;
 
         try {
-          await new Promise<void>((resolve, reject) => {
-            const userMessage = {
-              type: 'user',
-              message: {
-                role: 'user',
-                content: [{ type: 'text', text: message }]
-              }
-            };
+          // Save user message to history first
+          const userMessage = {
+            type: 'user',
+            message: {
+              role: 'user',
+              content: [{ type: 'text', text: message }]
+            }
+          };
 
+          if (actualSessionId) {
+            const userHistoryEvent = {
+              ...userMessage,
+              sessionId: actualSessionId,
+              timestamp: Date.now(),
+            };
+            try {
+              await a2aHistoryService.appendEvent(a2aContext.workingDirectory, actualSessionId, userHistoryEvent);
+            } catch (err) {
+              console.error('[A2A] Failed to write user message to history:', err);
+            }
+          }
+
+          await new Promise<void>((resolve, reject) => {
             claudeSession.sendMessage(userMessage, async (sdkMessage: SDKMessage) => {
               const eventData = {
                 ...sdkMessage,
