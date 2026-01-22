@@ -15,6 +15,7 @@ import { getDefaultVersionId, getAllVersionsInternal, getVersionByIdInternal } f
 import { integrateA2AMcpServer } from '../services/a2a/a2aIntegration.js';
 import { integrateAskUserQuestionMcpServer, SessionRef } from '../services/askUserQuestion/askUserQuestionIntegration.js';
 import { resolveConfig } from './configResolver.js';
+import { integrateWeKnoraMcpServer, type WeknoraContext } from '../services/weknora/weknoraIntegration.js';
 
 export type { SessionRef };
 import { MCP_SERVER_CONFIG_FILE } from '../config/paths.js';
@@ -195,6 +196,14 @@ export interface BuildQueryOptionsResult {
   askUserSessionRef: SessionRef | null;
 }
 
+/**
+ * Extended options for buildQueryOptions
+ * Used to pass additional context without breaking existing callers
+ */
+export interface BuildQueryExtendedOptions {
+  weknoraContext?: WeknoraContext;
+}
+
 export async function buildQueryOptions(
   agent: any,
   projectPath?: string,
@@ -206,7 +215,8 @@ export async function buildQueryOptions(
   userEnv?: Record<string, string>,
   sessionIdForAskUser?: string,
   agentIdForAskUser?: string,
-  a2aStreamEnabled?: boolean
+  a2aStreamEnabled?: boolean,
+  extendedOptions?: BuildQueryExtendedOptions
 ): Promise<BuildQueryOptionsResult> {
   // Determine working directory
   let cwd = process.cwd();
@@ -412,6 +422,13 @@ export async function buildQueryOptions(
   // We use the determined project path or current working directory
   const currentProjectId = projectPath || cwd;
   await integrateA2AMcpServer(queryOptions, currentProjectId, a2aStreamEnabled ?? false);
+
+  // Integrate WeKnora SDK MCP server (only when context is provided and valid)
+  const weknoraContext = extendedOptions?.weknoraContext;
+  if (weknoraContext?.api_key && weknoraContext?.kb_ids?.length > 0) {
+    await integrateWeKnoraMcpServer(queryOptions, weknoraContext);
+    console.log('✅ [WeKnora] MCP Server integrated with', weknoraContext.kb_ids.length, 'knowledge bases');
+  }
 
   // Integrate AskUserQuestion SDK MCP server
   // This provides user interaction capability for web channel
