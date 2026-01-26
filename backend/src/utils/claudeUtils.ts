@@ -326,6 +326,8 @@ export async function buildQueryOptions(
     permissionMode: finalPermissionMode as any,
     model: finalModel,
     settingSources: ["user", "project"],
+    // SDK 要求：使用 bypassPermissions 模式时必须显式设置此参数
+    ...(finalPermissionMode === 'bypassPermissions' && { allowDangerouslySkipPermissions: true }),
   };
 
   // Only add pathToClaudeCodeExecutable if we have a valid path

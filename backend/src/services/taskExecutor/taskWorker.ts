@@ -88,7 +88,7 @@ async function executeTask(task: TaskDefinition): Promise<TaskResult> {
     addLog('info', 'system', `Model: ${modelToUse || 'auto (from project/system)'}`);
 
     // Determine permission mode
-    const permissionMode = task.permissionMode || 'bypassPermissions';
+    const permissionMode = task.permissionMode || 'acceptEdits'; // bypassPermissions 有 SDK bug
     addLog('info', 'system', `Permission mode: ${permissionMode}`);
 
     // Build query options

@@ -180,6 +180,11 @@ const app: express.Express = express();
 
   app.use(cors({
     origin: (origin, callback) => {
+      // 支持 * 通配符，允许所有来源
+      if (config.corsOrigins === '*') {
+        return callback(null, true);
+      }
+
       const allowedOrigins = getAllowedOrigins();
 
       // Allow requests with no origin (like mobile apps or curl requests)

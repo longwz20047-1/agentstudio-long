@@ -13,7 +13,7 @@ export type TaskType = 'a2a_async' | 'scheduled';
 /**
  * Permission mode for task execution
  */
-export type PermissionMode = 'bypassPermissions' | 'default';
+export type PermissionMode = 'bypassPermissions' | 'acceptEdits' | 'default';
 
 /**
  * Push Notification Configuration for task callbacks

@@ -730,7 +730,7 @@ router.post('/tasks', a2aStrictRateLimiter, async (req: A2ARequest, res: Respons
         timeoutMs: task.timeoutMs,
         modelId: undefined, // Model determined by project/provider configuration
         maxTurns: agent.maxTurns,
-        permissionMode: 'bypassPermissions',
+        permissionMode: 'acceptEdits', // bypassPermissions 有 SDK bug
         createdAt: task.createdAt,
         pushNotificationConfig: executorPushConfig,
       });

@@ -11,7 +11,7 @@ export const useToolSelector = ({ agent }: UseToolSelectorProps) => {
   const [selectedRegularTools, setSelectedRegularTools] = useState<string[]>([]);
   const [selectedMcpTools, setSelectedMcpTools] = useState<string[]>([]);
   const [mcpToolsEnabled, setMcpToolsEnabled] = useState(false);
-  const [permissionMode, setPermissionMode] = useState<'default' | 'acceptEdits' | 'bypassPermissions'>('bypassPermissions');
+  const [permissionMode, setPermissionMode] = useState<'default' | 'acceptEdits' | 'bypassPermissions'>('acceptEdits');
   const [selectedModel, setSelectedModel] = useState<string>('sonnet');
   const [showPermissionDropdown, setShowPermissionDropdown] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);

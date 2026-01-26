@@ -451,7 +451,7 @@ export async function executeTask(taskId: string): Promise<void> {
       maxTurns: task.maxTurns,
       modelId: task.modelOverride?.modelId,
       claudeVersionId: task.modelOverride?.versionId,
-      permissionMode: 'bypassPermissions',
+      permissionMode: 'acceptEdits', // bypassPermissions 有 SDK bug
       createdAt: startedAt,
       scheduledFor: task.schedule.type === 'once' ? task.schedule.executeAt : undefined,
       scheduledTaskId: taskId, // Original scheduled task ID for status updates
