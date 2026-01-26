@@ -436,7 +436,7 @@ Please respond in Chinese unless the user specifically requests another language
           {/* Desktop Table View */}
           {!isMobile && (
             <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-              <Table>
+              <Table className="table-fixed">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider w-48">
@@ -457,12 +457,12 @@ Please respond in Chinese unless the user specifically requests another language
                   {filteredAgents.map((agent) => (
                     <TableRow key={agent.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
                       {/* Agent */}
-                      <TableCell className="px-6 py-4 whitespace-nowrap w-48">
+                      <TableCell className="px-6 py-4 w-48 max-w-48">
                         <div className="flex items-center">
-                          <div className={`text-2xl mr-4 ${!agent.enabled ? 'opacity-50' : ''}`}>
+                          <div className={`text-2xl mr-4 flex-shrink-0 ${!agent.enabled ? 'opacity-50' : ''}`}>
                             {agent.ui.icon}
                           </div>
-                          <div className="min-w-0">
+                          <div className="min-w-0 overflow-hidden">
                             <div className={`text-sm font-medium ${
                               agent.enabled ? 'text-gray-900 dark:text-white' : 'text-gray-600 dark:text-gray-400'
                             } truncate`}>
