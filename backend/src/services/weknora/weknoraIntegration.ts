@@ -59,7 +59,7 @@ async function createWeKnoraSdkMcpServer(context: WeknoraContext) {
 
   const weknoraSearchTool = tool(
     'weknora_search',
-    `Search WeKnora knowledge bases for relevant information using hybrid search.
+    `Search WeKnora knowledge bases for relevant information.
 
 This tool queries the configured knowledge bases to find documents matching your query.
 
@@ -83,59 +83,44 @@ If results are insufficient, try rephrasing the query or breaking it into smalle
         .min(1, 'Query cannot be empty')
         .max(2000, 'Query too long (max 2000 characters)')
         .describe('Search query. Can be natural language or keywords.'),
-
-      search_mode: z
-        .enum(['hybrid', 'vector', 'keyword'])
-        .optional()
-        .default('hybrid')
-        .describe('Search mode: hybrid (recommended, combines vector + keyword), vector (semantic only), or keyword (exact match).'),
-
-      top_k: z
-        .number()
-        .int()
-        .min(1)
-        .max(50)
-        .optional()
-        .default(10)
-        .describe('Maximum number of results to return (1-50).'),
-
-      min_score: z
-        .number()
-        .min(0)
-        .max(1)
-        .optional()
-        .default(0.5)
-        .describe('Minimum relevance score threshold (0-1).'),
-
-      rerank: z
-        .boolean()
-        .optional()
-        .default(true)
-        .describe('Apply reranking for better relevance ordering.'),
     },
 
     async (args) => {
-      const { query, search_mode, top_k, min_score, rerank } = args;
+      const { query } = args;
+
+      // Debug: 工具被调用
+      console.log('🔍 [WeKnora] Tool called with args:', {
+        query,
+        kb_ids_count: kb_ids.length,
+        base_url,
+        api_key_present: !!api_key,
+        api_key_preview: api_key ? `${api_key.substring(0, 10)}...` : 'MISSING'
+      });
 
       try {
-        const response = await fetch(`${base_url}/api/v1/knowledge-search`, {
+        const requestUrl = `${base_url}/api/v1/knowledge-search`;
+        const requestBody = {
+          query: query,  // JSON tag is "query" (lowercase)
+          knowledge_base_ids: kb_ids,
+        };
+
+        console.log('🌐 [WeKnora] Calling API:', requestUrl);
+        console.log('📤 [WeKnora] Request body:', JSON.stringify(requestBody));
+
+        const response = await fetch(requestUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${api_key}`,
           },
-          body: JSON.stringify({
-            question: query,
-            knowledge_base_ids: kb_ids,
-            search_mode: search_mode,
-            top_k: top_k,
-            min_score: min_score,
-            rerank: rerank,
-          }),
+          body: JSON.stringify(requestBody),
         });
+
+        console.log('📥 [WeKnora] API response status:', response.status, response.statusText);
 
         if (!response.ok) {
           const errorText = await response.text();
+          console.error('❌ [WeKnora] API error:', response.status, errorText);
           return {
             content: [{
               type: 'text',
@@ -146,12 +131,13 @@ If results are insufficient, try rephrasing the query or breaking it into smalle
         }
 
         const data = await response.json();
-        const results = data.results || [];
+        const results = data.data || [];
+
+        console.log('✅ [WeKnora] API success, found', results.length, 'results');
 
         // Build formatted response
         let text = `## Search Results\n\n`;
         text += `**Query:** ${query}\n`;
-        text += `**Mode:** ${search_mode}\n`;
         text += `**Found:** ${results.length} results\n\n`;
 
         if (results.length > 0) {

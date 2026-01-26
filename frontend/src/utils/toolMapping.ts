@@ -3,7 +3,8 @@ export const TOOL_DISPLAY_MAP = {
   // 文件操作
   'Bash': '终端命令',
   'BashOutput': '终端命令输出',
-  'KillBash': '杀死终端命令',
+  'KillBash': '终止后台任务',
+  'TaskStop': '终止后台任务',  // SDK 0.2.19+ 新名称
   'Edit': '文件编辑', 
   'Read': '读取文件',
   'Write': '写入文件',
@@ -33,7 +34,8 @@ export const TOOL_DISPLAY_MAP = {
 export const TOOL_DESCRIPTION_MAP = {
   'Bash': '执行命令行操作',
   'BashOutput': '获取终端命令输出',
-  'KillBash': '杀死终端命令',
+  'KillBash': '终止后台运行的任务',
+  'TaskStop': '终止后台运行的任务',  // SDK 0.2.19+ 新名称
   'Edit': '编辑文件内容',
   'Read': '读取文件内容',
   'Write': '创建或覆盖文件',

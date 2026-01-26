@@ -5,18 +5,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec } from 'child_process';
 import {
-  getClaudeExecutablePath,
   readMcpConfig,
   getDefaultClaudeVersionEnv,
   buildQueryOptions
 } from '../claudeUtils';
-
-// Mock child_process
-vi.mock('child_process', () => ({
-  exec: vi.fn()
-}));
 
 // Mock fs
 vi.mock('fs', () => ({
@@ -44,94 +37,6 @@ vi.mock('../../services/a2a/a2aIntegration', () => ({
 describe('claudeUtils', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  describe('getClaudeExecutablePath', () => {
-    it('should return the Claude executable path', async () => {
-      // Mock exec to return a valid path
-      vi.mocked(exec).mockImplementation((cmd, callback: any) => {
-        callback(null, { stdout: '/usr/local/bin/claude\n', stderr: '' });
-        return {} as any;
-      });
-
-      const result = await getClaudeExecutablePath();
-      expect(result).toBe('/usr/local/bin/claude');
-    });
-
-    it('should skip node_modules paths and find global installation', async () => {
-      // First call returns node_modules path
-      let callCount = 0;
-      vi.mocked(exec).mockImplementation((cmd, callback: any) => {
-        callCount++;
-        if (callCount === 1) {
-          callback(null, { stdout: './node_modules/.bin/claude\n', stderr: '' });
-        } else {
-          // Second call (which -a) returns multiple paths
-          callback(null, {
-            stdout: './node_modules/.bin/claude\n/usr/local/bin/claude\n',
-            stderr: ''
-          });
-        }
-        return {} as any;
-      });
-
-      const result = await getClaudeExecutablePath();
-      expect(result).toBe('/usr/local/bin/claude');
-    });
-
-    it('should return null if claude is not found', async () => {
-      vi.mocked(exec).mockImplementation((cmd, callback: any) => {
-        callback(new Error('command not found'), { stdout: '', stderr: 'not found' });
-        return {} as any;
-      });
-
-      const result = await getClaudeExecutablePath();
-      expect(result).toBeNull();
-    });
-
-    it('should handle Windows .cmd files and return null for bundled CLI', async () => {
-      // Save original platform
-      const originalPlatform = process.platform;
-      // Mock Windows platform
-      Object.defineProperty(process, 'platform', { value: 'win32' });
-
-      vi.mocked(exec).mockImplementation((cmd, callback: any) => {
-        callback(null, { stdout: 'C:\\Users\\test\\AppData\\Roaming\\npm\\claude.cmd\n', stderr: '' });
-        return {} as any;
-      });
-
-      // Mock fs.existsSync to return true for .cmd file
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-
-      const result = await getClaudeExecutablePath();
-      // Should return null to use SDK bundled CLI
-      expect(result).toBeNull();
-
-      // Restore platform
-      Object.defineProperty(process, 'platform', { value: originalPlatform });
-    });
-
-    it('should return null if Windows path does not exist', async () => {
-      // Save original platform
-      const originalPlatform = process.platform;
-      // Mock Windows platform
-      Object.defineProperty(process, 'platform', { value: 'win32' });
-
-      vi.mocked(exec).mockImplementation((cmd, callback: any) => {
-        callback(null, { stdout: 'C:\\Users\\test\\AppData\\Roaming\\npm\\claude-internal\n', stderr: '' });
-        return {} as any;
-      });
-
-      // Mock fs.existsSync to return false
-      vi.mocked(fs.existsSync).mockReturnValue(false);
-
-      const result = await getClaudeExecutablePath();
-      // Should return null because path doesn't exist
-      expect(result).toBeNull();
-
-      // Restore platform
-      Object.defineProperty(process, 'platform', { value: originalPlatform });
-    });
   });
 
   describe('readMcpConfig', () => {
@@ -241,20 +146,13 @@ describe('claudeUtils', () => {
       ]
     };
 
-    beforeEach(() => {
-      // Mock exec for getClaudeExecutablePath
-      vi.mocked(exec).mockImplementation((cmd, callback: any) => {
-        callback(null, { stdout: '/usr/local/bin/claude\n', stderr: '' });
-        return {} as any;
-      });
-    });
-
     it('should build basic query options', async () => {
       const { getDefaultVersionId } = await import('../../services/claudeVersionStorage');
       vi.mocked(getDefaultVersionId).mockResolvedValue(null);
 
       const result = await buildQueryOptions(mockAgent);
 
+      // SDK 0.1.76+ uses built-in CLI, no pathToClaudeCodeExecutable needed
       expect(result.queryOptions).toMatchObject({
         systemPrompt: 'Test system prompt',
         allowedTools: ['Write', 'Read'],
@@ -265,6 +163,8 @@ describe('claudeUtils', () => {
         // by a provider, otherwise SDK uses its bundled CLI
       });
       expect(result.queryOptions.env).toBeDefined();
+      // pathToClaudeCodeExecutable should not be set when using SDK built-in CLI
+      expect(result.queryOptions.pathToClaudeCodeExecutable).toBeUndefined();
     });
 
     it('should use projectPath as cwd if provided', async () => {
@@ -316,12 +216,11 @@ describe('claudeUtils', () => {
       });
     });
 
-    it('should use agent-specific Claude version if provided', async () => {
+    it('should use agent-specific Claude version environment variables', async () => {
       const mockVersion = {
         id: 'custom-version',
         name: 'Custom Claude',
         alias: 'custom',
-        executablePath: '/custom/claude',
         environmentVariables: {
           ANTHROPIC_API_KEY: 'custom-key'
         }
@@ -332,8 +231,9 @@ describe('claudeUtils', () => {
 
       const result = await buildQueryOptions(mockAgent, undefined, undefined, undefined, undefined, 'custom-version');
 
-      expect(result.queryOptions.pathToClaudeCodeExecutable).toBe('/custom/claude');
+      // SDK 0.1.76+ uses built-in CLI, environment variables are loaded from version config
       expect(result.queryOptions.env?.ANTHROPIC_API_KEY).toBe('custom-key');
+      expect(result.queryOptions.pathToClaudeCodeExecutable).toBeUndefined();
     });
 
     it('should override agent settings with request parameters', async () => {

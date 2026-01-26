@@ -10,19 +10,18 @@ import type {
   ToolInputSchemas,
   AgentInput,
   BashInput,
-  BashOutputInput,
+  TaskOutputInput,
   ExitPlanModeInput,
   FileEditInput,
   FileReadInput,
   FileWriteInput,
   GlobInput,
   GrepInput,
-  KillShellInput,
+  TaskStopInput,
   ListMcpResourcesInput,
   McpInput,
   NotebookEditInput,
   ReadMcpResourceInput,
-  TimeMachineInput,
   TodoWriteInput,
   WebFetchInput,
   WebSearchInput,
@@ -34,24 +33,41 @@ export type {
   ToolInputSchemas,
   AgentInput,
   BashInput,
-  BashOutputInput,
+  TaskOutputInput,
   ExitPlanModeInput,
   FileEditInput,
   FileReadInput,
   FileWriteInput,
   GlobInput,
   GrepInput,
-  KillShellInput,
+  TaskStopInput,
   ListMcpResourcesInput,
   McpInput,
   NotebookEditInput,
   ReadMcpResourceInput,
-  TimeMachineInput,
   TodoWriteInput,
   WebFetchInput,
   WebSearchInput,
   AskUserQuestionInput
 };
+
+// TimeMachineInput 在 SDK 0.1.76 中被移除，本地定义
+export interface TimeMachineInput {
+  message_prefix: string;
+  course_correction: string;
+  restore_code?: boolean;
+}
+
+// BashOutputInput 在 SDK 0.1.76 中被移除，本地定义
+export interface BashOutputInput {
+  bash_id: string;
+  filter?: string;
+}
+
+// ExtendedExitPlanModeInput 扩展 SDK 的 ExitPlanModeInput，添加 plan 属性
+export interface ExtendedExitPlanModeInput extends ExitPlanModeInput {
+  plan?: string;
+}
 
 // 项目特定的基础接口
 export interface BaseToolResult {
@@ -106,7 +122,7 @@ export interface ExtendedBashInput extends BashInput {
   };
 }
 
-export interface ExtendedBashOutputInput extends BashOutputInput {
+export interface ExtendedTaskOutputInput extends TaskOutputInput {
   // 添加项目特有的输出处理字段
   realTimeUpdates?: boolean;
 }
@@ -232,8 +248,9 @@ export function isAskUserQuestionInput(input: unknown): input is AskUserQuestion
 export interface ToolTypeMap {
   Task: AgentInput;
   Bash: BashInput;
-  BashOutput: BashOutputInput;
-  KillBash: KillShellInput;
+  BashOutput: TaskOutputInput;
+  KillBash: TaskStopInput;
+  TaskStop: TaskStopInput;  // SDK 0.2.19+ 新名称
   Glob: GlobInput;
   Grep: GrepInput;
   LS: GlobInput; // LS 是 Glob 的简化版本
@@ -260,6 +277,7 @@ export function resolveToolType(toolName: string): keyof ToolTypeMap | null {
     'Bash': 'Bash',
     'BashOutput': 'BashOutput',
     'KillBash': 'KillBash',
+    'TaskStop': 'TaskStop',  // SDK 0.2.19+ 新名称
     'Glob': 'Glob',
     'Grep': 'Grep',
     'LS': 'LS',
@@ -295,7 +313,8 @@ export function validateToolInput(toolName: string, input: unknown): boolean {
     case 'BashOutput':
       return typeof input === 'object' && input !== null && 'bash_id' in input;
     case 'KillBash':
-      return typeof input === 'object' && input !== null && 'shell_id' in input;
+    case 'TaskStop':  // SDK 0.2.19+ 新名称
+      return typeof input === 'object' && input !== null && ('task_id' in input || 'shell_id' in input);
     case 'Glob':
       return isGlobInput(input);
     case 'Grep':

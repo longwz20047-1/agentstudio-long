@@ -2,7 +2,7 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { BaseToolComponent } from './BaseToolComponent';
 import type { BaseToolExecution } from './sdk-types';
-import type { KillShellInput } from '@anthropic-ai/claude-agent-sdk/sdk-tools';
+import type { TaskStopInput } from '@anthropic-ai/claude-agent-sdk/sdk-tools';
 import { Square, Zap, CheckCircle, AlertCircle } from 'lucide-react';
 
 interface KillBashToolProps {
@@ -11,7 +11,7 @@ interface KillBashToolProps {
 
 export const KillBashTool: React.FC<KillBashToolProps> = ({ execution }) => {
   const { t } = useTranslation('components');
-  const input = execution.toolInput as unknown as KillShellInput;
+  const input = execution.toolInput as unknown as TaskStopInput;
 
   // 解析执行结果
   const parseResult = () => {
@@ -26,14 +26,17 @@ export const KillBashTool: React.FC<KillBashToolProps> = ({ execution }) => {
 
   const result = parseResult();
 
-  // 显示shell_id和进程名作为副标题
+  // 兼容新旧字段名: task_id (新) 和 shell_id (已弃用)
+  const taskId = input.task_id || input.shell_id;
+
+  // 显示task_id和进程名作为副标题
   const getSubtitle = () => {
-    if (!input.shell_id) return undefined;
+    if (!taskId) return undefined;
     // 从结果中提取进程名
     const processName = result?.message?.match(/\(([^)]+)\)/)?.[1] || '';
     return processName
-      ? t('killBashTool.subtitleWithProcess', { shellId: input.shell_id, processName })
-      : t('killBashTool.subtitle', { shellId: input.shell_id });
+      ? t('killBashTool.subtitleWithProcess', { shellId: taskId, processName })
+      : t('killBashTool.subtitle', { shellId: taskId });
   };
 
   // 判断是否成功终止
@@ -89,7 +92,7 @@ export const KillBashTool: React.FC<KillBashToolProps> = ({ execution }) => {
               }
             </div>
             <div className="text-sm text-gray-600 mt-1">
-              {t('killBashTool.shellId')}: <code className="bg-gray-100 px-2 py-0.5 rounded text-xs">{input.shell_id}</code>
+              {t('killBashTool.shellId')}: <code className="bg-gray-100 px-2 py-0.5 rounded text-xs">{taskId}</code>
             </div>
           </div>
         </div>

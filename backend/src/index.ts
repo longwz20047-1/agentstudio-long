@@ -91,7 +91,7 @@ const getVersion = () => {
   const devPackagePath = join(__dirname, '../package.json');
   // Also try root package.json
   const rootPackagePath = join(__dirname, '../../package.json');
-
+  
   for (const packagePath of [npmPackagePath, devPackagePath, rootPackagePath]) {
     try {
       const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));
@@ -102,7 +102,7 @@ const getVersion = () => {
       // Continue to next path
     }
   }
-
+  
   console.warn('Could not read version from package.json');
   return 'unknown';
 };
@@ -121,23 +121,9 @@ const app: express.Express = express();
   // Initialize system Claude version if needed
   try {
     const { initializeSystemVersion } = await import('./services/claudeVersionStorage.js');
-    const { getSystemClaudeExecutablePath } = await import('./utils/claudeUtils.js');
-    const { SDK_ENGINE } = await import('./config/sdkConfig.js');
-
-    // Try to find Claude executable based on SDK engine
-    let claudePath: string | null = null;
-    try {
-      claudePath = await getSystemClaudeExecutablePath(SDK_ENGINE);
-      if (claudePath) {
-        console.log(`[System] Found ${SDK_ENGINE} CLI at: ${claudePath}`);
-      }
-    } catch (error) {
-      console.log(`[System] ${SDK_ENGINE} CLI not found in PATH, initializing without executable path`);
-    }
-
-    // Initialize system version (with or without executable path)
-    await initializeSystemVersion(claudePath || '');
-    console.log(`[System] Initialized Claude version${claudePath ? ` from: ${claudePath}` : ' without executable path'}`);
+    // SDK 0.1.76+ includes built-in CLI, no need to search for external executable
+    await initializeSystemVersion();
+    console.log('[System] Initialized Claude version (using SDK built-in CLI)');
   } catch (error) {
     console.warn('Failed to initialize system Claude version:', error);
   }
@@ -156,13 +142,13 @@ const app: express.Express = express();
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://cdn.jsdelivr.net", "https://app.posthog.com", "https://us.i.posthog.com", "https://us-assets.i.posthog.com"], // Allow eval for development, CDN for Monaco, PostHog
+        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"], // Allow eval for development
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdn.jsdelivr.net"],
         fontSrc: ["'self'", "https://fonts.gstatic.com", "https://cdn.jsdelivr.net", "data:"],
         imgSrc: ["'self'", "data:", "https:", "http:", "blob:"],
-        connectSrc: ["'self'", "ws:", "wss:", "blob:", "data:", "http://localhost:*", "http://127.0.0.1:*", "https://localhost:*", "https://127.0.0.1:*", "https://app.posthog.com", "https://us.i.posthog.com", "https://us-assets.i.posthog.com"],
+        connectSrc: ["'self'", "ws:", "wss:", "blob:", "data:", "http://localhost:*", "http://127.0.0.1:*", "https://localhost:*", "https://127.0.0.1:*"],
         frameAncestors: ["'self'", "http://localhost:3000", "https://localhost:3000", "http://localhost:3001", "https://agentstudio.cc", "https://*.agentstudio.cc"], // Allow iframe embedding
-        workerSrc: ["'self'", "blob:", "https://cdn.jsdelivr.net"],
+        workerSrc: ["'self'", "blob:"],
         childSrc: ["'self'", "blob:"],
         // Disable upgrade-insecure-requests for HTTP environments
         upgradeInsecureRequests: null
@@ -201,17 +187,6 @@ const app: express.Express = express();
 
       // Check if the origin is allowed
       if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
-      // Allow Vercel preview URLs (*.vercel.app)
-      if (origin.endsWith('.vercel.app')) {
-        return callback(null, true);
-      }
-
-      // Allow agentstudio.cc and its subdomains (*.agentstudio.cc) - hardcoded
-      if (origin === 'https://agentstudio.cc' || origin === 'http://agentstudio.cc' ||
-        origin.endsWith('.agentstudio.cc')) {
         return callback(null, true);
       }
 
@@ -280,7 +255,7 @@ const app: express.Express = express();
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'X-Requested-With', 'X-Project-Path'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'X-Requested-With'],
     exposedHeaders: ['Content-Range', 'X-Content-Range']
   }));
 
@@ -363,7 +338,7 @@ const app: express.Express = express();
   const fs = await import('fs');
   const npmPublicPath = join(__dirname, 'public');
   const devFrontendPath = join(__dirname, '../../frontend/dist');
-
+  
   // Prefer npm package embedded frontend, fallback to development path
   const frontendDistPath = fs.existsSync(npmPublicPath) ? npmPublicPath : devFrontendPath;
   const hasEmbeddedFrontend = fs.existsSync(join(frontendDistPath, 'index.html'));
@@ -375,9 +350,9 @@ const app: express.Express = express();
     app.get('*', (req, res, next) => {
       // Skip API routes and other specific routes
       if (req.path.startsWith('/api') ||
-        req.path.startsWith('/media') ||
-        req.path.startsWith('/slides') ||
-        req.path.startsWith('/a2a')) {
+          req.path.startsWith('/media') ||
+          req.path.startsWith('/slides') ||
+          req.path.startsWith('/a2a')) {
         return next();
       }
 
@@ -392,7 +367,7 @@ const app: express.Express = express();
     console.log('Frontend build not found, serving API only');
   }
 
-  // Routes - Public routes
+// Routes - Public routes
   app.use('/api/auth', authRouter);
   // MCP Admin - uses its own API key authentication
   app.use('/api/mcp-admin', mcpAdminRouter);

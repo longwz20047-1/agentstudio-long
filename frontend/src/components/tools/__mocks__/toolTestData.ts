@@ -5,13 +5,13 @@
 import type { BaseToolExecution } from '../sdk-types';
 import type {
   AgentInput, BashInput, FileEditInput, FileReadInput, FileWriteInput,
-  GlobInput, GrepInput, KillShellInput, ListMcpResourcesInput,
-  McpInput, NotebookEditInput, ReadMcpResourceInput, TimeMachineInput,
+  GlobInput, GrepInput, TaskStopInput, ListMcpResourcesInput,
+  McpInput, NotebookEditInput, ReadMcpResourceInput,
   TodoWriteInput, WebFetchInput, WebSearchInput, AskUserQuestionInput
 } from '@anthropic-ai/claude-agent-sdk/sdk-tools';
 import type {
   MultiEditInput, LSToolInput, NotebookReadToolInput, BashOutputToolResult,
-  EditToolResult
+  EditToolResult, TimeMachineInput
 } from '../sdk-types';
 import type { SubAgentMessage, SubAgentToolCall, TaskToolResult } from '../types';
 
@@ -85,9 +85,9 @@ export const mockToolInputs = {
     ...overrides
   }),
 
-  // Kill Shell 工具
-  killShell: (overrides?: Partial<KillShellInput>): KillShellInput => ({
-    shell_id: 'bash-12345',
+  // Kill Shell 工具 (现在是 TaskStop)
+  killShell: (overrides?: Partial<TaskStopInput>): TaskStopInput => ({
+    task_id: 'bash-12345',
     ...overrides
   }),
 

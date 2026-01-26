@@ -24,7 +24,6 @@ export const ChatPage: React.FC = () => {
   const navigate = useNavigate();
   const projectPath = searchParams.get('project');
   const sessionId = searchParams.get('session');
-  const initialMessage = searchParams.get('message');
   const { data: agentData, isLoading, error } = useAgent(agentId!);
   const { setCurrentAgent, setCurrentSessionId, isAiTyping } = useAgentStore();
   const [showProjectSelector, setShowProjectSelector] = useState(false);
@@ -286,13 +285,14 @@ export const ChatPage: React.FC = () => {
         onToggleLeftPanel={handleToggleLeftPanel}
         onToggleRightPanel={handleToggleRightPanel}
         mobileLayout="tabs"
+        defaultLeftWidth={65}
       >
-        <ChatPanelComponent agent={agent} projectPath={projectPath || undefined} onSessionChange={handleSessionChange} initialMessage={initialMessage || undefined} />
         <RightPanelWrapper
           agent={agent}
           projectPath={projectPath || undefined}
           CustomComponent={RightPanelComponent}
         />
+        <ChatPanelComponent agent={agent} projectPath={projectPath || undefined} onSessionChange={handleSessionChange} />
       </SplitLayout>
     );
   };

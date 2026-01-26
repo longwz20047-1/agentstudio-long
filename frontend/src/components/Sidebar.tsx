@@ -255,7 +255,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
 
     if (hasSubmenu) {
       return (
-        <li key={item.nameKey}>
+        <li key={item.href}>
           <div className="space-y-1">
             {/* Parent Menu Item */}
             <button

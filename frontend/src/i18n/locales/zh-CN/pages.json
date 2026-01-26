@@ -102,6 +102,30 @@
     "features": {
       "title": "核心特性",
       "subtitle": "为 AI 工作自动化设计的完整解决方案",
+      "modernWeb": {
+        "title": "现代 Web 体验",
+        "description": "告别命令行，拥抱友好的 Web 界面。工具调用可视化呈现，内置文件浏览器，对话体验更鲜活。"
+      },
+      "multiModel": {
+        "title": "多模型支持",
+        "description": "支持 Claude、GLM、DeepSeek、Kimi K2、MiniMax 等兼容 Anthropic 接口规范的模型，灵活切换。"
+      },
+      "agentSystem": {
+        "title": "智能体系统",
+        "description": "内置技能系统、自定义命令、插件生态、项目记忆、子 Agent 等完整功能，打造你的专属 AI 助手。"
+      },
+      "fileManagement": {
+        "title": "文件管理",
+        "description": "内置文件浏览器，对话同时查看项目文件。数据完全私有，文件、代码、对话记录都在掌控之中。"
+      },
+      "professionalTools": {
+        "title": "专业工具集",
+        "description": "MCP 服务管理、定时任务调度、A2A 协议支持，为 AI 工作自动化设计的完整解决方案。"
+      },
+      "secureReliable": {
+        "title": "安全可靠",
+        "description": "运行在你的电脑上，真正意义的本地工作台。数据完全私有，不上传云端。"
+      },
       "localWorkspace": {
         "title": "本地的 Agent 工作台",
         "point1": "运行在你的电脑上，真正意义的本地工作台",

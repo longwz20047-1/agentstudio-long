@@ -10,7 +10,7 @@ export function useAuth() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const refreshTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastRefreshCheckRef = useRef<number>(0);
 
   // Use only the service ID to avoid unnecessary re-renders

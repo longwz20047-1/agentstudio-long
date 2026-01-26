@@ -153,11 +153,15 @@ Send synchronous message to agent for short-lived, blocking operations.
 ```typescript
 {
   message: string;        // Required, max 10,000 characters
+  sessionId?: string;     // Optional, for multi-turn conversations
   context?: object;       // Optional, arbitrary JSON object
 }
 ```
 
-**Example Request**:
+**Query Parameters**:
+- `stream` (boolean): Set to `true` for SSE streaming response. Can also use `Accept: text/event-stream` header.
+
+**Example Request (Synchronous)**:
 ```bash
 curl -X POST \
   "https://api.agentstudio.cc/a2a/7c9e6679-7425-40de-944b-e07fc1f90ae7/messages" \
@@ -172,15 +176,63 @@ curl -X POST \
   }'
 ```
 
-**Success Response (200 OK)**:
+**Example Request (Streaming)**:
+```bash
+curl -X POST \
+  "https://api.agentstudio.cc/a2a/7c9e6679-7425-40de-944b-e07fc1f90ae7/messages?stream=true" \
+  -H "Authorization: Bearer agt_proj_abc123_4f3a2c1b9e8d7f6a5b4c3d2e1f0a9b8c" \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{
+    "message": "Analyze slide 3 and suggest improvements"
+  }'
+```
+
+**Example Request (Multi-turn Conversation)**:
+```bash
+# First message - get sessionId from response
+curl -X POST \
+  "https://api.agentstudio.cc/a2a/7c9e6679-7425-40de-944b-e07fc1f90ae7/messages" \
+  -H "Authorization: Bearer agt_proj_abc123_4f3a2c1b9e8d7f6a5b4c3d2e1f0a9b8c" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "What is on slide 3?"}'
+
+# Response includes sessionId: "sess_abc123..."
+
+# Continue conversation with sessionId
+curl -X POST \
+  "https://api.agentstudio.cc/a2a/7c9e6679-7425-40de-944b-e07fc1f90ae7/messages" \
+  -H "Authorization: Bearer agt_proj_abc123_4f3a2c1b9e8d7f6a5b4c3d2e1f0a9b8c" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Can you improve the title?",
+    "sessionId": "sess_abc123..."
+  }'
+```
+
+**Success Response (200 OK - Synchronous)**:
 ```json
 {
   "response": "I analyzed slide 3 titled 'Q4 Results'. Here are my suggestions:\n1. Add more visual elements\n2. Simplify the bullet points\n3. Highlight key metrics",
+  "sessionId": "sess_abc123-def456-789",
   "metadata": {
     "processingTimeMs": 1250,
     "tokensUsed": 450
   }
 }
+```
+
+**Success Response (SSE Streaming)**:
+```
+data: {"type":"system","sessionId":"sess_abc123...","timestamp":1700000000}
+
+data: {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I analyzed"}]},"sessionId":"sess_abc123...","timestamp":1700000001}
+
+data: {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" slide 3..."}]},"sessionId":"sess_abc123...","timestamp":1700000002}
+
+data: {"type":"result","subtype":"success","sessionId":"sess_abc123...","timestamp":1700000003}
+
+data: {"type":"done"}
 ```
 
 **Error Response (400 Bad Request)**:

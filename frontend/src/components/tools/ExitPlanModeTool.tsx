@@ -10,7 +10,7 @@ interface ExitPlanModeToolProps {
 
 export const ExitPlanModeTool: React.FC<ExitPlanModeToolProps> = ({ execution }) => {
   const { t } = useTranslation('components');
-  const input = execution.toolInput as unknown as ExitPlanModeInput;
+  const input = execution.toolInput as unknown as ExitPlanModeInput & { plan?: string };
 
   return (
     <BaseToolComponent execution={execution} hideToolName={false}>

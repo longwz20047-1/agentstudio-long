@@ -99,7 +99,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
                     : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
                 }`}
               >
-                Chat
+                Preview
               </button>
               <button
                 onClick={() => {
@@ -112,7 +112,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
                     : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
                 }`}
               >
-                Preview
+                Chat
               </button>
             </div>
           )}
@@ -153,7 +153,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
             {/* Panel Content */}
             <div className="absolute inset-4 bg-white rounded-lg shadow-xl overflow-hidden">
               <div className="flex items-center justify-between p-4 border-b border-gray-200">
-                <h3 className="text-lg font-semibold text-gray-900">Preview</h3>
+                <h3 className="text-lg font-semibold text-gray-900">Chat</h3>
                 <button
                   onClick={() => setRightPanelOpen(false)}
                   className="p-2 text-gray-500 hover:text-gray-700 rounded-md hover:bg-gray-100"
@@ -175,11 +175,10 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
           <button
             onClick={() => setRightPanelOpen(true)}
             className="fixed bottom-6 right-6 z-40 bg-blue-600 text-white p-4 rounded-full shadow-lg hover:bg-blue-700 transition-colors lg:hidden"
-            title="Open Preview"
+            title="Open Chat"
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
             </svg>
           </button>
         )}

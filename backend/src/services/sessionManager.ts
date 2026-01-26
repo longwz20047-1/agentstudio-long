@@ -122,25 +122,22 @@ export class SessionManager {
    * 复用sessions.ts中的逻辑
    */
   private convertProjectPathToClaudeFormat(projectPath: string): string {
-    // First, resolve symlinks to get the real path
-    // This is important because Claude CLI stores sessions using the real path
-    let resolvedPath = projectPath;
-    try {
-      resolvedPath = fs.realpathSync(projectPath);
-      if (resolvedPath !== projectPath) {
-        console.log(`🔗 [SessionManager] Resolved symlink: ${projectPath} -> ${resolvedPath}`);
-      }
-    } catch (error) {
-      // If the path doesn't exist or can't be resolved, use the original path
-      console.log(`⚠️ [SessionManager] Could not resolve path: ${projectPath}, using original`);
-    }
-    
-    // Convert path like /Users/kongjie/Desktop/.workspace2.nosync
-    // to: -Users-kongjie-Desktop--workspace2-nosync
-    // On Windows: C:\Users\talonwang\project -> C--Users-talonwang-project
-    // With spaces: /Users/kongjie/hello world -> -Users-kongjie-hello-world
-    // Claude CLI replaces '/', '\', '.', ':', ' ' with '-'
-    return resolvedPath.replace(/[\/\\\.:\ ]/g, '-');
+    // Convert path to Claude format
+    // Unix: /Users/kongjie/project -> -Users-kongjie-project
+    // Windows: D:\workspace\project -> D--workspace-project
+
+    // First, normalize path separators (handle both / and \)
+    let normalized = projectPath.replace(/\\/g, '/');
+
+    // Remove trailing slashes
+    normalized = normalized.replace(/\/+$/, '');
+
+    // Handle Windows drive letter (D: -> D-)
+    // Claude Code on Windows converts "D:\path" to "D--path" (colon becomes -)
+    normalized = normalized.replace(/^([A-Za-z]):/, '$1-');
+
+    // Convert remaining slashes to dashes
+    return normalized.replace(/\//g, '-');
   }
 
   /**
@@ -375,12 +372,12 @@ export class SessionManager {
    */
   async manualCleanupSession(sessionId: string): Promise<boolean> {
     console.log(`🧹 Manual cleanup requested for session: ${sessionId}`);
-    
+
     // 首先尝试从正式会话中清理
     if (this.sessions.has(sessionId)) {
       return await this.removeSession(sessionId);
     }
-    
+
     // 如果不在正式会话中，尝试从临时会话中清理（pending状态的会话）
     if (this.tempSessions.has(sessionId)) {
       const session = this.tempSessions.get(sessionId);
@@ -396,7 +393,7 @@ export class SessionManager {
         return true;
       }
     }
-    
+
     console.warn(`⚠️  Session not found for cleanup: ${sessionId}`);
     return false;
   }

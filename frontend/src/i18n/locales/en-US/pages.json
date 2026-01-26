@@ -102,6 +102,30 @@
     "features": {
       "title": "Core Features",
       "subtitle": "A complete solution for AI work automation",
+      "modernWeb": {
+        "title": "Modern Web Experience",
+        "description": "Say goodbye to CLI, embrace a friendly Web interface. Visual tool execution and built-in file browser make conversations come alive."
+      },
+      "multiModel": {
+        "title": "Multi-Model Support",
+        "description": "Supports Claude, GLM, DeepSeek, Kimi K2, MiniMax and other models compatible with Anthropic API. Switch flexibly."
+      },
+      "agentSystem": {
+        "title": "Agent System",
+        "description": "Built-in skills, custom commands, plugin ecosystem, project memory, subagents and more. Build your own AI assistant."
+      },
+      "fileManagement": {
+        "title": "File Management",
+        "description": "Built-in file browser to view project files alongside chat. Data is fully private, files and conversations under your control."
+      },
+      "professionalTools": {
+        "title": "Professional Tools",
+        "description": "MCP service management, scheduled tasks, A2A protocol support. A complete solution for AI work automation."
+      },
+      "secureReliable": {
+        "title": "Secure & Reliable",
+        "description": "Runs on your computer - a true local workspace. Data is fully private, never uploaded to cloud."
+      },
       "localWorkspace": {
         "title": "Local Agent Workspace",
         "point1": "Runs on your computer - a true local workspace",

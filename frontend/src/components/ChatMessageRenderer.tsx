@@ -65,7 +65,7 @@ const ChatMessageRendererComponent: React.FC<ChatMessageRendererProps> = ({ mess
             const spaceIndex = commandContent.indexOf(' ');
             const commandName = spaceIndex > 0 ? commandContent.substring(0, spaceIndex) : commandContent;
             const commandArgs = spaceIndex > 0 ? commandContent.substring(spaceIndex + 1).trim() : '';
-            
+
             return (
               <div key={part.id} className="flex items-center gap-2">
                 <span className="inline-flex items-center px-2.5 py-1 bg-gray-800 dark:bg-gray-900 text-emerald-400 dark:text-emerald-300 rounded-md text-sm font-mono font-medium">
@@ -224,7 +224,7 @@ const ChatMessageRendererComponent: React.FC<ChatMessageRendererProps> = ({ mess
               const spaceIndex = commandContent.indexOf(' ');
               const commandName = spaceIndex > 0 ? commandContent.substring(0, spaceIndex) : commandContent;
               const commandArgs = spaceIndex > 0 ? commandContent.substring(spaceIndex + 1).trim() : '';
-              
+
               // Render as command block
               return (
                 <div className="flex items-center gap-2">

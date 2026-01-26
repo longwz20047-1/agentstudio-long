@@ -26,11 +26,11 @@
   },
   "dependencies": {
     "@a2a-js/sdk": "^0.2.5",
-    "@ai-sdk/anthropic": "^1.0.5",
-    "@ai-sdk/openai": "^1.0.7",
-    "@anthropic-ai/claude-agent-sdk": "^0.1.62",
+    "@ai-sdk/anthropic": "^3.0.9",
+    "@ai-sdk/openai": "^3.0.7",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.19",
     "@types/js-yaml": "^4.0.9",
-    "ai": "^5.0.22",
+    "ai": "^6.0.20",
     "axios": "^1.13.4",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^12.6.2",
@@ -53,7 +53,7 @@
     "socks-proxy-agent": "^8.0.5",
     "tunely": "^0.2.1",
     "undici": "^7.16.0",
-    "zod": "^3.22.2"
+    "zod": "^4.3.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.37.0",

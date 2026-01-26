@@ -141,7 +141,7 @@ export const BUILTIN_AGENTS: Partial<AgentConfig>[] = [
       { name: 'WebSearch', enabled: true },
       { name: 'TodoWrite', enabled: true },
       { name: 'NotebookEdit', enabled: true },
-      { name: 'KillShell', enabled: true },
+      { name: 'TaskStop', enabled: true },
       { name: 'BashOutput', enabled: true },
       { name: 'SlashCommand', enabled: true },
       { name: 'ExitPlanMode', enabled: true },

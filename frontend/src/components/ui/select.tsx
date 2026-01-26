@@ -77,8 +77,8 @@ const SelectValue = React.forwardRef<HTMLSpanElement, { placeholder?: string; se
 );
 SelectValue.displayName = "SelectValue";
 
-const SelectContent = React.forwardRef<HTMLDivElement, { children: React.ReactNode; isOpen?: boolean; onSelect?: (value: string) => void }>(
-  ({ children, isOpen, onSelect, ...props }, ref) => {
+const SelectContent = React.forwardRef<HTMLDivElement, { children: React.ReactNode; isOpen?: boolean; setIsOpen?: (open: boolean) => void; selectedValue?: string; onSelect?: (value: string) => void }>(
+  ({ children, isOpen, setIsOpen: _setIsOpen, selectedValue: _selectedValue, onSelect, ...props }, ref) => {
     if (!isOpen) return null;
 
     return (

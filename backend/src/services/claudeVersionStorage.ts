@@ -334,13 +334,14 @@ async function cleanupDuplicateSystemVersions(): Promise<boolean> {
 }
 
 // 初始化系统版本（在启动时调用）
+// SDK 0.1.76+ 内置 CLI，不再需要 executablePath 参数
 
-export async function initializeSystemVersion(executablePath: string): Promise<ClaudeVersion> {
+export async function initializeSystemVersion(): Promise<ClaudeVersion> {
   const storage = await loadClaudeVersions();
 
   // 首先清理可能存在的重复系统版本
   await cleanupDuplicateSystemVersions();
-  
+
   // 重新加载 storage（清理后可能已更新）
   const updatedStorage = await loadClaudeVersions();
 
@@ -348,9 +349,9 @@ export async function initializeSystemVersion(executablePath: string): Promise<C
   let systemVersion = updatedStorage.versions.find(v => v.isSystem === true);
 
   if (systemVersion) {
-    // 更新系统版本的路径（如果有变化）
-    if (systemVersion.executablePath !== executablePath) {
-      systemVersion.executablePath = executablePath;
+    // 系统版本已存在，清理旧的 executablePath（如果有）
+    if (systemVersion.executablePath) {
+      delete (systemVersion as any).executablePath;
       systemVersion.updatedAt = new Date().toISOString();
       await saveClaudeVersions(updatedStorage);
     }
@@ -359,15 +360,11 @@ export async function initializeSystemVersion(executablePath: string): Promise<C
 
   // 创建系统供应商
   const now = new Date().toISOString();
-  const hasExecutable = !!executablePath;
   systemVersion = {
     id: 'claude',
     name: 'claude',
     alias: 'system',
-    description: hasExecutable
-      ? '系统默认的 Claude Code 版本（通过 which claude 查找）'
-      : '系统默认的 Claude 供应商（需要配置 API 密钥）',
-    executablePath: hasExecutable ? executablePath : undefined,
+    description: '系统默认的 Claude 供应商（SDK 内置 CLI）',
     isDefault: updatedStorage.versions.length === 0,
     isSystem: true,
     environmentVariables: {},

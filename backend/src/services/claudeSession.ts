@@ -26,7 +26,9 @@ export class ClaudeSession {
   private responseCallbacks: Map<string, (response: SDKMessage) => void> = new Map();
   private nextRequestId = 0;
   private isBackgroundRunning = false;
-  
+  private lastMessageSentAt = 0; // 用于计时
+  private firstResponseReceived = false; // 标记是否收到第一个响应
+
   // 并发控制：标记会话是否正在处理请求
   private isProcessing = false;
 
@@ -184,7 +186,9 @@ export class ClaudeSession {
    * @param responseCallback 响应回调函数
    */
   async sendMessage(message: any, responseCallback: (response: SDKMessage) => void): Promise<string> {
+    const sendStartTime = Date.now();
     console.log(`🔧 [DEBUG] sendMessage called for agent: ${this.agentId}, isActive: ${this.isActive}, isProcessing: ${this.isProcessing}, isBackgroundRunning: ${this.isBackgroundRunning}`);
+    console.log(`⏱️ [TIMING] sendMessage started at: ${new Date(sendStartTime).toISOString()}`);
 
     if (!this.isActive) {
       throw new Error('Session is not active');
@@ -210,7 +214,10 @@ export class ClaudeSession {
     }
 
     // 将消息推送到队列中
+    this.lastMessageSentAt = Date.now();
+    this.firstResponseReceived = false;
     this.messageQueue.push(message);
+    console.log(`⏱️ [TIMING] Message pushed to queue, elapsed: ${Date.now() - sendStartTime}ms`);
 
     return requestId;
   }
@@ -230,6 +237,14 @@ export class ClaudeSession {
       for await (const response of this.queryStream) {
         // 类型安全的消息处理
         const sdkMessage = response as SDKMessage;
+
+        // 计时：第一个响应的时间
+        if (!this.firstResponseReceived && this.lastMessageSentAt > 0) {
+          const ttfb = Date.now() - this.lastMessageSentAt;
+          console.log(`⏱️ [TIMING] First response received! TTFB: ${ttfb}ms, type: ${sdkMessage.type}`);
+          this.firstResponseReceived = true;
+        }
+
         console.log(`🔧 [DEBUG] Received response in background handler for agent: ${this.agentId}, type: ${sdkMessage.type}`);
         this.lastActivity = Date.now();
 

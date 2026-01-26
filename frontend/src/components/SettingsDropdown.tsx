@@ -122,7 +122,7 @@ export const SettingsDropdown: React.FC<SettingsDropdownProps> = ({
       </button>
 
       {isOpen && (
-        <div className="absolute bottom-full left-0 mb-2 w-[400px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-2xl z-50 flex flex-col max-h-[80vh]">
+        <div className="absolute bottom-full right-0 mb-2 w-[400px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-2xl z-50 flex flex-col max-h-[80vh]">
 
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-gray-700">

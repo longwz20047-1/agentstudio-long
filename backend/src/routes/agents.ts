@@ -339,9 +339,9 @@ const ChatRequestSchema = z.object({
     // Generic context for other agent types
     currentItem: z.any().optional(),
     allItems: z.array(z.any()).optional(),
-    customContext: z.record(z.any()).optional()
+    customContext: z.record(z.string(), z.any()).optional()
   }).optional(),
-  envVars: z.record(z.string()).optional()
+  envVars: z.record(z.string(), z.string()).optional()
 }).refine(data => {
   // Either message text or images must be provided
   return data.message.trim().length > 0 || (data.images && data.images.length > 0);
@@ -1175,7 +1175,7 @@ router.post('/user-response', async (req, res) => {
     if (!validation.success) {
       return res.status(400).json({
         error: 'Invalid request body',
-        details: validation.error.errors
+        details: validation.error.issues
       });
     }
 

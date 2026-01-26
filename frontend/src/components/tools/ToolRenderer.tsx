@@ -72,6 +72,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = ({ execution, onAskUser
       return <BashOutputTool execution={execution} />;
 
     case 'KillBash':
+    case 'TaskStop':  // SDK 0.2.19+ 新名称
       return <KillBashTool execution={execution} />;
 
     case 'Glob':
