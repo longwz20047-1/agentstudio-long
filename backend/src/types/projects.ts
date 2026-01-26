@@ -47,17 +47,18 @@ export interface ProjectWithAgentInfo {
   description?: string;
   createdAt: string;
   lastAccessed: string;
-  
+
   // Agent information
   agents: string[];       // List of enabled agent IDs
   defaultAgent: string;
   defaultAgentName: string;
   defaultAgentIcon: string;
-  
+  defaultAgentDescription?: string; // Agent's description (from AgentConfig.description)
+
   // Model/Provider configuration
   defaultProviderId?: string;  // Default Claude version/provider for this project
   defaultModel?: string;       // Default model for this project
-  
+
   // Metadata
   tags: string[];
   metadata: Record<string, any>;

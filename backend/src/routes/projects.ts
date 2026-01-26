@@ -730,6 +730,7 @@ The conversation history will be saved in \`.cc-sessions/${agentId}/\` within th
           defaultAgent: agentId,
           defaultAgentName: agent.name,
           defaultAgentIcon: agent.ui.icon,
+          defaultAgentDescription: agent.description || '',
           createdAt: new Date().toISOString(),
           lastAccessed: new Date().toISOString(),
           description: description || ''

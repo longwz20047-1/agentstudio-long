@@ -508,12 +508,14 @@ export class ProjectMetadataStorage {
     let defaultAgent = metadata.defaultAgent;
     let defaultAgentName = '';
     let defaultAgentIcon = '';
+    let defaultAgentDescription = '';
 
     if (defaultAgent && metadata.agents[defaultAgent]?.enabled) {
       const agent = this.agentStorage.getAgent(defaultAgent);
       if (agent) {
         defaultAgentName = agent.name;
         defaultAgentIcon = agent.ui.icon;
+        defaultAgentDescription = agent.description || '';
       }
     } else if (enabledAgents.length > 0) {
       // Use the most recently used agent as default
@@ -527,6 +529,7 @@ export class ProjectMetadataStorage {
       if (agent) {
         defaultAgentName = agent.name;
         defaultAgentIcon = agent.ui.icon;
+        defaultAgentDescription = agent.description || '';
 
         // Update metadata with new default
         metadata.defaultAgent = defaultAgent;
@@ -541,6 +544,7 @@ export class ProjectMetadataStorage {
         defaultAgent = 'claude-code';
         defaultAgentName = fallbackAgent.name;
         defaultAgentIcon = fallbackAgent.ui.icon;
+        defaultAgentDescription = fallbackAgent.description || '';
         console.log(`📋 Using fallback agent (claude-code) for project: ${metadata.name}`);
       }
     }
@@ -567,6 +571,7 @@ export class ProjectMetadataStorage {
       defaultAgent,
       defaultAgentName,
       defaultAgentIcon,
+      defaultAgentDescription,
       defaultProviderId: metadata.defaultProviderId,
       defaultModel: metadata.defaultModel,
       tags: metadata.tags,

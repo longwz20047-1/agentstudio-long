@@ -21,6 +21,7 @@ import { getOrCreateA2AId } from '../services/a2a/agentMappingService.js';
 import { taskManager } from '../services/a2a/taskManager.js';
 import { generateAgentCard, type ProjectContext } from '../services/a2a/agentCardService.js';
 import { AgentStorage } from '../services/agentStorage.js';
+import { ProjectMetadataStorage } from '../services/projectMetadataStorage.js';
 import { generateApiKey, listApiKeysWithDecryption, revokeApiKey } from '../services/a2a/apiKeyService.js';
 import { a2aHistoryService } from '../services/a2a/a2aHistoryService.js';
 import { loadA2AConfig, saveA2AConfig } from '../services/a2a/a2aConfigService.js';
@@ -33,6 +34,7 @@ const router: Router = express.Router();
 
 // Initialize storage services
 const globalAgentStorage = new AgentStorage();
+const projectMetadataStorage = new ProjectMetadataStorage();
 
 // ============================================================================
 // GET /api/a2a/mapping/:projectPath - Get A2A agent mapping for project
@@ -48,8 +50,9 @@ router.get('/mapping/:projectPath', async (req: Request, res: Response) => {
     // Convert project path to project ID for storage
     const projectId = `proj_${Buffer.from(decodedProjectPath).toString('base64').replace(/[+/=]/g, '').slice(-12)}`;
 
-    // Get the default agent type for this project
-    const agentType = 'claude-code';
+    // Get the default agent type for this project from project metadata
+    const projectMetadata = projectMetadataStorage.getProjectMetadata(decodedProjectPath);
+    const agentType = projectMetadata?.defaultAgent || 'claude-code';
 
     // Get or create A2A agent ID
     const a2aAgentId = await getOrCreateA2AId(projectId, agentType, decodedProjectPath);
@@ -86,8 +89,9 @@ router.get('/agent-card/:projectPath', async (req: Request, res: Response) => {
     // Convert project path to project ID for storage
     const projectId = `proj_${Buffer.from(decodedProjectPath).toString('base64').replace(/[+/=]/g, '').slice(-12)}`;
 
-    // Get the default agent type for this project
-    const agentType = 'claude-code';
+    // Get the default agent type for this project from project metadata
+    const projectMetadata = projectMetadataStorage.getProjectMetadata(decodedProjectPath);
+    const agentType = projectMetadata?.defaultAgent || 'claude-code';
 
     // Get or create A2A agent ID
     const a2aAgentId = await getOrCreateA2AId(projectId, agentType, decodedProjectPath);
