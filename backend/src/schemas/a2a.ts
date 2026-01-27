@@ -20,9 +20,10 @@ export const SessionModeSchema = z.enum(['reuse', 'new']);
 
 /**
  * POST /a2a/:a2aAgentId/messages request validation
+ * Note: message can be empty if images are provided
  */
 export const A2AMessageRequestSchema = z.object({
-  message: z.string().min(1, 'Message cannot be empty').max(10000, 'Message too long (max 10000 characters)'),
+  message: z.string().max(10000, 'Message too long (max 10000 characters)'),
   sessionId: z.string().optional(),
   sessionMode: SessionModeSchema.optional().default('new'),
   context: z.record(z.string(), z.unknown()).optional(),
@@ -30,7 +31,10 @@ export const A2AMessageRequestSchema = z.object({
     data: z.string().min(1, 'Image data cannot be empty'),
     mediaType: z.string().regex(/^image\/(jpeg|png|gif|webp)$/, 'Invalid media type'),
   })).optional(),
-});
+}).refine(
+  (data) => data.message.trim().length > 0 || (data.images && data.images.length > 0),
+  { message: 'Either message or images must be provided' }
+);
 
 /**
  * Push Notification Authentication Info validation
