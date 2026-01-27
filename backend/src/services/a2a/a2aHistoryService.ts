@@ -48,10 +48,18 @@ export class A2AHistoryService {
 
     try {
       const content = await fs.readFile(filePath, 'utf-8');
-      return content
-        .split('\n')
-        .filter((line: string) => line.trim())
-        .map((line: string) => JSON.parse(line));
+      const result: any[] = [];
+      const lines = content.split('\n').filter((line: string) => line.trim());
+
+      for (const line of lines) {
+        try {
+          result.push(JSON.parse(line));
+        } catch {
+          // 跳过无法解析的行（可能是写入中断导致的不完整 JSON）
+        }
+      }
+
+      return result;
     } catch (error: any) {
       if (error.code === 'ENOENT') {
         return [];

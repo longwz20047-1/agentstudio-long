@@ -50,9 +50,10 @@ router.get('/mapping/:projectPath', async (req: Request, res: Response) => {
     // Convert project path to project ID for storage
     const projectId = `proj_${Buffer.from(decodedProjectPath).toString('base64').replace(/[+/=]/g, '').slice(-12)}`;
 
-    // Get the default agent type for this project from project metadata
-    const projectMetadata = projectMetadataStorage.getProjectMetadata(decodedProjectPath);
-    const agentType = projectMetadata?.defaultAgent || 'claude-code';
+    // Get the default agent type for this project from enriched project info
+    // Use getProject() instead of getProjectMetadata() to get the same defaultAgent as /api/projects
+    const project = projectMetadataStorage.getProject(decodedProjectPath);
+    const agentType = project?.defaultAgent || 'claude-code';
 
     // Get or create A2A agent ID
     const a2aAgentId = await getOrCreateA2AId(projectId, agentType, decodedProjectPath);
@@ -89,9 +90,10 @@ router.get('/agent-card/:projectPath', async (req: Request, res: Response) => {
     // Convert project path to project ID for storage
     const projectId = `proj_${Buffer.from(decodedProjectPath).toString('base64').replace(/[+/=]/g, '').slice(-12)}`;
 
-    // Get the default agent type for this project from project metadata
-    const projectMetadata = projectMetadataStorage.getProjectMetadata(decodedProjectPath);
-    const agentType = projectMetadata?.defaultAgent || 'claude-code';
+    // Get the default agent type for this project from enriched project info
+    // Use getProject() instead of getProjectMetadata() to get the same defaultAgent as /api/projects
+    const project = projectMetadataStorage.getProject(decodedProjectPath);
+    const agentType = project?.defaultAgent || 'claude-code';
 
     // Get or create A2A agent ID
     const a2aAgentId = await getOrCreateA2AId(projectId, agentType, decodedProjectPath);
