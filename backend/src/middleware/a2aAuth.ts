@@ -123,15 +123,6 @@ export async function a2aAuth(req: A2ARequest, res: Response, next: NextFunction
       apiKeyId: validation.keyId!,
     };
 
-    // Log successful authentication (for monitoring)
-    console.info('[A2A Auth] Successful authentication:', {
-      a2aAgentId,
-      projectId: agentMapping.projectId,
-      agentType: agentMapping.agentType,
-      keyId: validation.keyId,
-      timestamp: new Date().toISOString(),
-    });
-
     next();
   } catch (error) {
     console.error('[A2A Auth] Authentication error:', error);

@@ -181,17 +181,6 @@ router.get('/.well-known/agent-card.json', async (req: A2ARequest, res: Response
 
       // Cache the generated Agent Card
       agentCardCache.set(agentConfig, projectContext, agentCard);
-
-      console.info('[A2A] Agent Card generated and cached:', {
-        a2aAgentId: a2aContext.a2aAgentId,
-        agentType: a2aContext.agentType,
-        skillCount: agentCard.skills.length,
-      });
-    } else {
-      console.info('[A2A] Agent Card served from cache:', {
-        a2aAgentId: a2aContext.a2aAgentId,
-        agentType: a2aContext.agentType,
-      });
     }
 
     res.json(agentCard);
