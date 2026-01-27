@@ -173,8 +173,18 @@ export class AgentCardCache {
       },
     };
 
-    // Generate deterministic hash
-    const json = JSON.stringify(cacheData, Object.keys(cacheData).sort());
+    // Generate deterministic hash using recursive key sorting
+    const json = JSON.stringify(cacheData, (key, value) => {
+      // Sort object keys recursively for deterministic serialization
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const sortedObj: Record<string, unknown> = {};
+        for (const k of Object.keys(value).sort()) {
+          sortedObj[k] = value[k];
+        }
+        return sortedObj;
+      }
+      return value;
+    });
     return crypto.createHash('sha256').update(json).digest('hex');
   }
 

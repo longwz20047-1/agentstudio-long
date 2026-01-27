@@ -41,6 +41,44 @@ const agentStorage = new AgentStorage();
 const projectMetadataStorage = new ProjectMetadataStorage();
 
 // ============================================================================
+// Helper: Build user message content with images for history storage
+// ============================================================================
+
+interface A2AImageInput {
+  data: string;       // base64 data
+  mediaType: string;  // 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+}
+
+/**
+ * Build user message content array including images for A2A history storage
+ * Images are stored in A2A history format: { type: 'image', source: { type: 'base64', media_type, data } }
+ */
+function buildUserMessageContent(message: string, images?: A2AImageInput[]): Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }> {
+  const content: Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }> = [];
+
+  // Add text content if present
+  if (message) {
+    content.push({ type: 'text', text: message });
+  }
+
+  // Add image content blocks
+  if (images && images.length > 0) {
+    for (const img of images) {
+      content.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: img.mediaType,
+          data: img.data
+        }
+      });
+    }
+  }
+
+  return content;
+}
+
+// ============================================================================
 // Error Response Helper
 // ============================================================================
 
@@ -125,6 +163,18 @@ router.get('/.well-known/agent-card.json', async (req: A2ARequest, res: Response
     // Try to get from cache first
     let agentCard = agentCardCache.get(agentConfig, projectContext);
 
+    // Safety check: verify cached card matches the requested agent
+    // If there's a mismatch (e.g., due to hash collision), invalidate and regenerate
+    if (agentCard && agentCard.context?.a2aAgentId !== a2aContext.a2aAgentId) {
+      console.warn('[A2A] Cache mismatch detected! Invalidating and regenerating.', {
+        requestedA2AId: a2aContext.a2aAgentId,
+        cachedA2AId: agentCard.context?.a2aAgentId,
+        cachedCardName: agentCard.name,
+      });
+      agentCardCache.invalidate(agentConfig, projectContext);
+      agentCard = null;
+    }
+
     if (!agentCard) {
       // Generate Agent Card from agent configuration
       agentCard = generateAgentCard(agentConfig, projectContext);
@@ -205,6 +255,8 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       sessionId,
       sessionMode,
       stream,
+      imagesCount: images?.length || 0,
+      hasImages: !!images && images.length > 0,
     });
 
     // Load agent configuration
@@ -285,17 +337,32 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
         res.setHeader('Connection', 'keep-alive');
         res.flushHeaders();
 
-        let capturedSessionId: string | null = null;
+        // 初始化为用户提供的 sessionId（和同步模式一致）
+        let capturedSessionId: string | null = sessionId || null;
 
-        // Save user message to history first (before getting session ID from SDK)
-        // We'll update with actual sessionId once we capture it
-        const userMessageEvent = {
+        // 如果用户提供了 sessionId（恢复模式），先保存用户消息到用户提供的 sessionId
+        if (sessionId) {
+          const userHistoryEvent = {
+            type: 'user',
+            message: {
+              role: 'user',
+              content: buildUserMessageContent(message, images)
+            },
+            sessionId: sessionId,
+            timestamp: Date.now(),
+          };
+          a2aHistoryService.appendEvent(a2aContext.workingDirectory, sessionId, userHistoryEvent)
+            .catch(err => console.error('[A2A] Failed to write user message to history:', err));
+        }
+
+        // 用于新会话时保存用户消息（等待 SDK 返回 session_id）
+        const userMessageEventForNewSession = {
           type: 'user',
           message: {
             role: 'user',
-            content: [{ type: 'text', text: message }]
+            content: buildUserMessageContent(message, images)
           },
-          sessionId: sessionId || 'pending', // Will be updated when we get actual session ID
+          sessionId: 'pending',
           timestamp: Date.now(),
         };
 
@@ -305,33 +372,35 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
             images, // 传递图片数组
             queryOptions,
             (sdkMessage: SDKMessage) => {
-              // Capture session ID
+              // Capture session ID from SDK（仅用于新会话）
               if ((sdkMessage as any).session_id && !capturedSessionId) {
                 capturedSessionId = (sdkMessage as any).session_id;
 
-                // Now save user message with actual session ID
-                userMessageEvent.sessionId = capturedSessionId!;
+                // 只有新会话（没有用户提供 sessionId）时，才使用 SDK 返回的 session_id 保存用户消息
+                userMessageEventForNewSession.sessionId = capturedSessionId!;
                 a2aHistoryService.appendEvent(
                   a2aContext.workingDirectory,
                   capturedSessionId!,
-                  userMessageEvent
+                  userMessageEventForNewSession
                 ).catch(err => console.error('[A2A] Failed to write user message to history:', err));
               }
 
+              // 使用用户提供的 sessionId 或 SDK 返回的 session_id
+              const effectiveSessionId = sessionId || capturedSessionId;
               const eventData = {
                 ...sdkMessage,
-                sessionId: capturedSessionId || sessionId,
+                sessionId: effectiveSessionId,
                 timestamp: Date.now(),
               };
 
               // Write to SSE stream
               res.write(`data: ${JSON.stringify(eventData)}\n\n`);
 
-              // Persist to history (fire and forget for streaming)
-              if (capturedSessionId || sessionId) {
+              // Persist to history (使用用户提供的 sessionId 优先)
+              if (effectiveSessionId) {
                 a2aHistoryService.appendEvent(
-                  a2aContext.workingDirectory, 
-                  capturedSessionId || sessionId!, 
+                  a2aContext.workingDirectory,
+                  effectiveSessionId,
                   eventData
                 ).catch(err => console.error('[A2A] Failed to write history event:', err));
               }
@@ -363,7 +432,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
               type: 'user',
               message: {
                 role: 'user',
-                content: [{ type: 'text', text: message }]
+                content: buildUserMessageContent(message, images)
               },
               sessionId: sessionId,
               timestamp: Date.now(),
@@ -391,7 +460,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
                     type: 'user',
                     message: {
                       role: 'user',
-                      content: [{ type: 'text', text: message }]
+                      content: buildUserMessageContent(message, images)
                     },
                     sessionId: capturedSessionId!,
                     timestamp: Date.now() - 1, // slightly before to ensure ordering
@@ -482,7 +551,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
           type: 'user',
           message: {
             role: 'user',
-            content: [{ type: 'text', text: message }]
+            content: buildUserMessageContent(message, images)
           }
         };
 
@@ -543,7 +612,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
             type: 'user',
             message: {
               role: 'user',
-              content: [{ type: 'text', text: message }]
+              content: buildUserMessageContent(message, images)
             }
           };
 
