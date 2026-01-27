@@ -26,6 +26,10 @@ export const A2AMessageRequestSchema = z.object({
   sessionId: z.string().optional(),
   sessionMode: SessionModeSchema.optional().default('new'),
   context: z.record(z.string(), z.unknown()).optional(),
+  images: z.array(z.object({
+    data: z.string().min(1, 'Image data cannot be empty'),
+    mediaType: z.string().regex(/^image\/(jpeg|png|gif|webp)$/, 'Invalid media type'),
+  })).optional(),
 });
 
 /**

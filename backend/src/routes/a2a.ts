@@ -194,7 +194,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       });
     }
 
-    const { message, sessionId, sessionMode = 'new', context } = validation.data;
+    const { message, sessionId, sessionMode = 'new', context, images } = validation.data;
     const stream = req.query.stream === 'true' || req.headers.accept === 'text/event-stream';
 
     console.info('[A2A] Message received:', {
@@ -302,7 +302,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
         try {
           const result = await executeA2AQueryStreaming(
             message,
-            undefined, // images
+            images, // 传递图片数组
             queryOptions,
             (sdkMessage: SDKMessage) => {
               // Capture session ID
@@ -378,7 +378,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
           let capturedSessionId: string | null = sessionId || null;
           const result = await executeA2AQuery(
             message,
-            undefined, // images
+            images, // 传递图片数组
             queryOptions,
             async (sdkMessage: SDKMessage) => {
               // Capture session ID if not already captured
