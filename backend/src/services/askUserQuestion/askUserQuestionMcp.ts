@@ -34,20 +34,33 @@ export type AskUserQuestionInput = {
 
 /**
  * Tool description for AskUserQuestion
+ *
+ * IMPORTANT: This description explicitly tells Claude to use this MCP tool
+ * instead of the SDK's built-in AskUserQuestion tool.
  */
-const TOOL_DESCRIPTION = `Use this tool when you need to ask the user questions during execution. This allows you to:
+const TOOL_DESCRIPTION = `IMPORTANT: This is the PREFERRED tool for asking users questions. Always use this tool (mcp__ask-user-question__ask_user_question) instead of the SDK's built-in AskUserQuestion tool.
+
+Use this tool when you need to ask the user questions during execution. This allows you to:
 1. Gather user preferences or requirements
 2. Clarify ambiguous instructions
 3. Get decisions on implementation choices as you work
 4. Offer choices to the user about what direction to take.
 
+Limits:
+- Maximum 10 questions per call
+- Each question can have 2-10 options
+- Header will be auto-truncated to 50 chars if too long
+
 Usage notes:
 - Users will always be able to select "Other" to provide custom text input
 - Use multiSelect: true to allow multiple answers to be selected for a question
-- The tool will pause execution until the user provides their answers
+- The tool will pause execution and WAIT until the user provides their answers
 - This tool supports multiple notification channels (Web, Slack, WeChat, etc.)
 
-IMPORTANT: This tool will block until the user responds. Do not call it in situations where immediate response is needed.`;
+CRITICAL:
+- This tool BLOCKS and WAITS for user response - it will not return until the user answers
+- Do NOT use the SDK's built-in "AskUserQuestion" tool - it does not properly wait for user input
+- Always use THIS tool (mcp__ask-user-question__ask_user_question) for user interactions`;
 
 /**
  * Session reference object - allows dynamic session ID updates
@@ -75,8 +88,8 @@ export async function createAskUserQuestionMcpServer(sessionRef: SessionRef, age
             question: z.string().describe(
               'The complete question to ask the user. Should be clear, specific, and end with a question mark.'
             ),
-            header: z.string().max(12).describe(
-              'Very short label displayed as a chip/tag (max 12 chars). Examples: "Auth method", "Library", "Approach".'
+            header: z.string().describe(
+              'Short label displayed as a chip/tag. Examples: "Auth method", "Library", "框架选择". Will be truncated to 50 chars if too long.'
             ),
             options: z
               .array(
@@ -86,26 +99,32 @@ export async function createAskUserQuestionMcpServer(sessionRef: SessionRef, age
                 })
               )
               .min(2)
-              .max(4)
-              .describe('The available choices (2-4 options). No need for "Other" option, it will be added automatically.'),
+              .max(10)
+              .describe('The available choices (2-10 options). No need for "Other" option, it will be added automatically.'),
             multiSelect: z.boolean().describe(
               'Set to true to allow multiple options to be selected.'
             ),
           })
         )
         .min(1)
-        .max(4)
-        .describe('Questions to ask the user (1-4 questions)'),
+        .max(10)
+        .describe('Questions to ask the user (1-10 questions)'),
     },
     async (args, context) => {
       // 获取工具调用 ID（从 context 或生成一个）
       const toolUseId = (context as any)?.toolUseId || `ask_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      
+
       // 使用动态 session ID（可能已从临时 ID 更新为真实 ID）
       const currentSessionId = sessionRef.current;
       console.log(`🎤 [AskUserQuestion MCP] Tool called with ${args.questions.length} questions`);
       console.log(`🎤 [AskUserQuestion MCP] Session: ${currentSessionId}, Agent: ${agentId}, ToolUseId: ${toolUseId}`);
-      
+
+      // 自动截断过长的 header（最多 50 字符）
+      const processedQuestions = args.questions.map(q => ({
+        ...q,
+        header: q.header.length > 50 ? q.header.slice(0, 47) + '...' : q.header
+      }));
+
       try {
         // 注册等待用户输入（无超时限制，允许一直等待）
         // UserInputRegistry 会发出事件，NotificationChannelManager 会处理通知
@@ -113,7 +132,7 @@ export async function createAskUserQuestionMcpServer(sessionRef: SessionRef, age
           currentSessionId,
           agentId,
           toolUseId,
-          args.questions
+          processedQuestions
         );
         
         console.log(`✅ [AskUserQuestion MCP] Received user response for tool: ${toolUseId}`);

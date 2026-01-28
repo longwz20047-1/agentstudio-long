@@ -33,6 +33,7 @@ import { sessionManager } from '../services/sessionManager.js';
 import { handleSessionManagement } from '../utils/sessionUtils.js';
 import { buildQueryOptions } from '../utils/claudeUtils.js';
 import { executeA2AQuery, executeA2AQueryStreaming } from '../services/a2a/a2aQueryService.js';
+import { userInputRegistry } from '../services/askUserQuestion/index.js';
 
 const router: Router = express.Router({ mergeParams: true });
 
@@ -278,10 +279,14 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
     // Extract WeKnora context if present
     const weknoraContext = context?.weknora as import('../services/weknora/weknoraIntegration.js').WeknoraContext | undefined;
 
+    // Generate session ID for AskUserQuestion MCP integration
+    // Use provided sessionId or generate a temporary one for this A2A request
+    const askUserSessionId = sessionId || `a2a_${a2aContext.a2aAgentId}_${Date.now()}`;
+
     // Build query options for Claude using the shared utility
     // This automatically handles A2A SDK MCP server integration
     // Note: model is now resolved through configResolver, not from agent config
-    const { queryOptions } = await buildQueryOptions(
+    const { queryOptions, askUserSessionRef } = await buildQueryOptions(
       {
         systemPrompt: agentConfig.systemPrompt || undefined,
         allowedTools: agentConfig.allowedTools || [],
@@ -296,8 +301,8 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       undefined, // claudeVersion - let resolveConfig determine from agent/project/system
       undefined, // defaultEnv
       undefined, // userEnv
-      undefined, // sessionIdForAskUser
-      undefined, // agentIdForAskUser
+      askUserSessionId, // sessionIdForAskUser - 用于 AskUserQuestion MCP 集成
+      a2aContext.a2aAgentId, // agentIdForAskUser - 用于 AskUserQuestion MCP 集成
       undefined, // a2aStreamEnabled
       weknoraContext ? { weknoraContext } : undefined // extendedOptions
     );
@@ -364,6 +369,16 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
               // Capture session ID from SDK（仅用于新会话）
               if ((sdkMessage as any).session_id && !capturedSessionId) {
                 capturedSessionId = (sdkMessage as any).session_id;
+
+                // 更新 AskUserQuestion MCP 的 session ID
+                // 这样 pending input 和前端使用的 sessionId 才能匹配
+                if (askUserSessionRef) {
+                  const oldSessionId = askUserSessionRef.current;
+                  askUserSessionRef.current = capturedSessionId!;
+                  // 同时更新 userInputRegistry 中的 pending inputs
+                  userInputRegistry.updateSessionId(oldSessionId, capturedSessionId!);
+                  console.log(`📝 [A2A] Updated AskUserQuestion sessionId: ${oldSessionId} -> ${capturedSessionId}`);
+                }
 
                 // 只有新会话（没有用户提供 sessionId）时，才使用 SDK 返回的 session_id 保存用户消息
                 userMessageEventForNewSession.sessionId = capturedSessionId!;
@@ -442,6 +457,14 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
               // Capture session ID if not already captured
               if ((sdkMessage as any).session_id && !capturedSessionId) {
                 capturedSessionId = (sdkMessage as any).session_id;
+
+                // 更新 AskUserQuestion MCP 的 session ID
+                if (askUserSessionRef) {
+                  const oldSessionId = askUserSessionRef.current;
+                  askUserSessionRef.current = capturedSessionId!;
+                  userInputRegistry.updateSessionId(oldSessionId, capturedSessionId!);
+                  console.log(`📝 [A2A] Updated AskUserQuestion sessionId: ${oldSessionId} -> ${capturedSessionId}`);
+                }
 
                 // Save user message for new sessions (no initial sessionId)
                 if (!sessionId) {
@@ -995,6 +1018,110 @@ router.delete('/tasks/:taskId', async (req: A2ARequest, res: Response) => {
     res.status(500).json(
       formatErrorResponse(error, 'TASK_CANCELLATION_ERROR', 'Failed to cancel task')
     );
+  }
+});
+
+// ============================================================================
+// 🎤 AskUserQuestion: Submit User Response for A2A
+// ============================================================================
+// 当用户在 A2A 客户端（如 weknora-ui）中提交答案时，调用此 API
+// 这会 resolve MCP 工具中正在等待的 Promise，使工具返回用户答案
+
+import { z } from 'zod';
+
+const A2AUserResponseSchema = z.object({
+  toolUseId: z.string().min(1, 'toolUseId is required'),
+  response: z.string().min(1, 'response is required'),
+  sessionId: z.string().optional(),
+  agentId: z.string().optional()
+});
+
+router.post('/user-response', a2aRateLimiter, async (req: A2ARequest, res: Response) => {
+  try {
+    const { a2aContext } = req;
+
+    if (!a2aContext) {
+      return res.status(500).json({
+        error: 'Authentication context missing',
+        code: 'AUTH_CONTEXT_MISSING',
+      });
+    }
+
+    const validation = A2AUserResponseSchema.safeParse(req.body);
+
+    if (!validation.success) {
+      return res.status(400).json({
+        error: 'Invalid request body',
+        details: validation.error.issues
+      });
+    }
+
+    const { toolUseId, response, sessionId, agentId } = validation.data;
+
+    console.log(`🎤 [A2A AskUserQuestion] Received user response for tool: ${toolUseId}`);
+    console.log(`🎤 [A2A AskUserQuestion] Session: ${sessionId}, Agent: ${agentId}`);
+
+    // 使用带验证的提交方法
+    let result = userInputRegistry.validateAndSubmitUserResponse(
+      toolUseId,
+      response,
+      sessionId || a2aContext.a2aAgentId,
+      agentId || a2aContext.agentType
+    );
+
+    // 如果通过 toolUseId 找不到，尝试通过 sessionId 查找
+    // 这是因为 MCP 工具使用的 toolUseId 可能与前端使用的 Claude tool_use.id 不同
+    if (!result.success && result.error === 'No pending input found for this tool use ID') {
+      const effectiveSessionId = sessionId || a2aContext.a2aAgentId;
+      const pendingInputs = userInputRegistry.getPendingInputsBySession(effectiveSessionId);
+
+      console.log(`🔍 [A2A AskUserQuestion] Fallback: searching by sessionId ${effectiveSessionId}, found ${pendingInputs.length} pending inputs`);
+
+      if (pendingInputs.length === 1) {
+        // 只有一个 pending input，直接使用
+        const actualToolUseId = pendingInputs[0].toolUseId;
+        console.log(`✅ [A2A AskUserQuestion] Found pending input by session, actual toolUseId: ${actualToolUseId}`);
+        result = userInputRegistry.validateAndSubmitUserResponse(
+          actualToolUseId,
+          response,
+          effectiveSessionId,
+          agentId || a2aContext.agentType
+        );
+      } else if (pendingInputs.length > 1) {
+        // 多个 pending inputs，使用最新的（按 createdAt 排序）
+        const sortedInputs = [...pendingInputs].sort((a, b) => b.createdAt - a.createdAt);
+        const latestInput = sortedInputs[0];
+        console.log(`⚠️ [A2A AskUserQuestion] Multiple pending inputs (${pendingInputs.length}), using latest: ${latestInput.toolUseId}`);
+        result = userInputRegistry.validateAndSubmitUserResponse(
+          latestInput.toolUseId,
+          response,
+          effectiveSessionId,
+          agentId || a2aContext.agentType
+        );
+      }
+    }
+
+    if (result.success) {
+      console.log(`✅ [A2A AskUserQuestion] User response submitted successfully for tool: ${toolUseId}`);
+      res.json({
+        success: true,
+        message: 'User response submitted successfully'
+      });
+    } else {
+      console.warn(`⚠️ [A2A AskUserQuestion] Failed to submit response for tool: ${toolUseId}, error: ${result.error}`);
+
+      const statusCode = result.error === 'No pending input found for this tool use ID' ? 404 : 403;
+      res.status(statusCode).json({
+        success: false,
+        error: result.error
+      });
+    }
+  } catch (error) {
+    console.error('❌ [A2A AskUserQuestion] Error processing user response:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
   }
 });
 

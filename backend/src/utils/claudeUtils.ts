@@ -318,9 +318,32 @@ export async function buildQueryOptions(
     console.log(`📦 No custom path specified, SDK will use bundled CLI`);
   }
 
+  // 追加用户交互工具指令到 systemPrompt 可扩展功能
+  const askUserToolInstruction = `
+`;
+
+  let finalSystemPrompt: SystemPrompt = agent.systemPrompt;
+  if (typeof agent.systemPrompt === 'string') {
+    // 字符串类型：直接追加
+    finalSystemPrompt = agent.systemPrompt + askUserToolInstruction;
+  } else if (agent.systemPrompt && agent.systemPrompt.type === 'preset') {
+    // PresetSystemPrompt 类型：追加到 append 字段
+    finalSystemPrompt = {
+      ...agent.systemPrompt,
+      append: (agent.systemPrompt.append || '') + askUserToolInstruction
+    };
+  } else {
+    // 没有 systemPrompt 时，直接使用 askUserToolInstruction
+    finalSystemPrompt = askUserToolInstruction;
+  }
+
   const queryOptions: Options = {
-    systemPrompt: agent.systemPrompt, // 直接使用 Agent 配置中的 systemPrompt
+    systemPrompt: finalSystemPrompt,
     allowedTools,
+    // 禁用 SDK 内置的 AskUserQuestion 工具
+    // 该工具不会阻塞等待用户输入，而是立即返回空响应
+    // Claude 应该使用 MCP 版本的 mcp__ask-user-question__ask_user_question 工具
+    disallowedTools: ['AskUserQuestion'],
     maxTurns: agent.maxTurns,
     cwd,
     permissionMode: finalPermissionMode as any,
