@@ -20,47 +20,40 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
   const input = execution.toolInput as unknown as AskUserQuestionInput;
   const pendingUserQuestion = useAgentStore(state => state.pendingUserQuestion);
 
-  // 安全检查：如果 input 或 questions 不存在，返回错误状态
-  if (!input || !input.questions || !Array.isArray(input.questions)) {
-    return (
-      <BaseToolComponent
-        execution={execution}
-        hideToolName={false}
-        overrideToolName={t('askUserQuestionTool.title')}
-      >
-        <div className="text-red-600 text-sm">
-          {t('askUserQuestionTool.invalidInput', 'Invalid question input')}
-        </div>
-      </BaseToolComponent>
-    );
-  }
-  
+  // ⚠️ 重要：所有 hooks 必须在任何条件返回之前调用，以遵守 React Hooks 规则
+  // 即使 input 无效，hooks 也必须被调用
+
   // 每个问题的选择状态
   // Map<questionIndex, selectedOptionLabels[]>
   const [selections, setSelections] = useState<Map<number, string[]>>(new Map());
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
+
   // 自定义输入状态
   // Map<questionIndex, customInputText>
   const [customInputs, setCustomInputs] = useState<Map<number, string>>(new Map());
-  
+
   // 输入框引用，用于自动聚焦
   const inputRefs = useRef<Map<number, HTMLInputElement | null>>(new Map());
+
+  // 安全获取 questions 数组（用于 hooks 中的安全访问）
+  const questions = input?.questions && Array.isArray(input.questions) ? input.questions : [];
+  const isValidInput = questions.length > 0;
 
   // 检查这个工具是否是当前待回答的问题
   const isPendingQuestion = useMemo(() => {
     if (!pendingUserQuestion) return false;
     if (!execution.toolInput) return false;
-    
+    if (!isValidInput) return false;
+
     // 由于后端 MCP 工具生成的 toolUseId 与 Claude SDK 流中的 claudeId 不同，
     // 我们使用更宽松的匹配策略：
     // 1. 检查工具正在执行（没有结果）
     // 2. 检查 questions 内容匹配
     // 这样在同一时间只有一个 AskUserQuestion 工具等待时，可以正确匹配
-    
+
     const inputQuestions = (execution.toolInput as any).questions;
     const pendingQuestions = pendingUserQuestion.questions;
-    
+
     // 如果 questions 数组长度相同，认为是匹配的
     if (inputQuestions && pendingQuestions && inputQuestions.length === pendingQuestions.length) {
       // 进一步检查第一个问题的 question 内容是否匹配
@@ -68,9 +61,9 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
         return true;
       }
     }
-    
+
     return false;
-  }, [pendingUserQuestion, execution]);
+  }, [pendingUserQuestion, execution.toolInput, isValidInput]);
 
   // 检查是否可以交互（只有待回答的问题才能交互）
   const isInteractive = isPendingQuestion && !execution.toolResult && !isSubmitting;
@@ -78,7 +71,7 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
   // 解析已提交的用户回答（从 toolResult）
   const submittedAnswer = useMemo(() => {
     if (!execution.toolResult) return null;
-    
+
     const result = String(execution.toolResult);
     // 解析 "User response: xxx" 或 "Q1: xxx\nQ2: yyy" 格式
     const match = result.match(/^User response:\s*(.+)$/s);
@@ -116,7 +109,7 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
 
       return newSelections;
     });
-    
+
     // 如果选择的不是 "Type something"，清空自定义输入
     if (optionLabel !== TYPE_SOMETHING_MARKER) {
       setCustomInputs(prev => {
@@ -174,12 +167,13 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
   // 检查是否所有必填问题都已回答
   const canSubmit = useMemo(() => {
     if (!isInteractive) return false;
-    
+    if (!isValidInput) return false;
+
     // 每个问题至少要选择一个选项（或有有效的自定义输入）
-    for (let i = 0; i < input.questions.length; i++) {
+    for (let i = 0; i < questions.length; i++) {
       const questionSelections = selections.get(i) || [];
       if (questionSelections.length === 0) return false;
-      
+
       // 如果选择了 "Type something"，检查是否有输入内容
       if (questionSelections.includes(TYPE_SOMETHING_MARKER)) {
         const customInput = customInputs.get(i) || '';
@@ -190,18 +184,20 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
       }
     }
     return true;
-  }, [isInteractive, input.questions.length, selections, customInputs]);
+  }, [isInteractive, isValidInput, questions.length, selections, customInputs]);
 
   // 格式化响应内容
   const formatResponse = useCallback((): string => {
+    if (!isValidInput) return '';
+
     const responses: string[] = [];
-    
-    input.questions.forEach((_question, index) => {
+
+    questions.forEach((_question, index) => {
       const selectedOptions = selections.get(index) || [];
       if (selectedOptions.length > 0) {
         // 构建回答内容
         const answerParts: string[] = [];
-        
+
         selectedOptions.forEach(option => {
           if (option === TYPE_SOMETHING_MARKER) {
             // 使用自定义输入的内容
@@ -213,9 +209,9 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
             answerParts.push(option);
           }
         });
-        
+
         if (answerParts.length > 0) {
-          if (input.questions.length === 1) {
+          if (questions.length === 1) {
             // 单个问题，直接返回选项
             responses.push(answerParts.join(', '));
           } else {
@@ -227,14 +223,14 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
     });
 
     return responses.join('\n');
-  }, [input.questions, selections, customInputs]);
+  }, [isValidInput, questions, selections, customInputs]);
 
   // 提交回答
   const handleSubmit = useCallback(async () => {
     if (!canSubmit || !onSubmit || !pendingUserQuestion) return;
 
     setIsSubmitting(true);
-    
+
     try {
       const response = formatResponse();
       console.log('🎤 [AskUserQuestion] Submitting response:', response);
@@ -248,17 +244,18 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
   }, [canSubmit, onSubmit, pendingUserQuestion, formatResponse]);
 
   // 显示副标题：如果只有1个问题显示问题标题，多个问题显示第一个问题标题(+N)
-  const getSubtitle = () => {
-    const questions = input.questions;
+  const subtitle = useMemo(() => {
+    if (!isValidInput) return '';
+
     const questionCount = questions.length;
-    
+
     // 获取第一个问题的标题（优先使用 header，否则使用 question 的前30个字符）
     const firstQuestion = questions[0];
-    const firstQuestionTitle = firstQuestion.header || 
-      (firstQuestion.question.length > 30 
-        ? firstQuestion.question.substring(0, 30) + '...' 
+    const firstQuestionTitle = firstQuestion.header ||
+      (firstQuestion.question.length > 30
+        ? firstQuestion.question.substring(0, 30) + '...'
         : firstQuestion.question);
-    
+
     if (questionCount === 1) {
       // 只有一个问题时，显示问题标题
       return firstQuestionTitle;
@@ -266,12 +263,49 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
       // 多个问题时，显示第一个问题标题 (+N)
       return `${firstQuestionTitle} (+${questionCount - 1})`;
     }
-  };
+  }, [isValidInput, questions]);
+
+  // ⚠️ 条件返回必须在所有 hooks 调用之后
+  // 安全检查：如果 input 或 questions 不存在
+  if (!isValidInput) {
+    // 如果正在执行，显示加载状态（数据可能还在流式传输中）
+    if (execution.isExecuting) {
+      return (
+        <BaseToolComponent
+          execution={execution}
+          defaultExpanded={true}
+          hideToolName={false}
+          overrideToolName={t('askUserQuestionTool.title')}
+          customIcon={<MessageSquare className="w-4 h-4 text-blue-500" />}
+        >
+          <div className="flex items-center space-x-2 text-blue-600 py-2">
+            <MessageSquare className="w-4 h-4 animate-pulse" />
+            <span className="text-sm">
+              {t('askUserQuestionTool.loading', 'Loading questions...')}
+            </span>
+          </div>
+        </BaseToolComponent>
+      );
+    }
+    // 如果不是执行中且数据无效，显示错误状态
+    return (
+      <BaseToolComponent
+        execution={execution}
+        defaultExpanded={true}
+        hideToolName={false}
+        overrideToolName={t('askUserQuestionTool.title')}
+      >
+        <div className="text-red-600 text-sm">
+          {t('askUserQuestionTool.invalidInput', 'Invalid question input')}
+        </div>
+      </BaseToolComponent>
+    );
+  }
 
   return (
-    <BaseToolComponent 
-      execution={execution} 
-      subtitle={getSubtitle()}
+    <BaseToolComponent
+      execution={execution}
+      subtitle={subtitle}
       defaultExpanded={true}
       showResult={false}
       hideToolName={false}
@@ -282,9 +316,9 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
 
         {/* 问题列表 */}
         <div className="space-y-4">
-          {input.questions.map((question, questionIndex) => {
+          {questions.map((question, questionIndex) => {
             const selectedOptions = selections.get(questionIndex) || [];
-            
+
             return (
               <div key={questionIndex} className="border border-gray-200 rounded-lg p-3 bg-white">
                 {/* 问题头部 */}
@@ -318,7 +352,7 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
                   {question.options.map((option, optionIndex) => {
                     const isSelected = selectedOptions.includes(option.label);
                     const canClick = isInteractive;
-                    
+
                     return (
                       <div
                         key={optionIndex}
@@ -326,8 +360,8 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
                         className={`
                           flex items-start space-x-2 p-2 rounded border transition-all
                           ${canClick ? 'cursor-pointer' : 'cursor-default'}
-                          ${isSelected 
-                            ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' 
+                          ${isSelected
+                            ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
                             : 'border-gray-100 hover:bg-gray-50'
                           }
                           ${!canClick && !isSelected ? 'opacity-60' : ''}
@@ -335,7 +369,7 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
                       >
                         {/* 选择框 */}
                         {question.multiSelect ? (
-                          <CheckSquare 
+                          <CheckSquare
                             className={`w-4 h-4 mt-0.5 ${isSelected ? 'text-blue-500' : 'text-gray-400'}`}
                             checked={isSelected}
                           />
@@ -361,16 +395,16 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
                       </div>
                     );
                   })}
-                  
+
                   {/* "Type something" 选项 或 已提交的自定义回答 */}
                   {(() => {
                     const isTypeSomethingSelected = selectedOptions.includes(TYPE_SOMETHING_MARKER);
                     const canClick = isInteractive;
                     const customInputValue = customInputs.get(questionIndex) || '';
-                    
+
                     // 检查是否有已提交的自定义回答（不是预设选项之一）
                     const isCustomAnswer = submittedAnswer && !question.options.some(opt => opt.label === submittedAnswer);
-                    
+
                     // 如果工具已完成且回答是自定义输入，直接在选项里显示内容
                     if (execution.toolResult && isCustomAnswer) {
                       return (
@@ -386,7 +420,7 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
                         </div>
                       );
                     }
-                    
+
                     return (
                       <div className="space-y-2">
                         <div
@@ -394,8 +428,8 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
                           className={`
                             flex items-start space-x-2 p-2 rounded border transition-all
                             ${canClick ? 'cursor-pointer' : 'cursor-default'}
-                            ${isTypeSomethingSelected 
-                              ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' 
+                            ${isTypeSomethingSelected
+                              ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
                               : 'border-gray-100 border-dashed hover:bg-gray-50'
                             }
                             ${!canClick && !isTypeSomethingSelected ? 'opacity-60' : ''}
@@ -403,7 +437,7 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
                         >
                           {/* 选择框 */}
                           {question.multiSelect ? (
-                            <CheckSquare 
+                            <CheckSquare
                               className={`w-4 h-4 mt-0.5 ${isTypeSomethingSelected ? 'text-blue-500' : 'text-gray-400'}`}
                               checked={isTypeSomethingSelected}
                             />
@@ -423,7 +457,7 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
                             </div>
                           </div>
                         </div>
-                        
+
                         {/* 自定义输入框（仅在选中时显示） */}
                         {isTypeSomethingSelected && isInteractive && (
                           <div className="ml-6">

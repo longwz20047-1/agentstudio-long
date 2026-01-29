@@ -844,6 +844,7 @@
     "multiSelect": "多选",
     "userResponse": "您的回答",
     "waitingForResponse": "等待您的回答...",
+    "loading": "正在加载问题...",
     "error": "提交回答失败",
     "interactionHint": "此交互组件需要手动输入",
     "submit": "提交回答",

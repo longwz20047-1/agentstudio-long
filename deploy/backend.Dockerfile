@@ -17,6 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
+# 安装 uv (Python 包管理器，提供 uvx 命令用于 MCP 服务器)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
+
 # 安装 pnpm
 ENV PNPM_VERSION=10.18.1
 RUN npm install -g pnpm@${PNPM_VERSION}

@@ -175,16 +175,16 @@ const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
                 <input
                   type="text"
                   value={formData.directory}
-                  onChange={(e) => setFormData({ ...formData, directory: e.target.value })}
-                  className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
+                  disabled
+                  className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-600 text-gray-500 dark:text-gray-400 cursor-not-allowed"
                 />
                 <button
                   type="button"
-                  onClick={() => setShowFileBrowser(true)}
-                  className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
+                  disabled
+                  className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-600 cursor-not-allowed"
                   title={t('projects.form.directory')}
                 >
-                  <Folder className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                  <Folder className="w-4 h-4 text-gray-400 dark:text-gray-500" />
                 </button>
               </div>
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">

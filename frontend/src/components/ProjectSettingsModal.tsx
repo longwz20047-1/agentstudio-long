@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, Settings, Server, Bot } from 'lucide-react';
+import { X, Settings, Server, Bot, FileText } from 'lucide-react';
 import { useClaudeVersions } from '../hooks/useClaudeVersions';
 import { API_BASE } from '../lib/config';
 import { authFetch } from '../lib/authFetch';
@@ -11,6 +11,7 @@ interface Project {
   path: string;
   defaultProviderId?: string;
   defaultModel?: string;
+  description?: string;
 }
 
 interface ProjectSettingsModalProps {
@@ -27,9 +28,10 @@ export const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({
   onSaved,
 }) => {
   const { data: claudeVersionsData } = useClaudeVersions();
-  
+
   const [selectedProviderId, setSelectedProviderId] = useState<string>('');
   const [selectedModel, setSelectedModel] = useState<string>('');
+  const [description, setDescription] = useState<string>('');
   const [isSaving, setIsSaving] = useState(false);
 
   // Reset form when project changes
@@ -37,6 +39,7 @@ export const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({
     if (project) {
       setSelectedProviderId(project.defaultProviderId || '');
       setSelectedModel(project.defaultModel || '');
+      setDescription(project.description || '');
     }
   }, [project]);
 
@@ -79,6 +82,7 @@ export const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({
         body: JSON.stringify({
           defaultProviderId: selectedProviderId || '',
           defaultModel: selectedModel || '',
+          description: description,
         }),
       });
 
@@ -171,6 +175,24 @@ export const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({
             </select>
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               设置此项目的默认 AI 模型（可在聊天时覆盖）
+            </p>
+          </div>
+
+          {/* Project Description */}
+          <div>
+            <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              <FileText className="w-4 h-4" />
+              项目描述
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={3}
+              placeholder="输入项目描述..."
+              className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none"
+            />
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              简要描述此项目的用途和内容
             </p>
           </div>
 

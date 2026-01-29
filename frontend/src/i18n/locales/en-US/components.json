@@ -844,6 +844,7 @@
     "multiSelect": "Multi-select",
     "userResponse": "Your Response",
     "waitingForResponse": "Waiting for your response...",
+    "loading": "Loading questions...",
     "error": "Failed to submit response",
     "interactionHint": "This interaction component requires manual input",
     "submit": "Submit Answer",
