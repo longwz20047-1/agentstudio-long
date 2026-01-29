@@ -266,18 +266,30 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       });
     }
 
-    // Extract MCP tools from agent configuration
-    // MCP tools are identified by the naming pattern: mcp__<serverName>__<toolName>
-    const mcpTools = (agentConfig.allowedTools || [])
-      .filter((tool: any) => tool.enabled && tool.name.startsWith('mcp__'))
-      .map((tool: any) => tool.name);
-
-    if (mcpTools.length > 0) {
-      console.info('[A2A] MCP tools found:', { mcpTools });
-    }
-
     // Extract WeKnora context if present
     const weknoraContext = context?.weknora as import('../services/weknora/weknoraIntegration.js').WeknoraContext | undefined;
+
+    // Extract MCP tools from agent configuration
+    // MCP tools are stored in allowedTools with format: mcp__serverName__toolName or serverName.toolName
+    const mcpTools: string[] = [];
+    if (agentConfig.allowedTools && Array.isArray(agentConfig.allowedTools)) {
+      for (const tool of agentConfig.allowedTools) {
+        if (!tool.enabled) continue;
+
+        if (tool.name.startsWith('mcp__')) {
+          // Already formatted MCP tool
+          mcpTools.push(tool.name);
+        } else if (tool.name.includes('.') && !tool.name.includes('/')) {
+          // MCP tool format: serverName.toolName -> mcp__serverName__toolName
+          const [serverName, toolName] = tool.name.split('.');
+          mcpTools.push(`mcp__${serverName}__${toolName}`);
+        }
+      }
+    }
+
+    if (mcpTools.length > 0) {
+      console.log(`🔧 [A2A] Extracted MCP tools from agent config:`, mcpTools);
+    }
 
     // Generate session ID for AskUserQuestion MCP integration
     // Use provided sessionId or generate a temporary one for this A2A request
@@ -295,7 +307,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
         permissionMode: 'acceptEdits', // A2A 使用 acceptEdits 模式（bypassPermissions 有 SDK bug）
       },
       a2aContext.workingDirectory,
-      mcpTools.length > 0 ? mcpTools : undefined, // Pass extracted MCP tools
+      mcpTools.length > 0 ? mcpTools : undefined, // mcpTools - 从 agent 配置提取
       'acceptEdits', // permissionMode - 使用 acceptEdits（bypassPermissions 有 SDK bug）
       undefined, // model - let resolveConfig determine from project/system defaults
       undefined, // claudeVersion - let resolveConfig determine from agent/project/system
@@ -535,7 +547,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
         model: queryOptions.model,
         claudeVersionId: undefined, // A2A 不使用 claudeVersion
         permissionMode: queryOptions.permissionMode,
-        mcpTools: [], // A2A 不使用额外的 MCP 工具
+        mcpTools: mcpTools, // 使用从 agent 配置提取的 MCP 工具
         allowedTools: agentConfig.allowedTools
           .filter((tool: any) => tool.enabled)
           .map((tool: any) => tool.name)

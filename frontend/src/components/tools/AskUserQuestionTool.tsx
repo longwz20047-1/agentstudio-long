@@ -278,7 +278,7 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
           overrideToolName={t('askUserQuestionTool.title')}
           customIcon={<MessageSquare className="w-4 h-4 text-blue-500" />}
         >
-          <div className="flex items-center space-x-2 text-blue-600 py-2">
+          <div className="flex items-center space-x-2 text-blue-600 dark:text-blue-400 py-2">
             <MessageSquare className="w-4 h-4 animate-pulse" />
             <span className="text-sm">
               {t('askUserQuestionTool.loading', 'Loading questions...')}
@@ -295,7 +295,7 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
         hideToolName={false}
         overrideToolName={t('askUserQuestionTool.title')}
       >
-        <div className="text-red-600 text-sm">
+        <div className="text-red-600 dark:text-red-400 text-sm">
           {t('askUserQuestionTool.invalidInput', 'Invalid question input')}
         </div>
       </BaseToolComponent>
@@ -320,20 +320,20 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
             const selectedOptions = selections.get(questionIndex) || [];
 
             return (
-              <div key={questionIndex} className="border border-gray-200 rounded-lg p-3 bg-white">
+              <div key={questionIndex} className="border border-gray-200 dark:border-gray-600 rounded-lg p-3 bg-white dark:bg-gray-800">
                 {/* 问题头部 */}
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center space-x-2">
-                    <span className="text-sm font-medium text-gray-700">
+                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
                       Q{questionIndex + 1}
                     </span>
                     {question.header && (
-                      <span className="text-xs px-2 py-1 bg-blue-100 text-blue-800 rounded-full">
+                      <span className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900/50 text-blue-800 dark:text-blue-300 rounded-full">
                         {question.header}
                       </span>
                     )}
                     {question.multiSelect && (
-                      <span className="text-xs px-2 py-1 bg-purple-100 text-purple-800 rounded-full">
+                      <span className="text-xs px-2 py-1 bg-purple-100 dark:bg-purple-900/50 text-purple-800 dark:text-purple-300 rounded-full">
                         {t('askUserQuestionTool.multiSelect')}
                       </span>
                     )}
@@ -342,7 +342,7 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
 
                 {/* 问题内容 */}
                 <div className="mb-3">
-                  <p className="text-sm text-gray-800 font-medium">
+                  <p className="text-sm text-gray-800 dark:text-gray-200 font-medium">
                     {question.question}
                   </p>
                 </div>
@@ -361,8 +361,8 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
                           flex items-start space-x-2 p-2 rounded border transition-all
                           ${canClick ? 'cursor-pointer' : 'cursor-default'}
                           ${isSelected
-                            ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
-                            : 'border-gray-100 hover:bg-gray-50'
+                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 ring-1 ring-blue-500'
+                            : 'border-gray-100 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
                           }
                           ${!canClick && !isSelected ? 'opacity-60' : ''}
                         `}
@@ -370,24 +370,24 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
                         {/* 选择框 */}
                         {question.multiSelect ? (
                           <CheckSquare
-                            className={`w-4 h-4 mt-0.5 ${isSelected ? 'text-blue-500' : 'text-gray-400'}`}
+                            className={`w-4 h-4 mt-0.5 ${isSelected ? 'text-blue-500' : 'text-gray-400 dark:text-gray-500'}`}
                             checked={isSelected}
                           />
                         ) : (
                           isSelected ? (
                             <CheckCircle className="w-4 h-4 mt-0.5 text-blue-500" />
                           ) : (
-                            <Circle className="w-4 h-4 mt-0.5 text-gray-400" />
+                            <Circle className="w-4 h-4 mt-0.5 text-gray-400 dark:text-gray-500" />
                           )
                         )}
 
                         {/* 选项内容 */}
                         <div className="flex-1">
-                          <div className={`text-sm font-medium ${isSelected ? 'text-blue-700' : 'text-gray-700'}`}>
+                          <div className={`text-sm font-medium ${isSelected ? 'text-blue-700 dark:text-blue-400' : 'text-gray-700 dark:text-gray-300'}`}>
                             {option.label}
                           </div>
                           {option.description && (
-                            <div className="text-xs text-gray-500 mt-1">
+                            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                               {option.description}
                             </div>
                           )}
@@ -408,12 +408,12 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
                     // 如果工具已完成且回答是自定义输入，直接在选项里显示内容
                     if (execution.toolResult && isCustomAnswer) {
                       return (
-                        <div className="flex items-start space-x-2 p-2 rounded border border-green-500 bg-green-50 ring-1 ring-green-500">
+                        <div className="flex items-start space-x-2 p-2 rounded border border-green-500 bg-green-50 dark:bg-green-900/30 ring-1 ring-green-500">
                           <CheckCircle className="w-4 h-4 mt-0.5 text-green-500" />
                           {/* 选项内容：将标签和用户输入显示在同一行 */}
                           <div className="flex-1 flex items-center space-x-2">
-                            <PenLine className="w-4 h-4 text-green-600" />
-                            <span className="text-sm font-medium text-green-700">
+                            <PenLine className="w-4 h-4 text-green-600 dark:text-green-400" />
+                            <span className="text-sm font-medium text-green-700 dark:text-green-400">
                               {t('askUserQuestionTool.typeSomething')} {submittedAnswer}
                             </span>
                           </div>
@@ -429,8 +429,8 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
                             flex items-start space-x-2 p-2 rounded border transition-all
                             ${canClick ? 'cursor-pointer' : 'cursor-default'}
                             ${isTypeSomethingSelected
-                              ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
-                              : 'border-gray-100 border-dashed hover:bg-gray-50'
+                              ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 ring-1 ring-blue-500'
+                              : 'border-gray-100 dark:border-gray-600 border-dashed hover:bg-gray-50 dark:hover:bg-gray-700'
                             }
                             ${!canClick && !isTypeSomethingSelected ? 'opacity-60' : ''}
                           `}
@@ -438,21 +438,21 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
                           {/* 选择框 */}
                           {question.multiSelect ? (
                             <CheckSquare
-                              className={`w-4 h-4 mt-0.5 ${isTypeSomethingSelected ? 'text-blue-500' : 'text-gray-400'}`}
+                              className={`w-4 h-4 mt-0.5 ${isTypeSomethingSelected ? 'text-blue-500' : 'text-gray-400 dark:text-gray-500'}`}
                               checked={isTypeSomethingSelected}
                             />
                           ) : (
                             isTypeSomethingSelected ? (
                               <CheckCircle className="w-4 h-4 mt-0.5 text-blue-500" />
                             ) : (
-                              <Circle className="w-4 h-4 mt-0.5 text-gray-400" />
+                              <Circle className="w-4 h-4 mt-0.5 text-gray-400 dark:text-gray-500" />
                             )
                           )}
 
                           {/* 选项内容 */}
                           <div className="flex-1 flex items-center space-x-2">
-                            <PenLine className={`w-4 h-4 ${isTypeSomethingSelected ? 'text-blue-500' : 'text-gray-400'}`} />
-                            <div className={`text-sm font-medium ${isTypeSomethingSelected ? 'text-blue-700' : 'text-gray-500'}`}>
+                            <PenLine className={`w-4 h-4 ${isTypeSomethingSelected ? 'text-blue-500' : 'text-gray-400 dark:text-gray-500'}`} />
+                            <div className={`text-sm font-medium ${isTypeSomethingSelected ? 'text-blue-700 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400'}`}>
                               {t('askUserQuestionTool.typeSomething')}
                             </div>
                           </div>
@@ -467,7 +467,7 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
                               value={customInputValue}
                               onChange={(e) => handleCustomInputChange(questionIndex, e.target.value)}
                               placeholder={t('askUserQuestionTool.typeSomethingPlaceholder')}
-                              className="w-full px-3 py-2 text-sm border border-blue-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+                              className="w-full px-3 py-2 text-sm border border-blue-300 dark:border-blue-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 dark:text-gray-100"
                               onKeyDown={(e) => {
                                 // 按 Enter 提交（如果可以提交）
                                 if (e.key === 'Enter' && canSubmit) {
@@ -497,7 +497,7 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
                 flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all
                 ${canSubmit && !isSubmitting
                   ? 'bg-blue-500 text-white hover:bg-blue-600 shadow-sm'
-                  : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'
                 }
               `}
             >
@@ -518,7 +518,7 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
 
         {/* 已完成状态 */}
         {execution.toolResult && (
-          <div className="flex items-center space-x-2 text-green-600 py-2">
+          <div className="flex items-center space-x-2 text-green-600 dark:text-green-400 py-2">
             <Check className="w-4 h-4" />
             <span className="text-sm font-medium">
               {t('askUserQuestionTool.completed')}
@@ -528,7 +528,7 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
 
         {/* 等待状态（非待回答问题时的执行中状态） */}
         {execution.isExecuting && !isPendingQuestion && (
-          <div className="flex items-center space-x-2 text-blue-600 py-2">
+          <div className="flex items-center space-x-2 text-blue-600 dark:text-blue-400 py-2">
             <MessageSquare className="w-4 h-4 animate-pulse" />
             <span className="text-sm">
               {t('askUserQuestionTool.waitingForResponse')}
@@ -538,7 +538,7 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({ execut
 
         {/* 错误状态 */}
         {execution.isError && (
-          <div className="flex items-center space-x-2 text-red-600 py-2">
+          <div className="flex items-center space-x-2 text-red-600 dark:text-red-400 py-2">
             <MessageSquare className="w-4 h-4" />
             <span className="text-sm">
               {t('askUserQuestionTool.error')}
