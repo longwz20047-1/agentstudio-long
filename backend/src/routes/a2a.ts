@@ -357,8 +357,12 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
             sessionId: sessionId,
             timestamp: Date.now(),
           };
-          a2aHistoryService.appendEvent(a2aContext.workingDirectory, sessionId, userHistoryEvent)
-            .catch(err => console.error('[A2A] Failed to write user message to history:', err));
+          // 必须 await 确保写入完成，避免和后续流式事件写入交叉导致 JSON 损坏
+          try {
+            await a2aHistoryService.appendEvent(a2aContext.workingDirectory, sessionId, userHistoryEvent);
+          } catch (err) {
+            console.error('[A2A] Failed to write user message to history:', err);
+          }
         }
 
         // 用于新会话时保存用户消息（等待 SDK 返回 session_id）
@@ -377,7 +381,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
             message,
             images, // 传递图片数组
             queryOptions,
-            (sdkMessage: SDKMessage) => {
+            async (sdkMessage: SDKMessage) => {
               // Capture session ID from SDK（仅用于新会话）
               if ((sdkMessage as any).session_id && !capturedSessionId) {
                 capturedSessionId = (sdkMessage as any).session_id;
@@ -394,11 +398,16 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
 
                 // 只有新会话（没有用户提供 sessionId）时，才使用 SDK 返回的 session_id 保存用户消息
                 userMessageEventForNewSession.sessionId = capturedSessionId!;
-                a2aHistoryService.appendEvent(
-                  a2aContext.workingDirectory,
-                  capturedSessionId!,
-                  userMessageEventForNewSession
-                ).catch(err => console.error('[A2A] Failed to write user message to history:', err));
+                // 必须 await 确保用户消息写入完成，避免和流式事件写入交叉导致 JSON 损坏
+                try {
+                  await a2aHistoryService.appendEvent(
+                    a2aContext.workingDirectory,
+                    capturedSessionId!,
+                    userMessageEventForNewSession
+                  );
+                } catch (err) {
+                  console.error('[A2A] Failed to write user message to history:', err);
+                }
               }
 
               // 使用用户提供的 sessionId 或 SDK 返回的 session_id

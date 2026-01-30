@@ -21,6 +21,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
+# 安装 Python 依赖（xlsx skill 需要 openpyxl）
+RUN pip3 install --no-cache-dir --break-system-packages openpyxl
+
 # 安装 pnpm
 ENV PNPM_VERSION=10.18.1
 RUN npm install -g pnpm@${PNPM_VERSION}
