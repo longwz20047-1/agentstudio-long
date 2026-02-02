@@ -215,8 +215,8 @@ If results are insufficient, try rephrasing the query or using different keyword
 - "system": Rarely used, only for system-level metadata
 
 **Examples:**
-✅ "我叫张三，在北京工作" → content="用户名叫张三，在北京工作", role_type="user"
-✅ "记住我喜欢蓝色" → content="用户喜欢蓝色", role_type="user"
+✅ "我叫张三，在北京工作" → content="用户名叫张三，在北京工作", role_type="user", role="张三"
+✅ "记住我喜欢蓝色" → content="用户喜欢蓝色", role_type="user", role="user"
 ❌ "今天天气真好" → Do not save (temporary)
 ❌ "帮我查一下订单" → Do not save (task, not fact)
 
@@ -230,14 +230,12 @@ If results are insufficient, try rephrasing the query or using different keyword
         .describe('The information to save to memory. Should be a clear, factual statement.'),
       role_type: z
         .enum(['user', 'assistant', 'system'])
-        .default('user')
-        .optional()
-        .describe('The role type: "user" for user facts (default), "assistant" for AI conclusions, "system" for metadata'),
+        .describe('The role type: "user" for user facts, "assistant" for AI conclusions, "system" for metadata'),
       role: z
         .string()
+        .min(1, 'Role cannot be empty')
         .max(100)
-        .optional()
-        .describe('Optional role name (e.g., user name, bot name)'),
+        .describe('The role name (e.g., user name like "张三", or bot name like "assistant")'),
       source_description: z
         .string()
         .max(500)
@@ -246,7 +244,7 @@ If results are insufficient, try rephrasing the query or using different keyword
     },
 
     async (args) => {
-      const { content, role_type = 'user', role, source_description } = args;
+      const { content, role_type, role, source_description } = args;
 
       console.log('📝 [Graphiti] Adding memory:', { content, role_type, group_id: primaryGroupId });
 
