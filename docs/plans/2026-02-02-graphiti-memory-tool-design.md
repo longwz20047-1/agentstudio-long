@@ -318,9 +318,7 @@ weknoraContext ? { weknoraContext } : undefined
   : undefined
 ```
 
-### 6. 前端 Context 构建（可选）
-
-如果需要在前端（weknora-ui）添加 Graphiti 支持：
+### 6. 前端 Context 构建
 
 **项目**: `D:\workspace\weknora-ui`
 **文件**: `src/utils/graphiti.ts`
@@ -388,7 +386,7 @@ const requestContext = {
 | `backend/src/utils/claudeUtils.ts` | 修改 | 添加 import 和集成逻辑 |
 | `backend/src/routes/a2a.ts` | 修改 | 提取 graphiti context |
 
-### D:\workspace\weknora-ui（前端，可选）
+### D:\workspace\weknora-ui（前端）
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
