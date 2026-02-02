@@ -43,12 +43,16 @@ export async function integrateGraphitiMcpServer(
       "graphiti": server
     };
 
-    // Add tool to allowedTools
-    const toolName = getGraphitiToolName();
+    // Add tools to allowedTools
+    const toolNames = getGraphitiToolNames();
     if (!queryOptions.allowedTools) {
-      queryOptions.allowedTools = [toolName];
-    } else if (!queryOptions.allowedTools.includes(toolName)) {
-      queryOptions.allowedTools.push(toolName);
+      queryOptions.allowedTools = [...toolNames];
+    } else {
+      for (const toolName of toolNames) {
+        if (!queryOptions.allowedTools.includes(toolName)) {
+          queryOptions.allowedTools.push(toolName);
+        }
+      }
     }
   } catch (error) {
     console.error('❌ [Graphiti] Failed to integrate SDK MCP server:', error);
@@ -57,10 +61,24 @@ export async function integrateGraphitiMcpServer(
 }
 
 /**
- * Get the full tool name as it appears to Claude
+ * Get the full tool name for search as it appears to Claude
  */
-export function getGraphitiToolName(): string {
+export function getGraphitiSearchToolName(): string {
   return 'mcp__graphiti__graphiti_search_memory';
+}
+
+/**
+ * Get the full tool name for add memory as it appears to Claude
+ */
+export function getGraphitiAddMemoryToolName(): string {
+  return 'mcp__graphiti__graphiti_add_memory';
+}
+
+/**
+ * Get all Graphiti tool names
+ */
+export function getGraphitiToolNames(): string[] {
+  return [getGraphitiSearchToolName(), getGraphitiAddMemoryToolName()];
 }
 
 /**
@@ -173,11 +191,118 @@ If results are insufficient, try rephrasing the query or using different keyword
     }
   );
 
+  // Primary group_id for writing (user-specific)
+  const primaryGroupId = `user_${user_id}`;
+
+  const graphitiAddMemoryTool = tool(
+    'graphiti_add_memory',
+    `Save important information to user's long-term memory.
+
+**MUST use when:**
+- User explicitly requests: "记住...", "remember...", "别忘了..."
+- User states persistent preferences: "我喜欢...", "我不喜欢...", "我偏好..."
+- User shares identity facts: name, job, location, relationships, birthday
+
+**MUST NOT use when:**
+- Temporary context (today's task, current conversation topic)
+- Sensitive data (passwords, API keys, financial details, health info)
+- Opinions about external things (movie reviews, news comments)
+- Information that may change frequently
+
+**Role type guide:**
+- "user": Facts FROM or ABOUT the user (default, use this most often)
+- "assistant": Assistant's conclusions or summaries about user
+- "system": Rarely used, only for system-level metadata
+
+**Examples:**
+✅ "我叫张三，在北京工作" → content="用户名叫张三，在北京工作", role_type="user"
+✅ "记住我喜欢蓝色" → content="用户喜欢蓝色", role_type="user"
+❌ "今天天气真好" → Do not save (temporary)
+❌ "帮我查一下订单" → Do not save (task, not fact)
+
+**Configured memory scope:** Writing to group "${primaryGroupId}"`,
+
+    {
+      content: z
+        .string()
+        .min(1, 'Content cannot be empty')
+        .max(2000, 'Content too long (max 2000 characters)')
+        .describe('The information to save to memory. Should be a clear, factual statement.'),
+      role_type: z
+        .enum(['user', 'assistant', 'system'])
+        .default('user')
+        .optional()
+        .describe('The role type: "user" for user facts (default), "assistant" for AI conclusions, "system" for metadata'),
+      role: z
+        .string()
+        .max(100)
+        .optional()
+        .describe('Optional role name (e.g., user name, bot name)'),
+      source_description: z
+        .string()
+        .max(500)
+        .optional()
+        .describe('Optional description of the source of this information'),
+    },
+
+    async (args) => {
+      const { content, role_type = 'user', role, source_description } = args;
+
+      console.log('📝 [Graphiti] Adding memory:', { content, role_type, group_id: primaryGroupId });
+
+      try {
+        const response = await fetch(`${base_url}/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(api_key ? { 'Authorization': `Bearer ${api_key}` } : {}),
+          },
+          body: JSON.stringify({
+            group_id: primaryGroupId,
+            messages: [{
+              content,
+              role_type,
+              role: role || null,
+              source_description: source_description || 'a2a_conversation',
+            }],
+          }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('❌ [Graphiti] Add memory API error:', response.status, errorText);
+          return {
+            content: [{ type: 'text', text: `Failed to save memory: ${response.status} - ${errorText}` }],
+            isError: true,
+          };
+        }
+
+        const data = await response.json();
+        console.log('✅ [Graphiti] Memory saved successfully:', data);
+
+        return {
+          content: [{
+            type: 'text',
+            text: `✅ Memory saved successfully.\n\n**Content:** ${content}\n**Group:** ${primaryGroupId}\n**Role:** ${role_type}`
+          }],
+        };
+
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error('❌ [Graphiti] Add memory error:', error);
+        return {
+          content: [{ type: 'text', text: `Memory save error: ${msg}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
   const server = createSdkMcpServer({
     name: 'graphiti',
     version: '1.0.0',
-    tools: [graphitiSearchTool],
+    tools: [graphitiSearchTool, graphitiAddMemoryTool],
   });
 
-  return { server, tool: graphitiSearchTool };
+  return { server, tools: [graphitiSearchTool, graphitiAddMemoryTool] };
 }
