@@ -269,6 +269,9 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
     // Extract WeKnora context if present
     const weknoraContext = context?.weknora as import('../services/weknora/weknoraIntegration.js').WeknoraContext | undefined;
 
+    // Extract Graphiti Memory context if present
+    const graphitiContext = context?.graphiti as import('../services/graphiti/types.js').GraphitiContext | undefined;
+
     // Extract MCP tools from agent configuration
     // MCP tools are stored in allowedTools with format: mcp__serverName__toolName or serverName.toolName
     const mcpTools: string[] = [];
@@ -316,7 +319,12 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       askUserSessionId, // sessionIdForAskUser - 用于 AskUserQuestion MCP 集成
       a2aContext.a2aAgentId, // agentIdForAskUser - 用于 AskUserQuestion MCP 集成
       undefined, // a2aStreamEnabled
-      weknoraContext ? { weknoraContext } : undefined // extendedOptions
+      (weknoraContext || graphitiContext)
+        ? {
+            ...(weknoraContext ? { weknoraContext } : {}),
+            ...(graphitiContext ? { graphitiContext } : {}),
+          }
+        : undefined // extendedOptions
     );
 
     // Override specific options for A2A
