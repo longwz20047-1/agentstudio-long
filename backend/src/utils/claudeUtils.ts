@@ -16,6 +16,8 @@ import { integrateA2AMcpServer } from '../services/a2a/a2aIntegration.js';
 import { integrateAskUserQuestionMcpServer, SessionRef } from '../services/askUserQuestion/askUserQuestionIntegration.js';
 import { resolveConfig } from './configResolver.js';
 import { integrateWeKnoraMcpServer, type WeknoraContext } from '../services/weknora/weknoraIntegration.js';
+import { integrateGraphitiMcpServer } from '../services/graphiti/graphitiIntegration.js';
+import type { GraphitiContext } from '../services/graphiti/types.js';
 
 export type { SessionRef };
 import { MCP_SERVER_CONFIG_FILE } from '../config/paths.js';
@@ -202,6 +204,7 @@ export interface BuildQueryOptionsResult {
  */
 export interface BuildQueryExtendedOptions {
   weknoraContext?: WeknoraContext;
+  graphitiContext?: GraphitiContext;
 }
 
 export async function buildQueryOptions(
@@ -453,6 +456,14 @@ export async function buildQueryOptions(
   if (weknoraContext?.api_key && weknoraContext?.kb_ids?.length > 0) {
     await integrateWeKnoraMcpServer(queryOptions, weknoraContext);
     console.log('✅ [WeKnora] MCP Server integrated with', weknoraContext.kb_ids.length, 'knowledge bases');
+  }
+
+  // Integrate Graphiti Memory SDK MCP server (only when context is provided and valid)
+  const graphitiContext = extendedOptions?.graphitiContext;
+  if (graphitiContext?.base_url && graphitiContext?.user_id) {
+    await integrateGraphitiMcpServer(queryOptions, graphitiContext);
+    const groupCount = (graphitiContext.group_ids?.length || 0) + 1;
+    console.log('✅ [Graphiti] Memory MCP Server integrated for user', graphitiContext.user_id, 'with', groupCount, 'groups');
   }
 
   // Integrate AskUserQuestion SDK MCP server
