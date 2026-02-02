@@ -18,6 +18,7 @@
 
 ### 1. Context 接口定义
 
+**项目**: `D:\workspace\agentstudio`
 **文件**: `backend/src/services/graphiti/types.ts`
 
 ```typescript
@@ -71,6 +72,7 @@ export interface GraphitiContext {
 
 ### 3. MCP Server 实现
 
+**项目**: `D:\workspace\agentstudio`
 **文件**: `backend/src/services/graphiti/graphitiIntegration.ts`
 
 ```typescript
@@ -253,6 +255,7 @@ If results are insufficient, try rephrasing the query or using different keyword
 
 ### 4. claudeUtils.ts 集成
 
+**项目**: `D:\workspace\agentstudio`
 **文件**: `backend/src/utils/claudeUtils.ts`
 
 **修改 1 - 添加 import（第 18 行后）:**
@@ -289,6 +292,7 @@ export interface BuildQueryExtendedOptions {
 
 ### 5. a2a.ts Context 提取
 
+**项目**: `D:\workspace\agentstudio`
 **文件**: `backend/src/routes/a2a.ts`
 
 **修改 1 - 添加 Graphiti context 提取（第 270 行后）:**
@@ -316,8 +320,9 @@ weknoraContext ? { weknoraContext } : undefined
 
 ### 6. 前端 Context 构建（可选）
 
-如果需要在前端（如 weknora-ui）添加 Graphiti 支持：
+如果需要在前端（weknora-ui）添加 Graphiti 支持：
 
+**项目**: `D:\workspace\weknora-ui`
 **文件**: `src/utils/graphiti.ts`
 
 ```typescript
@@ -357,7 +362,8 @@ export function buildGraphitiContext(
 }
 ```
 
-**使用示例（a2a-chat/index.vue）:**
+**项目**: `D:\workspace\weknora-ui`
+**使用示例** (`src/views/a2a-chat/index.vue`):
 ```typescript
 import { buildWeknoraContext } from '@/utils/weknora'
 import { buildGraphitiContext } from '@/utils/graphiti'
@@ -373,20 +379,29 @@ const requestContext = {
 
 ## 文件清单
 
+### D:\workspace\agentstudio（后端）
+
 | 文件 | 操作 | 说明 |
 |------|------|------|
 | `backend/src/services/graphiti/types.ts` | 新建 | GraphitiContext 接口 |
 | `backend/src/services/graphiti/graphitiIntegration.ts` | 新建 | MCP Server 实现 |
 | `backend/src/utils/claudeUtils.ts` | 修改 | 添加 import 和集成逻辑 |
 | `backend/src/routes/a2a.ts` | 修改 | 提取 graphiti context |
-| `frontend/src/utils/graphiti.ts` | 新建（可选） | 前端 context 构建 |
+
+### D:\workspace\weknora-ui（前端，可选）
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `src/utils/graphiti.ts` | 新建 | 前端 context 构建工具 |
+| `src/views/a2a-chat/index.vue` | 修改 | 添加 graphiti context 到请求 |
 
 ## 验证来源
 
-- Graphiti API 规格：`server/graph_service/dto/retrieve.py`
-- WeKnora 集成模式：`backend/src/services/weknora/weknoraIntegration.ts`
-- claudeUtils 集成点：`backend/src/utils/claudeUtils.ts:451-456`
-- a2a.ts context 提取：`backend/src/routes/a2a.ts:269-320`
+- Graphiti API 规格：`D:\workspace\graphiti\server\graph_service\dto\retrieve.py`
+- WeKnora 集成模式：`D:\workspace\agentstudio\backend\src\services\weknora\weknoraIntegration.ts`
+- claudeUtils 集成点：`D:\workspace\agentstudio\backend\src\utils\claudeUtils.ts:451-456`
+- a2a.ts context 提取：`D:\workspace\agentstudio\backend\src\routes\a2a.ts:269-320`
+- weknora-ui context 构建：`D:\workspace\weknora-ui\src\utils\weknora.ts`
 
 ## 测试计划
 
