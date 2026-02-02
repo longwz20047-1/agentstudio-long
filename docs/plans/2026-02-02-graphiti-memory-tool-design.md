@@ -14,6 +14,25 @@
 2. 与 WeKnora 采用相同的集成模式
 3. 支持可选的额外 `group_ids`（用于共享记忆）
 
+## 技术规格
+
+### User ID 格式
+
+- **来源**: WeKnora 后端 (`weknora/internal/types/user.go`)
+- **类型**: `string`
+- **格式**: UUID（36 字符）
+- **示例**: `550e8400-e29b-41d4-a716-446655440000`
+- **存储**: `localStorage.getItem('weknora_user')` → JSON 对象 → `id` 字段
+- **获取方式**: `useAuthStore().currentUserId`
+
+### Graphiti Group ID 映射
+
+```
+user_id: "550e8400-e29b-41d4-a716-446655440000"
+    ↓
+group_id: "user_550e8400-e29b-41d4-a716-446655440000"
+```
+
 ## 设计
 
 ### 1. Context 接口定义
@@ -326,23 +345,44 @@ weknoraContext ? { weknoraContext } : undefined
 ```typescript
 /**
  * Graphiti Memory Configuration Utilities
+ *
+ * Provides helper functions for building Graphiti context
+ * to pass through A2A requests.
  */
+
+import { useAuthStore } from '@/stores/auth'
 
 export interface GraphitiContext {
   base_url: string
-  user_id: string
+  user_id: string       // UUID 格式，如 "550e8400-e29b-41d4-a716-446655440000"
   group_ids?: string[]
   api_key?: string
 }
 
+/**
+ * Get Graphiti API base URL from environment
+ */
 export function getGraphitiBaseUrl(): string {
   return import.meta.env.VITE_GRAPHITI_API_URL || 'http://192.168.100.30:8000'
 }
 
+/**
+ * Get current user ID from auth store
+ *
+ * User ID is a UUID string (36 characters), e.g., "550e8400-e29b-41d4-a716-446655440000"
+ * Source: weknora/internal/types/user.go - ID string `gorm:"type:varchar(36)"`
+ */
 export function getGraphitiUserId(): string | null {
-  return localStorage.getItem('user_id')
+  const authStore = useAuthStore()
+  return authStore.currentUserId || null
 }
 
+/**
+ * Build Graphiti context for A2A requests
+ *
+ * @param groupIds - Optional additional group IDs for shared memories
+ * @returns GraphitiContext or undefined if user not logged in
+ */
 export function buildGraphitiContext(
   groupIds?: string[]
 ): GraphitiContext | undefined {
