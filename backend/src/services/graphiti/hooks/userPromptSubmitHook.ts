@@ -7,11 +7,25 @@ import { searchMultipleCategories } from './graphitiClient.js';
 
 /** 默认用户画像搜索维度 */
 export const DEFAULT_PROFILE_QUERIES: ProfileQuery[] = [
-  { category: '基本信息', query: '用户 姓名 职业 身份 个人信息 名字' },
-  { category: '偏好设置', query: '用户 偏好 喜欢 习惯 风格 不喜欢' },
-  { category: '技术能力', query: '用户 技术栈 编程 框架 工具 擅长' },
-  { category: '未完成事项', query: '待办 未完成 进行中 下次继续 TODO' },
-  { category: '关注领域', query: '关注 学习 感兴趣 正在研究' },
+  // 基础信息维度
+  { category: '基本信息', query: '用户 姓名 职业 身份 角色 个人信息 背景' },
+  { category: '工作目标', query: '目标 计划 愿景 想要实现 希望达成 OKR KPI' },
+
+  // 能力与技术维度
+  { category: '技术能力', query: '技术栈 编程语言 框架 工具 擅长 熟悉 精通' },
+  { category: '知识领域', query: '专业 领域 行业 经验 专长 背景知识' },
+
+  // 偏好与风格维度
+  { category: '偏好设置', query: '偏好 喜欢 习惯 风格 不喜欢 讨厌 避免' },
+  { category: '沟通风格', query: '沟通 表达 简洁 详细 正式 随意 语气 风格偏好' },
+
+  // 当前状态维度
+  { category: '当前项目', query: '正在做 当前项目 在开发 产品 系统 应用' },
+  { category: '待办事项', query: '待办 TODO 未完成 进行中 下次继续 提醒' },
+
+  // 兴趣与发展维度
+  { category: '关注领域', query: '关注 学习 感兴趣 研究 探索 想了解' },
+  { category: '常见挑战', query: '困难 挑战 问题 痛点 卡住 需要帮助' },
 ];
 
 /** 默认超时时间 (毫秒) */
