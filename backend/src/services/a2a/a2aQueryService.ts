@@ -226,6 +226,7 @@ export async function executeA2AQueryStreaming(
     let sessionId: string | null = null;
 
     console.log(`🚀 [A2A Query Streaming] Starting one-shot query with resume=${queryOptions.resume || 'none'}`);
+    console.log(`🔧 [A2A Query Streaming] Hooks in queryOptions:`, queryOptions.hooks ? Object.keys(queryOptions.hooks) : 'none');
 
     const queryResult = query({
       prompt: messageGen,
