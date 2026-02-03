@@ -87,6 +87,9 @@ export function createSessionStartHook(
       const additionalContext = formatUserProfile(profile);
 
       console.log(`✅ [Graphiti Hook] User profile injected (${profile.size} categories)`);
+      console.log('📋 [Graphiti Hook] Injected context:\n' + '─'.repeat(50));
+      console.log(additionalContext);
+      console.log('─'.repeat(50));
 
       // 通过 hookSpecificOutput.additionalContext 注入上下文
       return {
