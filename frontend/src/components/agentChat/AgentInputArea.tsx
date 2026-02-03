@@ -13,6 +13,7 @@ import {
   extractCommandSearch,
   type CommandType
 } from '../../utils/commandFormatter';
+import type { EngineUICapabilities } from '../../stores/useAgentStore';
 
 export interface AgentInputAreaProps {
   // Basic state
