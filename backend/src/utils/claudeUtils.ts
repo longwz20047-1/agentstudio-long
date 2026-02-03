@@ -17,6 +17,7 @@ import { integrateAskUserQuestionMcpServer, SessionRef } from '../services/askUs
 import { resolveConfig } from './configResolver.js';
 import { integrateWeKnoraMcpServer, type WeknoraContext } from '../services/weknora/weknoraIntegration.js';
 import { integrateGraphitiMcpServer } from '../services/graphiti/graphitiIntegration.js';
+import { createGraphitiHooks } from '../services/graphiti/hooks/index.js';
 import type { GraphitiContext } from '../services/graphiti/types.js';
 
 export type { SessionRef };
@@ -462,8 +463,16 @@ export async function buildQueryOptions(
   const graphitiContext = extendedOptions?.graphitiContext;
   if (graphitiContext?.base_url && graphitiContext?.user_id) {
     await integrateGraphitiMcpServer(queryOptions, graphitiContext);
+
+    // Integrate Graphiti Hooks (SessionStart for user profile injection)
+    const graphitiHooks = createGraphitiHooks(graphitiContext);
+    queryOptions.hooks = {
+      ...queryOptions.hooks,
+      ...graphitiHooks,
+    };
+
     const groupCount = (graphitiContext.group_ids?.length || 0) + 1;
-    console.log('✅ [Graphiti] Memory MCP Server integrated for user', graphitiContext.user_id, 'with', groupCount, 'groups');
+    console.log('✅ [Graphiti] Memory MCP Server + Hooks integrated for user', graphitiContext.user_id, 'with', groupCount, 'groups');
   }
 
   // Integrate AskUserQuestion SDK MCP server
