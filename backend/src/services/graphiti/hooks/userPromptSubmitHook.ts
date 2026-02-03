@@ -34,8 +34,9 @@ const DEFAULT_TIMEOUT_MS = 5000;
 /** 默认每个维度最大结果数 */
 const DEFAULT_MAX_FACTS_PER_CATEGORY = 3;
 
-// 记录已注入的会话，避免重复注入
-const injectedSessions = new Set<string>();
+// 追踪当前活跃会话，用于检测会话切换
+// 当用户切换到不同会话时，需要重新查询用户画像
+let currentActiveSessionId: string | null = null;
 
 /**
  * 将用户画像格式化为 Markdown
@@ -99,12 +100,20 @@ export function createUserPromptSubmitHook(
 
     console.log('📝 [Graphiti Hook] UserPromptSubmit triggered');
     console.log(`   Session ID: ${sessionId}`);
+    console.log(`   Current active: ${currentActiveSessionId}`);
     console.log(`   Prompt preview: ${input.prompt?.substring(0, 50)}...`);
 
-    // 检查是否已经为此会话注入过用户画像
-    if (sessionId && injectedSessions.has(sessionId)) {
-      console.log('⏭️ [Graphiti Hook] Profile already injected for this session, skipping');
+    // 检查是否是同一会话的后续消息（非切换场景）
+    // 只有当 sessionId 与当前活跃会话相同时才跳过
+    if (sessionId && sessionId === currentActiveSessionId) {
+      console.log('⏭️ [Graphiti Hook] Same session continuing, skipping profile query');
       return { continue: true };
+    }
+
+    // 会话切换或新会话，更新活跃会话并查询用户画像
+    if (sessionId) {
+      console.log(`🔄 [Graphiti Hook] Session switch detected: ${currentActiveSessionId} -> ${sessionId}`);
+      currentActiveSessionId = sessionId;
     }
 
     try {
@@ -115,16 +124,6 @@ export function createUserPromptSubmitHook(
         maxFactsPerCategory,
         timeoutMs
       );
-
-      // 标记此会话已注入（即使没有找到数据也标记，避免重复搜索）
-      if (sessionId) {
-        injectedSessions.add(sessionId);
-        // 清理旧会话（保留最近100个）
-        if (injectedSessions.size > 100) {
-          const oldest = injectedSessions.values().next().value;
-          if (oldest) injectedSessions.delete(oldest);
-        }
-      }
 
       if (profile.size === 0) {
         console.log('📭 [Graphiti Hook] No user profile found');
