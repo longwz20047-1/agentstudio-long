@@ -77,17 +77,19 @@ export const useCommandCompletion = ({
   ];
 
   // Fetch commands for keyboard navigation (with search filter)
-  const { data: userCommandsFiltered = [], error: userCommandsError } = useCommands({
+  const { data: userCommandsFilteredData, error: userCommandsError } = useCommands({
     scope: 'user',
     search: commandSearch
   });
+  const userCommandsFiltered = userCommandsFilteredData?.commands ?? [];
   const { data: projectCommandsFiltered = [], error: projectCommandsError } = useProjectCommands({
     projectId: projectPath || '',
     search: commandSearch
   });
 
   // Fetch complete command lists for detection (without search filter)
-  const { data: userCommands = [] } = useCommands({ scope: 'user' });
+  const { data: userCommandsData } = useCommands({ scope: 'user' });
+  const userCommands = userCommandsData?.commands ?? [];
   const { data: projectCommands = [] } = useProjectCommands({
     projectId: projectPath || ''
   });

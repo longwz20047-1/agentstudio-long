@@ -98,7 +98,8 @@ export const CommandSelector: React.FC<CommandSelectorProps> = ({
     }
   }, [isOpen, onClose]);
   // Fetch commands
-  const { data: userCommands = [] } = useCommands({ scope: 'user', search: searchTerm });
+  const { data: userCommandsData } = useCommands({ scope: 'user', search: searchTerm });
+  const userCommands = userCommandsData?.commands ?? [];
   const { data: projectCommands = [] } = useProjectCommands({
     projectId: projectId || '',
     search: searchTerm
