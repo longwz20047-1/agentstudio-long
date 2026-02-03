@@ -81,7 +81,7 @@ const PROVIDER_INFO: Record<
 };
 
 export const VoiceSettingsPage: React.FC = () => {
-  const { t } = useTranslation(['pages', 'components']);
+  useTranslation(['pages', 'components']); // Import kept for future i18n support
   const [settings, setSettings] = useState<SpeechToTextSettings | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);

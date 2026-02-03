@@ -298,7 +298,7 @@ export const useMessageSender = (props: UseMessageSenderProps) => {
         // Track current message for AGUI events
         let currentAguiMessageId: string | null = null;
         let currentTextContent = '';
-        let currentToolCalls = new Map<string, { name: string; args: string }>();
+        const currentToolCalls = new Map<string, { name: string; args: string }>();
         
         // Handle AGUI events
         const handleAguiEvent = (event: AGUIEvent) => {
@@ -354,14 +354,14 @@ export const useMessageSender = (props: UseMessageSenderProps) => {
               break;
               
             case 'TOOL_CALL_START':
-              currentToolCalls.set(event.toolCallId, {
+              currentToolCalls.set(event.toolId, {
                 name: event.toolName,
                 args: '',
               });
               // Ensure we have an assistant message to add tool to
               let stateForTool = useAgentStore.getState();
               let lastMsgForTool = stateForTool.messages[stateForTool.messages.length - 1];
-              
+
               // If no assistant message exists, create one first
               if (!lastMsgForTool || lastMsgForTool.role !== 'assistant') {
                 addMessage({
@@ -372,20 +372,20 @@ export const useMessageSender = (props: UseMessageSenderProps) => {
                 stateForTool = useAgentStore.getState();
                 lastMsgForTool = stateForTool.messages[stateForTool.messages.length - 1];
               }
-              
+
               // Add tool part to current message
               if (lastMsgForTool && lastMsgForTool.role === 'assistant') {
                 addToolPartToMessage(lastMsgForTool.id, {
                   toolName: event.toolName,
                   toolInput: {},
                   isExecuting: true,
-                  claudeId: event.toolCallId, // Store toolCallId for later lookup
+                  claudeId: event.toolId, // Store toolId for later lookup
                 });
               }
               break;
-              
+
             case 'TOOL_CALL_ARGS':
-              const toolCall = currentToolCalls.get(event.toolCallId);
+              const toolCall = currentToolCalls.get(event.toolId);
               if (toolCall) {
                 toolCall.args += event.args;
                 // Try to parse and update
@@ -394,44 +394,42 @@ export const useMessageSender = (props: UseMessageSenderProps) => {
                   const stateForArgs = useAgentStore.getState();
                   const lastMsgForArgs = stateForArgs.messages[stateForArgs.messages.length - 1];
                   if (lastMsgForArgs && lastMsgForArgs.role === 'assistant') {
-                    updateToolPartInMessage(lastMsgForArgs.id, event.toolCallId, { toolInput });
+                    updateToolPartInMessage(lastMsgForArgs.id, event.toolId, { toolInput });
                   }
                 } catch {
                   // Args not complete yet
                 }
               }
               break;
-              
+
             case 'TOOL_CALL_END':
-              const completedTool = currentToolCalls.get(event.toolCallId);
+              // TOOL_CALL_END contains the result in AGUI protocol
+              const completedTool = currentToolCalls.get(event.toolId);
               if (completedTool) {
                 try {
                   const toolInput = JSON.parse(completedTool.args);
                   const stateForEnd = useAgentStore.getState();
                   const lastMsgForEnd = stateForEnd.messages[stateForEnd.messages.length - 1];
                   if (lastMsgForEnd && lastMsgForEnd.role === 'assistant') {
-                    updateToolPartInMessage(lastMsgForEnd.id, event.toolCallId, { toolInput, isExecuting: false });
+                    updateToolPartInMessage(lastMsgForEnd.id, event.toolId, {
+                      toolInput,
+                      toolResult: event.result,
+                      isError: event.isError || false,
+                      isExecuting: false,
+                    });
                   }
                 } catch {
-                  // Use empty input
+                  // Use empty input but still set result
                   const stateForEnd = useAgentStore.getState();
                   const lastMsgForEnd = stateForEnd.messages[stateForEnd.messages.length - 1];
                   if (lastMsgForEnd && lastMsgForEnd.role === 'assistant') {
-                    updateToolPartInMessage(lastMsgForEnd.id, event.toolCallId, { isExecuting: false });
+                    updateToolPartInMessage(lastMsgForEnd.id, event.toolId, {
+                      toolResult: event.result,
+                      isError: event.isError || false,
+                      isExecuting: false,
+                    });
                   }
                 }
-              }
-              break;
-              
-            case 'TOOL_CALL_RESULT':
-              const stateForResult = useAgentStore.getState();
-              const lastMsgForResult = stateForResult.messages[stateForResult.messages.length - 1];
-              if (lastMsgForResult && lastMsgForResult.role === 'assistant') {
-                updateToolPartInMessage(lastMsgForResult.id, event.toolCallId, {
-                  toolResult: event.result,
-                  isError: event.isError || false,
-                  isExecuting: false,
-                });
               }
               break;
           }

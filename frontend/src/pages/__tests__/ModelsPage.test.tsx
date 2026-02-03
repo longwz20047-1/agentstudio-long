@@ -5,7 +5,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ModelsPage from '../ModelsPage';
 
 // Mock fetch
-global.fetch = async (url: string) => {
+global.fetch = (async (input: RequestInfo | URL) => {
+  const url = typeof input === 'string' ? input : input.toString();
   if (url.includes('/api/agui/engines')) {
     return {
       ok: true,
@@ -58,7 +59,7 @@ global.fetch = async (url: string) => {
     } as Response;
   }
   throw new Error('Not found');
-};
+}) as typeof fetch;
 
 const queryClient = new QueryClient({
   defaultOptions: {
