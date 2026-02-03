@@ -40,7 +40,6 @@ import { httpsOnly } from './middleware/httpsOnly';
 import { loadConfig, getSlidesDir } from './config/index';
 import { cleanupOrphanedTasks } from './services/a2a/taskCleanup';
 import { initializeScheduler, shutdownScheduler } from './services/schedulerService';
-import { shutdownTelemetry } from './services/telemetry';
 import { initializeTaskExecutor, shutdownTaskExecutor } from './services/taskExecutor/index.js';
 import { tunnelService } from './services/tunnelService.js';
 import { logSdkConfig } from './config/sdkConfig.js';
@@ -514,11 +513,6 @@ const app: express.Express = express();
     } catch (error) {
       console.error('[Tunnel] Error shutting down tunnel service:', error);
     }
-
-    // Shutdown telemetry (async but we don't wait)
-    shutdownTelemetry().catch((error) => {
-      console.error('[Telemetry] Error shutting down telemetry:', error);
-    });
 
     console.info('[System] Shutdown complete');
     // Exit process

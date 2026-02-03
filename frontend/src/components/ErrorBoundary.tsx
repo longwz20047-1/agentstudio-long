@@ -1,12 +1,10 @@
 /**
  * ErrorBoundary
- * 
- * Catches React errors and reports them to telemetry.
- * Provides a user-friendly fallback UI.
+ *
+ * Catches React errors and provides a user-friendly fallback UI.
  */
 
 import { Component, ErrorInfo, ReactNode } from 'react';
-import { trackError } from './TelemetryProvider';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 
 interface Props {
@@ -30,9 +28,6 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    // Report to telemetry
-    trackError(error, errorInfo.componentStack?.split('\n')[1]?.trim() || 'unknown');
-
     console.error('ErrorBoundary caught an error:', error, errorInfo);
   }
 
@@ -56,13 +51,13 @@ export class ErrorBoundary extends Component<Props, State> {
             <div className="w-16 h-16 mx-auto bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center mb-6">
               <AlertTriangle className="w-8 h-8 text-red-600 dark:text-red-400" />
             </div>
-            
+
             <h1 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
               Something went wrong
             </h1>
-            
+
             <p className="text-gray-600 dark:text-gray-400 mb-6">
-              An unexpected error occurred. Our team has been notified.
+              An unexpected error occurred.
             </p>
 
             {this.state.error && (

@@ -5,7 +5,6 @@ import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { Toaster } from './components/ui/toaster';
 import { MobileProvider } from './contexts/MobileContext';
-import { TelemetryProvider } from './components/TelemetryProvider';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ConfirmProvider } from './hooks/useConfirm';
 
@@ -28,7 +27,6 @@ const SupplierSettingsPage = lazy(() => import('./pages/settings/VersionSettings
 const MemorySettingsPage = lazy(() => import('./pages/settings/MemorySettingsPage').then(module => ({ default: module.MemorySettingsPage })));
 const SubagentsPage = lazy(() => import('./pages/settings/SubagentsPage').then(module => ({ default: module.SubagentsPage })));
 const McpAdminSettingsPage = lazy(() => import('./pages/settings/McpAdminSettingsPage').then(module => ({ default: module.McpAdminSettingsPage })));
-const TelemetrySettingsPage = lazy(() => import('./pages/settings/TelemetrySettingsPage').then(module => ({ default: module.TelemetrySettingsPage })));
 const SystemInfoPage = lazy(() => import('./pages/settings/SystemInfoPage').then(module => ({ default: module.SystemInfoPage })));
 const WebSocketTunnelPage = lazy(() => import('./pages/settings/WebSocketTunnelPage').then(module => ({ default: module.WebSocketTunnelPage })));
 const VoiceSettingsPage = lazy(() => import('./pages/settings/VoiceSettingsPage').then(module => ({ default: module.VoiceSettingsPage })));
@@ -177,7 +175,6 @@ const AppContent: React.FC = () => {
             <Route path="commands" element={<CommandsPage />} />
             <Route path="subagents" element={<SubagentsPage />} />
             <Route path="mcp-admin" element={<McpAdminSettingsPage />} />
-            <Route path="telemetry" element={<TelemetrySettingsPage />} />
             <Route path="system-info" element={<SystemInfoPage />} />
             <Route path="tunnel" element={<WebSocketTunnelPage />} />
             <Route path="voice" element={<VoiceSettingsPage />} />
@@ -211,12 +208,10 @@ function App() {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <MobileProvider>
-          <TelemetryProvider>
-            <ConfirmProvider>
-              <AppContent />
-              <Toaster />
-            </ConfirmProvider>
-          </TelemetryProvider>
+          <ConfirmProvider>
+            <AppContent />
+            <Toaster />
+          </ConfirmProvider>
         </MobileProvider>
       </QueryClientProvider>
     </ErrorBoundary>
