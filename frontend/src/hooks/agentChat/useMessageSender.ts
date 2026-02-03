@@ -413,7 +413,7 @@ export const useMessageSender = (props: UseMessageSenderProps) => {
                   if (lastMsgForEnd && lastMsgForEnd.role === 'assistant') {
                     updateToolPartInMessage(lastMsgForEnd.id, event.toolId, {
                       toolInput,
-                      toolResult: event.result,
+                      toolResult: event.result != null ? String(event.result) : undefined,
                       isError: event.isError || false,
                       isExecuting: false,
                     });
@@ -424,7 +424,7 @@ export const useMessageSender = (props: UseMessageSenderProps) => {
                   const lastMsgForEnd = stateForEnd.messages[stateForEnd.messages.length - 1];
                   if (lastMsgForEnd && lastMsgForEnd.role === 'assistant') {
                     updateToolPartInMessage(lastMsgForEnd.id, event.toolId, {
-                      toolResult: event.result,
+                      toolResult: event.result != null ? String(event.result) : undefined,
                       isError: event.isError || false,
                       isExecuting: false,
                     });
