@@ -473,6 +473,7 @@ export async function buildQueryOptions(
 
     const groupCount = (graphitiContext.group_ids?.length || 0) + 1;
     console.log('✅ [Graphiti] Memory MCP Server + Hooks integrated for user', graphitiContext.user_id, 'with', groupCount, 'groups');
+    console.log('🔧 [Graphiti] Hooks configured:', Object.keys(graphitiHooks));
   }
 
   // Integrate AskUserQuestion SDK MCP server

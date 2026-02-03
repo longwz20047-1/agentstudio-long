@@ -27,6 +27,8 @@ export async function searchFacts(
   const { base_url, user_id, group_ids = [], api_key } = context;
   const allGroupIds = [`user_${user_id}`, ...group_ids];
 
+  console.log(`🔍 [Graphiti] Searching: "${query}" in groups:`, allGroupIds);
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -51,6 +53,7 @@ export async function searchFacts(
     }
 
     const data: GraphitiSearchResponse = await response.json();
+    console.log(`📦 [Graphiti] Search result for "${query}":`, data.facts?.length || 0, 'facts');
     return data.facts || [];
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {

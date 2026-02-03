@@ -44,6 +44,7 @@ export function createGraphitiHooks(
   if (mergedConfig.enableSessionStartHook !== false) {
     const hookCallback = createSessionStartHook(context, mergedConfig) as HookCallback;
     hooks.SessionStart = [{ hooks: [hookCallback] }];
+    console.log('📌 [Graphiti] SessionStart hook registered');
   }
 
   // 预留其他 Hook 的扩展点
