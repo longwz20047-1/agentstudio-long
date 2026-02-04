@@ -14,6 +14,7 @@ import {
   getApiKey,
 } from '../services/a2a/apiKeyService.js';
 import { A2AConfigSchema, GenerateApiKeyRequestSchema, validateSafe } from '../schemas/a2a.js';
+import { projectUserStorage } from '../services/projectUserStorage.js';
 
 const router: express.Router = express.Router();
 const readFile = promisify(fs.readFile);
@@ -36,9 +37,19 @@ async function ensureDir(dirPath: string) {
 }
 
 // GET /api/projects - Get all projects
-router.get('/', async (_req, res) => {
+// 支持 ?userId=xxx 参数进行用户权限过滤（向后兼容：不传则返回全部）
+router.get('/', async (req, res) => {
   try {
-    const projects = projectStorage.getAllProjects();
+    const userId = req.query.userId as string | undefined;
+    let projects = projectStorage.getAllProjects();
+
+    // 如果传入了 userId，进行权限过滤
+    if (userId) {
+      projects = projects.filter(project => {
+        return projectUserStorage.canUserAccessProject(project.id, userId);
+      });
+    }
+
     res.json({ projects });
   } catch (error) {
     console.error('Error fetching projects:', error);
