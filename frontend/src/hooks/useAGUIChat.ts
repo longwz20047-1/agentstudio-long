@@ -210,6 +210,11 @@ export const useAGUIChat = () => {
           requestBody.model = model;
           console.log(`🎯 [AGUI] Cursor model: ${model}`);
         }
+        // Pass images for Cursor engine (will be saved to workspace and referenced via @path)
+        if (images && images.length > 0) {
+          requestBody.images = images;
+          console.log(`🖼️ [AGUI] Cursor images: ${images.length} image(s)`);
+        }
       } else {
         // Claude Engine: Use /api/agents/chat with outputFormat=agui
         endpoint = `${API_BASE}/agents/chat`;
@@ -274,9 +279,8 @@ export const useAGUIChat = () => {
           // Skip empty lines and comments
           if (!line.trim() || line.startsWith(':')) continue;
 
-          // Parse SSE event type (currently unused but may be needed for future event type handling)
+          // Skip SSE event type line (we parse from data)
           if (line.startsWith('event:')) {
-            // Skip event type line - we parse the type from the JSON data instead
             continue;
           }
 

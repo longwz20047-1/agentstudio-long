@@ -99,11 +99,14 @@ export const CommandSelector: React.FC<CommandSelectorProps> = ({
   }, [isOpen, onClose]);
   // Fetch commands
   const { data: userCommandsData } = useCommands({ scope: 'user', search: searchTerm });
-  const userCommands = userCommandsData?.commands ?? [];
-  const { data: projectCommands = [] } = useProjectCommands({
+  const { data: projectCommandsData } = useProjectCommands({
     projectId: projectId || '',
     search: searchTerm
   });
+
+  // Extract commands arrays from response objects
+  const userCommands = userCommandsData?.commands || [];
+  const projectCommands = projectCommandsData?.commands || [];
 
   // Create system commands with translations
   const systemCommands = createSystemCommands(t);

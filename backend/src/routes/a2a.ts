@@ -2,6 +2,7 @@
  * A2A Protocol Routes
  *
  * Implements A2A (Agent-to-Agent) protocol HTTP endpoints for external agent communication.
+ * Supports multiple engine types: Claude (default) and Cursor.
  *
  * Endpoints:
  * - GET  /.well-known/agent-card.json - Retrieve Agent Card (discovery)
@@ -11,6 +12,12 @@
  * - DELETE /tasks/:taskId - Cancel task
  *
  * All endpoints require API key authentication via Authorization header.
+ * 
+ * Engine Selection (Priority Order):
+ * 1. Service-level engine configuration (ENGINE=cursor-cli) - uses Cursor for ALL agents
+ * 2. Agent type naming convention:
+ *    - If agentType is 'cursor' or starts with 'cursor-' or ends with ':cursor' -> Cursor
+ *    - Otherwise -> Claude (default)
  */
 
 import express, { Router, Response } from 'express';
@@ -21,7 +28,12 @@ import {
   A2ATaskRequestSchema,
   validateSafe,
 } from '../schemas/a2a.js';
-import { generateAgentCard, type ProjectContext } from '../services/a2a/agentCardService.js';
+import { 
+  generateAgentCard, 
+  generateCursorAgentCard,
+  getEngineTypeFromContext,
+  type ProjectContext 
+} from '../services/a2a/agentCardService.js';
 import { agentCardCache } from '../utils/agentCardCache.js';
 import { AgentStorage } from '../services/agentStorage.js';
 import { ProjectMetadataStorage } from '../services/projectMetadataStorage.js';
@@ -34,6 +46,17 @@ import { handleSessionManagement } from '../utils/sessionUtils.js';
 import { buildQueryOptions } from '../utils/claudeUtils.js';
 import { executeA2AQuery, executeA2AQueryStreaming } from '../services/a2a/a2aQueryService.js';
 import { userInputRegistry } from '../services/askUserQuestion/index.js';
+
+// Cursor A2A Service imports
+import {
+  executeCursorA2AQuery,
+  executeCursorA2AStreaming,
+  createUserMessage,
+  type CursorA2AMessageParams,
+  type CursorA2AConfig,
+} from '../services/a2a/cursorA2aService.js';
+import { CursorA2AAdapter } from '../engines/cursor/a2aAdapter.js';
+import { isCursorEngine } from '../config/engineConfig.js';
 
 const router: Router = express.Router({ mergeParams: true });
 
@@ -77,6 +100,43 @@ function buildUserMessageContent(message: string, images?: A2AImageInput[]): Arr
   }
 
   return content;
+}
+
+// ============================================================================
+// Engine Type Detection
+// ============================================================================
+
+/**
+ * Determine if the agent should use Cursor engine based on agentType
+ *
+ * Rules:
+ * - If agentType is exactly 'cursor' -> use Cursor
+ * - If agentType starts with 'cursor-' -> use Cursor
+ * - If agentType contains ':cursor' suffix -> use Cursor
+ * - Otherwise -> use Claude (default)
+ */
+function isCursorAgent(agentType: string): boolean {
+  const lowerType = agentType.toLowerCase();
+  return (
+    lowerType === 'cursor' ||
+    lowerType.startsWith('cursor-') ||
+    lowerType.endsWith(':cursor')
+  );
+}
+
+/**
+ * Get engine type for an agent
+ *
+ * Priority:
+ * 1. Service-level engine configuration (ENGINE=cursor-cli)
+ * 2. Agent type naming convention (agentType contains 'cursor')
+ */
+function getEngineType(agentType: string): 'cursor' | 'claude' {
+  // Service-level engine configuration takes precedence
+  if (isCursorEngine()) {
+    return 'cursor';
+  }
+  return isCursorAgent(agentType) ? 'cursor' : 'claude';
 }
 
 // ============================================================================
@@ -137,16 +197,9 @@ router.get('/.well-known/agent-card.json', async (req: A2ARequest, res: Response
       });
     }
 
-    // Load agent configuration
-    const agentConfig = agentStorage.getAgent(a2aContext.agentType);
-
-    if (!agentConfig) {
-      return res.status(404).json({
-        error: `Agent '${a2aContext.agentType}' not found`,
-        code: 'AGENT_NOT_FOUND',
-      });
-    }
-
+    // Determine engine type from agentType
+    const engineType = getEngineType(a2aContext.agentType);
+    
     // Get project metadata for project name
     const projectMetadata = projectMetadataStorage.getProjectMetadata(a2aContext.workingDirectory);
     const projectName = projectMetadata?.name || a2aContext.projectId;
@@ -161,27 +214,63 @@ router.get('/.well-known/agent-card.json', async (req: A2ARequest, res: Response
       baseUrl,
     };
 
-    // Try to get from cache first
-    let agentCard = agentCardCache.get(agentConfig, projectContext);
+    let agentCard;
 
-    // Safety check: verify cached card matches the requested agent
-    // If there's a mismatch (e.g., due to hash collision), invalidate and regenerate
-    if (agentCard && agentCard.context?.a2aAgentId !== a2aContext.a2aAgentId) {
-      console.warn('[A2A] Cache mismatch detected! Invalidating and regenerating.', {
-        requestedA2AId: a2aContext.a2aAgentId,
-        cachedA2AId: agentCard.context?.a2aAgentId,
-        cachedCardName: agentCard.name,
+    if (engineType === 'cursor') {
+      // Generate Cursor Agent Card
+      agentCard = generateCursorAgentCard(projectContext);
+
+      console.info('[A2A] Cursor Agent Card generated:', {
+        a2aAgentId: a2aContext.a2aAgentId,
+        agentType: a2aContext.agentType,
+        engineType: 'cursor',
+        skillCount: agentCard.skills.length,
       });
-      agentCardCache.invalidate(agentConfig, projectContext);
-      agentCard = null;
-    }
+    } else {
+      // Load agent configuration for Claude
+      const agentConfig = agentStorage.getAgent(a2aContext.agentType);
 
-    if (!agentCard) {
-      // Generate Agent Card from agent configuration
-      agentCard = generateAgentCard(agentConfig, projectContext);
+      if (!agentConfig) {
+        return res.status(404).json({
+          error: `Agent '${a2aContext.agentType}' not found`,
+          code: 'AGENT_NOT_FOUND',
+        });
+      }
 
-      // Cache the generated Agent Card
-      agentCardCache.set(agentConfig, projectContext, agentCard);
+      // Try to get from cache first
+      agentCard = agentCardCache.get(agentConfig, projectContext);
+
+      // Safety check: verify cached card matches the requested agent
+      if (agentCard && agentCard.context?.a2aAgentId !== a2aContext.a2aAgentId) {
+        console.warn('[A2A] Cache mismatch detected! Invalidating and regenerating.', {
+          requestedA2AId: a2aContext.a2aAgentId,
+          cachedA2AId: agentCard.context?.a2aAgentId,
+          cachedCardName: agentCard.name,
+        });
+        agentCardCache.invalidate(agentConfig, projectContext);
+        agentCard = null;
+      }
+
+      if (!agentCard) {
+        // Generate Agent Card from agent configuration
+        agentCard = generateAgentCard(agentConfig, projectContext);
+
+        // Cache the generated Agent Card
+        agentCardCache.set(agentConfig, projectContext, agentCard);
+
+        console.info('[A2A] Agent Card generated and cached:', {
+          a2aAgentId: a2aContext.a2aAgentId,
+          agentType: a2aContext.agentType,
+          engineType: 'claude',
+          skillCount: agentCard.skills.length,
+        });
+      } else {
+        console.info('[A2A] Agent Card served from cache:', {
+          a2aAgentId: a2aContext.a2aAgentId,
+          agentType: a2aContext.agentType,
+          engineType: 'claude',
+        });
+      }
     }
 
     res.json(agentCard);
@@ -236,11 +325,15 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
 
     const { message, sessionId, sessionMode = 'new', context, images } = validation.data;
     const stream = req.query.stream === 'true' || req.headers.accept === 'text/event-stream';
+    
+    // Determine engine type based on agentType
+    const engineType = getEngineType(a2aContext.agentType);
 
     console.info('[A2A] Message received:', {
       a2aAgentId: a2aContext.a2aAgentId,
       projectId: a2aContext.projectId,
       agentType: a2aContext.agentType,
+      engineType,
       messageLength: message.length,
       sessionId,
       sessionMode,
@@ -249,6 +342,120 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       hasImages: !!images && images.length > 0,
     });
 
+    // ============================================================================
+    // Cursor Engine Handling
+    // ============================================================================
+    if (engineType === 'cursor') {
+      console.log(`🖱️ [A2A] Using Cursor engine for agentType: ${a2aContext.agentType}`);
+      
+      // Create A2A message from user input
+      const a2aMessage = createUserMessage(message, {
+        contextId: sessionId,
+      });
+
+      const cursorParams: CursorA2AMessageParams = {
+        message: a2aMessage,
+      };
+
+      const cursorConfig: CursorA2AConfig = {
+        workspace: a2aContext.workingDirectory,
+        model: req.body.model as string | undefined, // Don't default to 'auto', let CLI use its internal settings
+        sessionId,
+        timeout: (req.body.timeout as number) || 600000,
+        requestId: `a2a-${Date.now()}`,
+        contextId: sessionId,
+      };
+
+      const startTime = Date.now();
+
+      if (stream) {
+        // Streaming Mode for Cursor
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders();
+
+        let isConnectionClosed = false;
+        res.on('close', () => { isConnectionClosed = true; });
+
+        const heartbeatInterval = setInterval(() => {
+          if (!isConnectionClosed) {
+            res.write(': heartbeat\n\n');
+          } else {
+            clearInterval(heartbeatInterval);
+          }
+        }, 15000);
+
+        try {
+          const result = await executeCursorA2AStreaming(
+            cursorParams,
+            cursorConfig,
+            (response) => {
+              if (!isConnectionClosed) {
+                res.write(CursorA2AAdapter.formatAsSSE(response));
+              }
+            }
+          );
+
+          // Send completion event
+          if (!isConnectionClosed) {
+            res.write(`data: ${JSON.stringify({ type: 'done', sessionId: result.sessionId, taskId: result.taskId })}\n\n`);
+          }
+
+          console.info('[A2A] Cursor streaming completed:', {
+            a2aAgentId: a2aContext.a2aAgentId,
+            taskId: result.taskId,
+            sessionId: result.sessionId,
+            processingTimeMs: Date.now() - startTime,
+          });
+        } catch (error) {
+          console.error('[A2A] Cursor streaming error:', error);
+          if (!isConnectionClosed) {
+            res.write(`data: ${JSON.stringify({ type: 'error', error: error instanceof Error ? error.message : String(error) })}\n\n`);
+          }
+        } finally {
+          clearInterval(heartbeatInterval);
+          if (!isConnectionClosed) {
+            res.end();
+          }
+        }
+        return;
+      } else {
+        // Synchronous Mode for Cursor
+        try {
+          const result = await executeCursorA2AQuery(cursorParams, cursorConfig);
+          const processingTimeMs = Date.now() - startTime;
+
+          console.info('[A2A] Cursor message processed:', {
+            a2aAgentId: a2aContext.a2aAgentId,
+            taskId: result.task.id,
+            sessionId: result.sessionId,
+            processingTimeMs,
+            responseLength: result.responseText.length,
+          });
+
+          res.json({
+            response: result.responseText || 'No response generated',
+            sessionId: result.sessionId,
+            metadata: {
+              processingTimeMs,
+              taskId: result.task.id,
+              contextId: result.task.contextId,
+              engineType: 'cursor',
+            },
+          });
+        } catch (error) {
+          console.error('[A2A] Cursor processing error:', error);
+          throw error;
+        }
+        return;
+      }
+    }
+
+    // ============================================================================
+    // Claude Engine Handling (default)
+    // ============================================================================
+    
     // Load agent configuration
     const agentConfig = agentStorage.getAgent(a2aContext.agentType);
 

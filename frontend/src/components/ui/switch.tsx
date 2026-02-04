@@ -1,59 +1,47 @@
 import * as React from "react"
 
-export interface SwitchProps {
-  id?: string;
-  checked?: boolean;
-  onCheckedChange?: (checked: boolean) => void;
-  disabled?: boolean;
-  className?: string;
+export interface SwitchProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type' | 'onChange'> {
+  checked?: boolean
+  onCheckedChange?: (checked: boolean) => void
 }
 
-const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(
-  ({ id, checked = false, onCheckedChange, disabled = false, className = '' }, ref) => {
-    const handleClick = () => {
-      if (!disabled && onCheckedChange) {
-        onCheckedChange(!checked);
-      }
-    };
-
-    const handleKeyDown = (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        handleClick();
-      }
-    };
+const Switch = React.forwardRef<HTMLInputElement, SwitchProps>(
+  ({ className, checked, onCheckedChange, disabled, ...props }, ref) => {
+    const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+      onCheckedChange?.(event.target.checked)
+    }
 
     return (
-      <button
-        ref={ref}
-        id={id}
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        disabled={disabled}
-        onClick={handleClick}
-        onKeyDown={handleKeyDown}
-        className={`
-          relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full
-          border-2 border-transparent transition-colors duration-200 ease-in-out
-          focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2
-          disabled:cursor-not-allowed disabled:opacity-50
-          ${checked ? 'bg-blue-600' : 'bg-gray-200 dark:bg-gray-700'}
-          ${className}
-        `}
+      <label
+        className={`relative inline-flex items-center cursor-pointer ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
       >
-        <span
+        <input
+          type="checkbox"
+          ref={ref}
+          checked={checked}
+          onChange={handleChange}
+          disabled={disabled}
+          className="sr-only peer"
+          {...props}
+        />
+        <div
           className={`
-            pointer-events-none inline-block h-5 w-5 transform rounded-full
-            bg-white shadow-lg ring-0 transition duration-200 ease-in-out
-            ${checked ? 'translate-x-5' : 'translate-x-0'}
+            w-11 h-6 bg-gray-200 dark:bg-gray-700 
+            peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 peer-focus:ring-offset-2
+            dark:peer-focus:ring-offset-gray-800
+            rounded-full peer 
+            peer-checked:after:translate-x-full peer-checked:after:border-white 
+            after:content-[''] after:absolute after:top-[2px] after:left-[2px] 
+            after:bg-white after:border-gray-300 after:border after:rounded-full 
+            after:h-5 after:w-5 after:transition-all 
+            peer-checked:bg-blue-600 dark:peer-checked:bg-blue-500
+            ${className || ''}
           `}
         />
-      </button>
-    );
+      </label>
+    )
   }
-);
+)
+Switch.displayName = "Switch"
 
-Switch.displayName = "Switch";
-
-export { Switch };
+export { Switch }
