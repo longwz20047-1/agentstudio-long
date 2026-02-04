@@ -35,6 +35,7 @@ import speechToTextRouter from './routes/speechToText';
 import engineRouter from './routes/engine';
 import rulesRouter from './routes/rules';
 import hooksRouter from './routes/hooks';
+import usersRouter from './routes/users';
 import { authMiddleware } from './middleware/auth';
 import { httpsOnly } from './middleware/httpsOnly';
 import { loadConfig, getSlidesDir } from './config/index';
@@ -474,6 +475,7 @@ const app: express.Express = express();
   app.use('/api/engine', engineRouter); // Engine configuration (public, no auth required)
   app.use('/api/rules', authMiddleware, rulesRouter); // Rules management (both Claude and Cursor)
   app.use('/api/hooks', authMiddleware, hooksRouter); // Hooks management (Claude only)
+  app.use('/api/users', authMiddleware, usersRouter); // User management
   app.use('/api/media', mediaAuthRouter); // Media auth endpoints
   app.use('/media', mediaRouter); // Remove authMiddleware - media files are now public
 
