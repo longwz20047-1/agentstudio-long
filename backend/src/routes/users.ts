@@ -1,7 +1,7 @@
 // backend/src/routes/users.ts
 import express from 'express';
-import { weknoraUserService } from '../services/weknoraUserService.js';
-import { projectUserStorage } from '../services/projectUserStorage.js';
+import { weknoraUserService } from '../services/weknoraUserService';
+import { projectUserStorage } from '../services/projectUserStorage';
 
 const router: express.Router = express.Router();
 

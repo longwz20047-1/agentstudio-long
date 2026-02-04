@@ -14,7 +14,7 @@ import {
   getApiKey,
 } from '../services/a2a/apiKeyService.js';
 import { A2AConfigSchema, GenerateApiKeyRequestSchema, validateSafe } from '../schemas/a2a.js';
-import { projectUserStorage } from '../services/projectUserStorage.js';
+import { projectUserStorage } from '../services/projectUserStorage';
 
 const router: express.Router = express.Router();
 const readFile = promisify(fs.readFile);

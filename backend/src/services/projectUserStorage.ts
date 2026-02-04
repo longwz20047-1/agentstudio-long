@@ -1,8 +1,8 @@
 // backend/src/services/projectUserStorage.ts
 import * as fs from 'fs';
 import * as path from 'path';
-import { ProjectUserMapping, ProjectUserStore } from '../types/users.js';
-import { CLAUDE_AGENT_DIR } from '../config/paths.js';
+import { ProjectUserMapping, ProjectUserStore } from '../types/users';
+import { CLAUDE_AGENT_DIR } from '../config/paths';
 
 const PROJECT_USERS_FILE = path.join(CLAUDE_AGENT_DIR, 'project-users.json');
 

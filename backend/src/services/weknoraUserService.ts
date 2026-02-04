@@ -1,6 +1,10 @@
 // backend/src/services/weknoraUserService.ts
+import dotenv from 'dotenv';
 import { Pool } from 'pg';
-import { WeKnoraUser } from '../types/users.js';
+import { WeKnoraUser } from '../types/users';
+
+// 确保环境变量在服务初始化前加载
+dotenv.config();
 
 export class WeKnoraUserService {
   private pool: Pool | null = null;
