@@ -72,7 +72,7 @@
     "enterSystem": "Enter System"
   },
   "landing": {
-    "pageTitle": "AgentStudio - Agent Workspace | Powered by Claude Agent SDK",
+    "pageTitle": "Agent Workspace",
     "metaDescription": "Agent for Work - Your local Agent workspace powered by Claude Agent SDK. Fully private data, scheduled tasks, A2A protocol, and custom agents.",
     "nav": {
       "enterWorkspace": "Enter Workspace",

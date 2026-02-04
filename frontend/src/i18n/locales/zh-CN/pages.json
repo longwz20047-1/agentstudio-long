@@ -72,7 +72,7 @@
     "enterSystem": "进入系统"
   },
   "landing": {
-    "pageTitle": "AgentStudio - Agent 工作台 | Claude Agent SDK 驱动",
+    "pageTitle": "智能体工作台",
     "metaDescription": "Agent for Work - 本地的 Agent 工作台，由 Claude Agent SDK 强力驱动。数据完全私有，支持定时任务、A2A 协议、自定义 Agent。",
     "nav": {
       "enterWorkspace": "进入工作台",
