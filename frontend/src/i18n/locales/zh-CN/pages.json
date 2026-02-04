@@ -371,7 +371,20 @@
     },
     "deleteConfirm": "确定要删除项目吗？",
     "deleteNote": "注意：这只会从列表中移除项目，不会删除实际的文件目录。",
-    "deleteSuccess": "项目已删除"
+    "deleteSuccess": "项目已删除",
+    "userAccess": {
+      "title": "用户访问控制",
+      "allowAll": "允许所有用户访问",
+      "allowAllDesc": "不限制用户访问此项目",
+      "selectUsers": "选择允许访问的用户：",
+      "noUsers": "暂无用户数据",
+      "manageUsers": "管理用户",
+      "serviceUnavailable": "用户服务不可用",
+      "checkConfig": "请检查 WeKnora 数据库配置",
+      "cancel": "取消",
+      "save": "保存",
+      "saving": "保存中..."
+    }
   },
   "chat": {
     "title": "对话",

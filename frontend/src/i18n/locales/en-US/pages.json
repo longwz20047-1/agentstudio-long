@@ -379,7 +379,20 @@
     },
     "deleteConfirm": "Are you sure you want to delete this project?",
     "deleteNote": "Note: This will only remove the project from the list, not delete the actual file directory.",
-    "deleteSuccess": "Project deleted"
+    "deleteSuccess": "Project deleted",
+    "userAccess": {
+      "title": "User Access Control",
+      "allowAll": "Allow all users",
+      "allowAllDesc": "No restriction on user access to this project",
+      "selectUsers": "Select users who can access:",
+      "noUsers": "No users available",
+      "manageUsers": "Manage Users",
+      "serviceUnavailable": "User service unavailable",
+      "checkConfig": "Please check WeKnora database configuration",
+      "cancel": "Cancel",
+      "save": "Save",
+      "saving": "Saving..."
+    }
   },
   "chat": {
     "title": "Chat",
