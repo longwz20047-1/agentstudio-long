@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ArrowRight,
@@ -12,30 +12,16 @@ import {
   Zap,
   FolderOpen,
   Check,
-  X,
   Globe,
-  Copy,
-  Github,
-  FileText,
-  MessageCircle,
-  X as CloseIcon,
+  X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 const LandingPage: React.FC = () => {
   const { t, i18n } = useTranslation('pages');
-  const [copied, setCopied] = useState(false);
-  const [showWeChatModal, setShowWeChatModal] = useState(false);
-  
   const toggleLanguage = () => {
     const newLang = i18n.language === 'zh-CN' ? 'en-US' : 'zh-CN';
     i18n.changeLanguage(newLang);
-  };
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText('npm install -g agentstudio && agentstudio start');
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
   };
 
   useEffect(() => {
@@ -53,35 +39,10 @@ const LandingPage: React.FC = () => {
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center space-x-3">
-              <img src={`${import.meta.env.BASE_URL}cc-studio.png`} alt="AgentStudio" className="w-8 h-8" />
-              <span className="text-xl font-semibold text-gray-900 dark:text-white">AgentStudio</span>
+              <img src={`${import.meta.env.BASE_URL}cc-studio.png`} alt="智能体工作台" className="w-8 h-8" />
+              <span className="text-xl font-semibold text-gray-900 dark:text-white">智能体工作台</span>
             </div>
             <div className="flex items-center space-x-4">
-              <button
-                onClick={() => setShowWeChatModal(true)}
-                className="inline-flex items-center text-gray-600 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-400 transition-colors"
-              >
-                <MessageCircle className="w-5 h-5 mr-1" />
-                <span className="hidden sm:inline">{t('landing.nav.wechat') || '微信群'}</span>
-              </button>
-              <a
-                href="https://github.com/okguitar/agentstudio/blob/main/docs/USER_MANUAL.md"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
-              >
-                <FileText className="w-5 h-5 mr-1" />
-                <span className="hidden sm:inline">{t('landing.nav.docs')}</span>
-              </a>
-              <a
-                href="https://github.com/okguitar/agentstudio"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
-              >
-                <Github className="w-5 h-5 mr-1" />
-                <span className="hidden sm:inline">GitHub</span>
-              </a>
               <button
                 onClick={toggleLanguage}
                 className="inline-flex items-center text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
@@ -118,32 +79,6 @@ const LandingPage: React.FC = () => {
           <p className="text-lg text-gray-500 dark:text-gray-500 mb-8 max-w-2xl mx-auto">
             {t('landing.hero.description')}
           </p>
-
-          {/* Quick Install */}
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
-            {t('landing.hero.installHint')}
-          </p>
-          <div className="bg-gray-900 dark:bg-gray-800 rounded-xl p-4 max-w-xl mx-auto">
-            <div className="flex items-center justify-between gap-4">
-              <code className="text-green-400 text-sm sm:text-base font-mono flex-1">
-                npm install -g agentstudio && agentstudio start
-              </code>
-              <button
-                onClick={handleCopy}
-                className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg transition-colors flex items-center gap-1.5 text-sm flex-shrink-0 min-w-[72px] justify-center"
-                title={t('landing.hero.copyCommand')}
-              >
-                {copied ? (
-                  <Check className="w-4 h-4 text-green-400" />
-                ) : (
-                  <>
-                    <Copy className="w-4 h-4" />
-                    <span>{t('landing.hero.copy')}</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
         </div>
       </section>
 
@@ -420,7 +355,7 @@ const LandingPage: React.FC = () => {
               <thead>
                 <tr className="border-b border-gray-100 dark:border-gray-700">
                   <th className="px-6 py-4 text-left text-sm font-medium text-gray-500 dark:text-gray-400">{t('landing.comparison.dimension')}</th>
-                  <th className="px-6 py-4 text-center text-sm font-semibold text-gray-900 dark:text-white">AgentStudio</th>
+                  <th className="px-6 py-4 text-center text-sm font-semibold text-gray-900 dark:text-white">智能体工作台</th>
                   <th className="px-6 py-4 text-center text-sm font-medium text-gray-500 dark:text-gray-400">Claude Code</th>
                 </tr>
               </thead>
@@ -471,135 +406,12 @@ const LandingPage: React.FC = () => {
         </div>
       </section>
 
-      {/* CTA Section */}
-      <section className="py-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-4xl mx-auto text-center">
-          <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6">
-            {t('landing.cta.title')}
-          </h2>
-          <p className="text-xl text-gray-600 dark:text-gray-400 mb-8">
-            {t('landing.cta.subtitle')}
-          </p>
-          <div className="bg-gray-900 dark:bg-gray-800 rounded-xl p-4 max-w-xl mx-auto mb-8">
-            <div className="flex items-center justify-between gap-4">
-              <code className="text-green-400 text-sm sm:text-base font-mono flex-1">
-                npm install -g agentstudio && agentstudio start
-              </code>
-              <button
-                onClick={handleCopy}
-                className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg transition-colors flex items-center gap-1.5 text-sm flex-shrink-0 min-w-[72px] justify-center"
-                title={t('landing.hero.copyCommand')}
-              >
-                {copied ? (
-                  <Check className="w-4 h-4 text-green-400" />
-                ) : (
-                  <>
-                    <Copy className="w-4 h-4" />
-                    <span>{t('landing.hero.copy')}</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-          <a
-            href="https://github.com/okguitar/agentstudio"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center justify-center px-8 py-4 bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl border border-gray-200 dark:border-gray-700 transition-all duration-200"
-          >
-            <Code className="mr-2 w-5 h-5" />
-            GitHub
-          </a>
-        </div>
-      </section>
-
-      {/* Footer */}
-      <footer className="bg-gray-900 text-gray-300 py-12 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-6xl mx-auto">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
-            <div className="col-span-1 md:col-span-2">
-              <div className="flex items-center space-x-3 mb-4">
-                <img src={`${import.meta.env.BASE_URL}cc-studio.png`} alt="AgentStudio" className="w-8 h-8" />
-                <span className="text-xl font-semibold text-white">AgentStudio</span>
-              </div>
-              <p className="text-gray-400 mb-4 max-w-md">
-                {t('landing.footer.description')}
-              </p>
-              <div className="text-sm text-gray-500">
-                {t('landing.footer.copyright')}
-              </div>
-            </div>
-
-            <div>
-              <h3 className="text-white font-semibold mb-4">{t('landing.footer.product')}</h3>
-              <ul className="space-y-2 text-sm">
-                <li><Link to="/dashboard" className="hover:text-white transition-colors">{t('landing.footer.workspace')}</Link></li>
-                <li><a href="https://github.com/okguitar/agentstudio" target="_blank" rel="noopener noreferrer" className="hover:text-white transition-colors">{t('landing.footer.sourceCode')}</a></li>
-                <li><a href="https://github.com/okguitar/agentstudio/releases" target="_blank" rel="noopener noreferrer" className="hover:text-white transition-colors">{t('landing.footer.releases')}</a></li>
-              </ul>
-            </div>
-
-            <div>
-              <h3 className="text-white font-semibold mb-4">{t('landing.footer.support')}</h3>
-              <ul className="space-y-2 text-sm">
-                <li><a href="https://github.com/okguitar/agentstudio/blob/main/docs/USER_MANUAL.md" target="_blank" rel="noopener noreferrer" className="hover:text-white transition-colors">{t('landing.footer.documentation')}</a></li>
-                <li><a href="https://github.com/okguitar/agentstudio/issues" target="_blank" rel="noopener noreferrer" className="hover:text-white transition-colors">{t('landing.footer.issues')}</a></li>
-                <li>
-                  <button
-                    onClick={() => setShowWeChatModal(true)}
-                    className="hover:text-white transition-colors text-left w-full"
-                  >
-                    {t('landing.footer.wechat') || '微信群'}
-                  </button>
-                </li>
-              </ul>
-            </div>
-          </div>
+      {/* Footer - 仅保留版权并居中 */}
+      <footer className="bg-gray-900 text-gray-300 py-8 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-6xl mx-auto text-center text-sm text-gray-500">
+          {t('landing.footer.copyright')}
         </div>
       </footer>
-
-      {/* WeChat QR Code Modal */}
-      {showWeChatModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6 relative">
-            <button
-              onClick={() => setShowWeChatModal(false)}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
-            >
-              <CloseIcon className="w-5 h-5" />
-            </button>
-
-            <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">
-              {t('landing.wechat.title') || '加入微信群'}
-            </h3>
-
-            <div className="space-y-4">
-              {/* QR Code */}
-              <div className="flex justify-center">
-                <img
-                  src={`${import.meta.env.BASE_URL}wechat-qr-code.png`}
-                  alt="WeChat QR Code"
-                  className="w-64 h-64 object-contain border border-gray-200 dark:border-gray-700 rounded-lg"
-                />
-              </div>
-
-              {/* Backup info */}
-              <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
-                <p className="text-sm text-yellow-800 dark:text-yellow-200 text-center">
-                  {t('landing.wechat.fallback') || '二维码失效？请添加微信号：'}
-                  <span className="font-mono font-semibold ml-1">
-                    {t('landing.wechat.wechatId') || 'your-wechat-id'}
-                  </span>
-                </p>
-              </div>
-
-              <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
-                {t('landing.wechat.tip') || '扫码或添加微信号，即可加入交流群'}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

@@ -59,7 +59,7 @@ describe('End-to-End Workflow Tests', () => {
       await executor.submitTask(task);
 
       // Step 2: Check initial status
-      let status = await executor.getTaskStatus(task.id);
+      const status = await executor.getTaskStatus(task.id);
       expect(status).not.toBeNull();
       expect(['pending', 'running']).toContain(status?.status);
 

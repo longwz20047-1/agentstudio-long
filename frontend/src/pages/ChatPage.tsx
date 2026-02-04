@@ -119,7 +119,7 @@ export const ChatPage: React.FC = () => {
   // Use tab notification
   useTabNotification({
     status: tabStatus,
-    originalTitle: agent ? `${agent.ui.icon} ${agent.name} - AgentStudio` : 'AgentStudio',
+    originalTitle: agent ? `${agent.ui.icon} ${agent.name} - 智能体工作台` : '智能体工作台',
     workingText: t('chat.tabNotification.working'),
     completedText: t('chat.tabNotification.completed'),
     errorText: t('chat.tabNotification.error'),

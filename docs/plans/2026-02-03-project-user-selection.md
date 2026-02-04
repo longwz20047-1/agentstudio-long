@@ -777,14 +777,14 @@ export const ProjectUserSelector: React.FC<Props> = ({
             onClick={onClose}
             className="px-4 py-2 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
           >
-            {t('common.cancel', '取消')}
+            {t('projects.userAccess.cancel', '取消')}
           </button>
           <button
             onClick={handleSave}
             disabled={saving || !serviceAvailable}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
           >
-            {saving ? t('common.saving', '保存中...') : t('common.save', '保存')}
+            {saving ? t('projects.userAccess.saving', '保存中...') : t('projects.userAccess.save', '保存')}
           </button>
         </div>
       </div>
@@ -1015,7 +1015,10 @@ git commit -m "feat: integrate user selector into projects page"
       "noUsers": "暂无用户数据",
       "manageUsers": "管理用户",
       "serviceUnavailable": "用户服务不可用",
-      "checkConfig": "请检查 WeKnora 数据库配置"
+      "checkConfig": "请检查 WeKnora 数据库配置",
+      "cancel": "取消",
+      "save": "保存",
+      "saving": "保存中..."
     }
   }
 }
@@ -1035,7 +1038,10 @@ git commit -m "feat: integrate user selector into projects page"
       "noUsers": "No users available",
       "manageUsers": "Manage Users",
       "serviceUnavailable": "User service unavailable",
-      "checkConfig": "Please check WeKnora database configuration"
+      "checkConfig": "Please check WeKnora database configuration",
+      "cancel": "Cancel",
+      "save": "Save",
+      "saving": "Saving..."
     }
   }
 }
@@ -1119,16 +1125,6 @@ WEKNORA_DB_PORT=5432
 WEKNORA_DB_NAME=WeKnora
 WEKNORA_DB_USER=postgres
 WEKNORA_DB_PASSWORD=postgres123!@#
-```
-
----
-
-## 依赖安装
-
-```bash
-# 后端添加 pg 库用于 PostgreSQL 连接
-cd backend
-pnpm add pg @types/pg
 ```
 
 ---
