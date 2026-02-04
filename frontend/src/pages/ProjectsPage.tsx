@@ -18,6 +18,7 @@ import { ProjectCommandsModal } from '../components/ProjectCommandsModal';
 import { ProjectSubAgentsModal } from '../components/ProjectSubAgentsModal';
 import { ProjectA2AModal } from '../components/ProjectA2AModal';
 import { ProjectSettingsModal } from '../components/ProjectSettingsModal';
+import { ProjectUserSelector } from '../components/ProjectUserSelector';
 import { useConfirm } from '../hooks/useConfirm';
 
 interface Project {
@@ -264,6 +265,7 @@ export const ProjectsPage: React.FC = () => {
   const [showImportModal, setShowImportModal] = useState(false);
   const [importProjectPath, setImportProjectPath] = useState('');
   const [showImportBrowser, setShowImportBrowser] = useState(false);
+  const [userSelectorProjectId, setUserSelectorProjectId] = useState<string | null>(null);
 
   const agents = agentsData?.agents || [];
   const enabledAgents = agents.filter(agent => agent.enabled);
@@ -635,6 +637,7 @@ export const ProjectsPage: React.FC = () => {
           onSettings={handleSettings}
           onDeleteProject={handleDeleteProject}
           onAgentChanged={handleAgentChanged}
+          onManageUsers={(project) => setUserSelectorProjectId(project.id)}
         />
       )}
 
@@ -760,6 +763,18 @@ export const ProjectsPage: React.FC = () => {
         onClose={() => setSettingsProject(null)}
         onSaved={() => fetchProjects()}
       />
+
+      {/* User Selector Modal */}
+      {userSelectorProjectId && (
+        <ProjectUserSelector
+          projectId={userSelectorProjectId}
+          isOpen={!!userSelectorProjectId}
+          onClose={() => setUserSelectorProjectId(null)}
+          onSave={() => {
+            setUserSelectorProjectId(null);
+          }}
+        />
+      )}
 
       {/* Agent Selection Modal */}
       {agentSelectProject && (

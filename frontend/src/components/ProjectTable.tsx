@@ -11,7 +11,8 @@ import {
   Trash2,
   ChevronDown,
   Shield,
-  Settings
+  Settings,
+  Users
 } from 'lucide-react';
 import { formatRelativeTime } from '../utils';
 import { API_BASE } from '../lib/config';
@@ -56,6 +57,7 @@ interface ProjectTableProps {
   onSettings: (project: Project) => void;
   onDeleteProject: (project: Project) => void;
   onAgentChanged?: (projectId: string, newAgent: Agent) => void;
+  onManageUsers?: (project: Project) => void;
   className?: string;
 }
 
@@ -70,6 +72,7 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
   onSettings,
   onDeleteProject,
   onAgentChanged,
+  onManageUsers,
   className = '',
 }) => {
   const { t } = useTranslation('pages');
@@ -209,6 +212,15 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
       >
         <Shield className="w-3.5 h-3.5" />
       </button>
+      {onManageUsers && (
+        <button
+          onClick={() => onManageUsers(project)}
+          className="p-1.5 text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/50 rounded-md transition-colors"
+          title={t('projects.userAccess.manageUsers', '管理用户')}
+        >
+          <Users className="w-3.5 h-3.5" />
+        </button>
+      )}
       <button
         onClick={() => onSettings(project)}
         className="p-1.5 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/50 rounded-md transition-colors"
@@ -305,6 +317,15 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
                   >
                     <Shield className="w-4 h-4" />
                   </button>
+                  {onManageUsers && (
+                    <button
+                      onClick={() => onManageUsers(project)}
+                      className="p-2 text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/50 rounded-md transition-colors"
+                      title={t('projects.userAccess.manageUsers', '管理用户')}
+                    >
+                      <Users className="w-4 h-4" />
+                    </button>
+                  )}
                   <button
                     onClick={() => onSettings(project)}
                     className="p-2 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/50 rounded-md transition-colors"
