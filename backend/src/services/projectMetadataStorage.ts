@@ -16,6 +16,8 @@ export class ProjectMetadataStorage {
   private claudeConfigPath: string;  // e.g., ~/.claude.json or ~/.claude-internal.json
   private agentStorage: AgentStorage;
   private metadataCache: ProjectMetadataStore | null = null;
+  /** File mtime (ms) when cache was last populated, used to detect external writes */
+  private cacheFileModifiedTime: number = 0;
 
   constructor() {
     this.metadataFilePath = PROJECTS_METADATA_FILE;
@@ -37,17 +39,36 @@ export class ProjectMetadataStorage {
   }
 
   /**
-   * Load all metadata from the single JSON file
+   * Load all metadata from the single JSON file.
+   * Uses in-memory cache with file mtime validation to detect external writes
+   * from other ProjectMetadataStorage instances (e.g., configResolver singleton).
    */
   private loadMetadata(): ProjectMetadataStore {
+    // Fast path: return cache if file hasn't been modified since last read
     if (this.metadataCache) {
-      return this.metadataCache;
+      const cachedData = this.metadataCache;
+      try {
+        const currentMtime = fs.statSync(this.metadataFilePath).mtimeMs;
+        if (currentMtime === this.cacheFileModifiedTime) {
+          return cachedData;
+        }
+        // File was modified externally, invalidate cache
+        this.metadataCache = null;
+      } catch {
+        // statSync failed (file deleted/inaccessible), use existing cache as fallback
+        return cachedData;
+      }
     }
 
     try {
       if (fs.existsSync(this.metadataFilePath)) {
         const content = fs.readFileSync(this.metadataFilePath, 'utf-8');
         this.metadataCache = JSON.parse(content);
+        try {
+          this.cacheFileModifiedTime = fs.statSync(this.metadataFilePath).mtimeMs;
+        } catch {
+          this.cacheFileModifiedTime = 0;
+        }
         return this.metadataCache!;
       }
     } catch (error) {
@@ -64,6 +85,7 @@ export class ProjectMetadataStorage {
       console.log(`✅ Migrated ${Object.keys(this.metadataCache).length} projects`);
     } else {
       this.metadataCache = {};
+      this.cacheFileModifiedTime = 0;
     }
 
     return this.metadataCache;
@@ -157,6 +179,11 @@ export class ProjectMetadataStorage {
     try {
       fs.writeFileSync(this.metadataFilePath, JSON.stringify(metadata, null, 2), 'utf-8');
       this.metadataCache = metadata;
+      try {
+        this.cacheFileModifiedTime = fs.statSync(this.metadataFilePath).mtimeMs;
+      } catch {
+        this.cacheFileModifiedTime = 0;
+      }
     } catch (error) {
       console.error('Failed to save project metadata:', error);
       throw error;
