@@ -36,9 +36,12 @@ import engineRouter from './routes/engine';
 import rulesRouter from './routes/rules';
 import hooksRouter from './routes/hooks';
 import usersRouter from './routes/users';
+import shareRouter, { initShareRoutes, getShareServices } from './routes/share';
+import shareLinkRouter, { initShareLinkRoutes } from './routes/shareLink';
 import { authMiddleware } from './middleware/auth';
 import { httpsOnly } from './middleware/httpsOnly';
 import { loadConfig, getSlidesDir } from './config/index';
+import cookieParser from 'cookie-parser';
 import { cleanupOrphanedTasks } from './services/a2a/taskCleanup';
 import { initializeScheduler, shutdownScheduler } from './services/schedulerService';
 import { initializeTaskExecutor, shutdownTaskExecutor } from './services/taskExecutor/index.js';
@@ -272,6 +275,7 @@ const app: express.Express = express();
     express.json({ limit: '10mb' })(req, res, next);
   });
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+  app.use(cookieParser());
 
   // Static files - serve slides directory
   const slidesDir = await getSlidesDir();
@@ -313,6 +317,17 @@ const app: express.Express = express();
     initializeScheduler({ enabled: enableSchedulerInitially });
   } catch (error) {
     console.error('[Scheduler] Error initializing scheduler:', error);
+  }
+
+  // 3.5. Share Service: Initialize share routes
+  try {
+    initShareRoutes();
+    const { shareService, contentService } = getShareServices();
+    if (shareService && contentService) {
+      initShareLinkRoutes(shareService, contentService);
+    }
+  } catch (error) {
+    console.error('[ShareRoutes] Failed to initialize share routes:', error);
   }
 
   // 4. Tunnel Service: Initialize WebSocket tunnel for external access
@@ -374,6 +389,7 @@ const app: express.Express = express();
 
 // Routes - Public routes
   app.use('/api/auth', authRouter);
+  app.use('/api/share/link', shareLinkRouter); // Link share public routes (no JWT)
   // MCP Admin - uses its own API key authentication
   app.use('/api/mcp-admin', mcpAdminRouter);
   // Slack webhook - needs raw body for signature verification
@@ -476,6 +492,7 @@ const app: express.Express = express();
   app.use('/api/rules', authMiddleware, rulesRouter); // Rules management (both Claude and Cursor)
   app.use('/api/hooks', authMiddleware, hooksRouter); // Hooks management (Claude only)
   app.use('/api/users', authMiddleware, usersRouter); // User management
+  app.use('/api/share', authMiddleware, shareRouter); // Share management
   app.use('/api/media', mediaAuthRouter); // Media auth endpoints
   app.use('/media', mediaRouter); // Remove authMiddleware - media files are now public
 

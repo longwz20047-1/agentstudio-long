@@ -1,10 +1,18 @@
 // backend/src/services/weknoraUserService.ts
 import dotenv from 'dotenv';
-import { Pool } from 'pg';
+import pg, { Pool } from 'pg';
 import { WeKnoraUser } from '../types/users';
 
 // 确保环境变量在服务初始化前加载
 dotenv.config();
+
+// 修复 TIMESTAMP WITHOUT TIME ZONE 的时区解释问题
+// pg 驱动默认用本地时区解释无时区时间戳，当 DB 服务器与应用服务器时区不同时会导致偏差
+// 统一将无时区时间戳解释为 UTC
+const TIMESTAMP_OID = 1114;
+pg.types.setTypeParser(TIMESTAMP_OID, (val: string) => {
+  return val === null ? null : new Date(val + '+00');
+});
 
 export class WeKnoraUserService {
   private pool: Pool | null = null;
@@ -117,6 +125,93 @@ export class WeKnoraUserService {
     if (this.pool) {
       await this.pool.end();
       this.pool = null;
+    }
+  }
+
+  /**
+   * 获取数据库连接池（供其他服务复用）
+   */
+  getDbPool(): Pool | null {
+    return this.getPool();
+  }
+
+  /**
+   * 搜索用户（按用户名或邮箱模糊匹配）
+   */
+  async searchUsers(keyword: string, tenantId?: number, limit = 20): Promise<WeKnoraUser[]> {
+    if (!this._isAvailable) {
+      return [];
+    }
+
+    try {
+      const pool = this.getPool();
+      if (!pool) return [];
+
+      let query = `
+        SELECT id, username, email, avatar, tenant_id, is_active
+        FROM users
+        WHERE deleted_at IS NULL AND is_active = true
+          AND (LOWER(username) LIKE LOWER($1) OR LOWER(email) LIKE LOWER($1))
+      `;
+      const params: any[] = [`%${keyword.replace(/[%_\\]/g, '\\$&')}%`];
+
+      if (tenantId) {
+        query += ' AND tenant_id = $2';
+        params.push(tenantId);
+      }
+
+      query += ` ORDER BY username LIMIT $${params.length + 1}`;
+      params.push(limit);
+
+      const result = await pool.query(query, params);
+      return result.rows;
+    } catch (error) {
+      console.error('[WeKnoraUserService] Failed to search users:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 获取指定租户的用户列表
+   */
+  async getTenantUsers(tenantId: number, page = 1, pageSize = 200): Promise<{ items: WeKnoraUser[]; total: number }> {
+    if (!this._isAvailable) {
+      return { items: [], total: 0 };
+    }
+
+    try {
+      const pool = this.getPool();
+      if (!pool) return { items: [], total: 0 };
+
+      const offset = (page - 1) * pageSize;
+
+      let countQuery = 'SELECT COUNT(*) FROM users WHERE is_active = true AND deleted_at IS NULL';
+      let selectQuery = `SELECT id, username, email, avatar, tenant_id, is_active
+         FROM users
+         WHERE is_active = true AND deleted_at IS NULL`;
+      const countParams: any[] = [];
+      const selectParams: any[] = [];
+
+      if (tenantId > 0) {
+        countQuery += ' AND tenant_id = $1';
+        selectQuery += ' AND tenant_id = $1';
+        countParams.push(tenantId);
+        selectParams.push(tenantId);
+      }
+
+      selectQuery += ` ORDER BY username LIMIT $${selectParams.length + 1} OFFSET $${selectParams.length + 2}`;
+      selectParams.push(pageSize, offset);
+
+      const countResult = await pool.query(countQuery, countParams);
+      const result = await pool.query(selectQuery, selectParams);
+
+      return {
+        items: result.rows,
+        total: parseInt(countResult.rows[0].count),
+      };
+    } catch (error) {
+      console.error('[WeKnoraUserService] Failed to get tenant users:', error);
+      return { items: [], total: 0 };
     }
   }
 }

@@ -73,4 +73,44 @@ router.delete('/project/:projectId', (req: express.Request, res: express.Respons
   }
 });
 
+// 搜索用户
+router.get('/search', async (req: express.Request, res: express.Response) => {
+  try {
+    const keyword = req.query.q as string;
+    const tenantId = req.query.tenantId ? parseInt(req.query.tenantId as string) : undefined;
+    const limit = req.query.limit ? parseInt(req.query.limit as string) : 200;
+
+    if (!keyword || keyword.trim().length < 2) {
+      res.json({ success: true, data: [] });
+      return;
+    }
+
+    const users = await weknoraUserService.searchUsers(keyword.trim(), tenantId, limit);
+    res.json({ success: true, data: users });
+  } catch (error) {
+    console.error('Failed to search users:', error);
+    res.status(500).json({ success: false, error: 'Failed to search users' });
+  }
+});
+
+// 获取指定租户的用户列表
+router.get('/tenant/:tenantId', async (req: express.Request, res: express.Response) => {
+  try {
+    const tenantId = parseInt(req.params.tenantId);
+    if (isNaN(tenantId)) {
+      res.status(400).json({ success: false, error: 'Invalid tenantId' });
+      return;
+    }
+
+    const page = parseInt(req.query.page as string) || 1;
+    const pageSize = parseInt((req.query.page_size || req.query.pageSize) as string) || 200;
+
+    const result = await weknoraUserService.getTenantUsers(tenantId, page, pageSize);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('Failed to get tenant users:', error);
+    res.status(500).json({ success: false, error: 'Failed to get tenant users' });
+  }
+});
+
 export default router;
