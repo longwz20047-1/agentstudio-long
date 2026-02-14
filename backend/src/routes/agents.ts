@@ -20,7 +20,8 @@ import {
 } from '../services/askUserQuestion/index.js';
 import { a2aStreamEventEmitter, type A2AStreamStartEvent, type A2AStreamDataEvent, type A2AStreamEndEvent } from '../services/a2a/a2aStreamEvents.js';
 import { ClaudeAguiAdapter } from '../engines/claude/aguiAdapter.js';
-import { formatAguiEventAsSSE, type AGUIEvent } from '../engines/types.js';
+import { formatAguiEventAsSSE, AGUIEventType, type AGUIEvent } from '../engines/types.js';
+import { runOnRunFinishedHook } from '../services/runFinishedHooks.js';
 
 // 类型守卫函数
 function isSDKSystemMessage(message: any): message is SDKSystemMessage {
@@ -341,7 +342,7 @@ const ChatRequestSchema = z.object({
     allItems: z.array(z.any()).optional(),
     customContext: z.record(z.string(), z.any()).optional()
   }).optional(),
-  envVars: z.record(z.string(), z.string()).optional()
+  envVars: z.record(z.string(), z.string()).optional(),
 }).refine(data => {
   // Either message text or images must be provided
   return data.message.trim().length > 0 || (data.images && data.images.length > 0);
@@ -450,6 +451,9 @@ router.post('/chat', async (req, res) => {
   let retryCount = 0;
   const MAX_RETRIES = 1;
 
+  // Hoisted reference to the AGUI safety net so it's accessible from the outer catch block
+  let _ensureAguiRunFinished: () => void = () => {};
+
   try {
     console.log('Chat request received:', req.body);
 
@@ -500,15 +504,61 @@ router.post('/chat', async (req, res) => {
       return res.status(403).json({ error: 'Agent is disabled' });
     }
 
+    // Resolve onRunFinished hook config from the agent
+    const onRunFinishedHook = agent.hooks?.onRunFinished;
+
     // 设置 SSE 响应头
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx/proxy buffering
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', 'Cache-Control');
 
+    // Flush headers immediately to start SSE streaming
+    res.flushHeaders();
+
     // 设置连接管理
     const connectionManager = setupSSEConnectionManagement(req, res, agentId);
+
+    // Safety net: ensure RUN_FINISHED is always sent before connection closes in AGUI mode
+    let aguiRunFinishedSent = false;
+    const ensureAguiRunFinished = () => {
+      if (outputFormat !== 'agui' || aguiRunFinishedSent) return;
+      if (res.destroyed || connectionManager.isConnectionClosed()) return;
+      try {
+        const runFinishedEvent: AGUIEvent = {
+          type: AGUIEventType.RUN_FINISHED as AGUIEventType.RUN_FINISHED,
+          threadId: sessionId || '',
+          runId: '',
+          timestamp: Date.now(),
+        };
+        res.write(formatAguiEventAsSSE(runFinishedEvent));
+        aguiRunFinishedSent = true;
+        console.log('🛡️ [Safety Net] Sent RUN_FINISHED before connection close');
+      } catch {
+        // Connection already gone, nothing we can do
+      }
+    };
+    _ensureAguiRunFinished = ensureAguiRunFinished;
+
+    // Send heartbeat to keep connection alive through proxies
+    const heartbeatInterval = setInterval(() => {
+      if (!connectionManager.isConnectionClosed()) {
+        try {
+          res.write(': heartbeat\n\n');
+        } catch {
+          clearInterval(heartbeatInterval);
+        }
+      } else {
+        clearInterval(heartbeatInterval);
+      }
+    }, 5000);
+
+    // Clean up heartbeat when connection closes
+    res.on('close', () => {
+      clearInterval(heartbeatInterval);
+    });
 
     // 🎤 初始化 AskUserQuestion 模块（只会初始化一次）
     initAskUserQuestionModule();
@@ -703,21 +753,17 @@ router.post('/chat', async (req, res) => {
         let compactMessageBuffer: any[] = []; // 缓存 compact 相关消息
 
         // Initialize AGUI adapter if using AGUI output format
+        // NOTE: RUN_STARTED is deferred until the init message arrives with the real session ID.
+        // This prevents a mismatch between RUN_STARTED.threadId and the sessionId used by
+        // awaiting_user_input (and other events), which previously caused the frontend to
+        // send a wrong sessionId when calling /user-response.
         let aguiAdapter: ClaudeAguiAdapter | null = null;
+        let aguiRunStartedSent = false;
         if (outputFormat === 'agui') {
           aguiAdapter = new ClaudeAguiAdapter(actualSessionId || currentSessionId || undefined);
-          // Send RUN_STARTED event
-          const runStartedEvent = aguiAdapter.createRunStarted({ message, projectPath });
-          try {
-            if (!res.destroyed && !connectionManager.isConnectionClosed()) {
-              res.write(formatAguiEventAsSSE(runStartedEvent));
-            }
-          } catch (writeError) {
-            console.error('Failed to write AGUI RUN_STARTED event:', writeError);
-          }
         }
 
-        const currentRequestId = await claudeSession.sendMessage(userMessage, (sdkMessage: SDKMessage) => {
+        const currentRequestId = await claudeSession.sendMessage(userMessage, async (sdkMessage: SDKMessage) => {
           if (isSDKSystemMessage(sdkMessage) && sdkMessage.subtype === "init") {
             // 📊 打印完整的 system.init 消息体，用于调试模型使用情况
             console.log('📊 [Chat API] System Init Message 完整消息体:');
@@ -914,38 +960,39 @@ router.post('/chat', async (req, res) => {
                 console.log(`📡 [AskUserQuestion] Updated session: ${tempSessionId} -> ${responseSessionId}`);
               }
             } else if (currentSessionId && responseSessionId !== currentSessionId) {
-              // Resume场景：Claude SDK返回了新的session ID，需要通知前端
-              console.log(`🔄 Session resumed: ${currentSessionId} -> ${responseSessionId} for agent: ${agentId}`);
+              // Resume scenario: Claude SDK returned a new session ID (branch).
+              // We keep the original sessionId as the public-facing ID so the
+              // frontend sees a consistent session. The SDK's internal session ID
+              // is stored on the ClaudeSession object for future SDK calls.
+              console.log(`🔄 Session resumed: SDK returned ${responseSessionId}, keeping public sessionId as ${currentSessionId} for agent: ${agentId}`);
 
-              // 更新会话管理器中的session ID映射
-              sessionManager.replaceSessionId(claudeSession, currentSessionId, responseSessionId);
+              // Track the SDK's real session ID internally (do NOT replace the
+              // session manager mapping — the session stays indexed under the
+              // original sessionId).
               claudeSession.setClaudeSessionId(responseSessionId);
-
-              // 发送session resume通知给前端
-              const resumeNotification = {
-                type: 'session_resumed',
-                subtype: 'new_branch',
-                originalSessionId: currentSessionId,
-                newSessionId: responseSessionId,
-                sessionId: responseSessionId,
-                message: `会话已从历史记录恢复并创建新分支。原始会话ID: ${currentSessionId}，新会话ID: ${responseSessionId}`,
-                timestamp: Date.now()
-              };
-
-              try {
-                if (!res.destroyed && !connectionManager.isConnectionClosed()) {
-                  res.write(`data: ${JSON.stringify(resumeNotification)}\n\n`);
-                  console.log(`🔄 Sent session resume notification: ${currentSessionId} -> ${responseSessionId}`);
-                }
-              } catch (writeError: unknown) {
-                console.error('Failed to write session resume notification:', writeError);
-              }
-
-              // 更新实际的session ID为新的ID
-              actualSessionId = responseSessionId;
             } else {
               // 继续会话：使用现有session ID
               console.log(`♻️  Continued session ${currentSessionId} for agent: ${agentId}`);
+            }
+
+            // 🎯 Deferred RUN_STARTED: now that we have the real session ID from init,
+            // update the AGUI adapter's threadId and send RUN_STARTED with the correct ID.
+            // Use actualSessionId (original request sessionId) when available so the
+            // frontend sees a consistent session ID. For new sessions actualSessionId
+            // is null, so we fall back to responseSessionId from the SDK.
+            if (outputFormat === 'agui' && aguiAdapter && !aguiRunStartedSent) {
+              const aguiThreadId = actualSessionId || responseSessionId;
+              aguiAdapter.setThreadId(aguiThreadId);
+              const runStartedEvent = aguiAdapter.createRunStarted({ message, projectPath });
+              try {
+                if (!res.destroyed && !connectionManager.isConnectionClosed()) {
+                  res.write(formatAguiEventAsSSE(runStartedEvent));
+                  aguiRunStartedSent = true;
+                  console.log(`🚀 [AGUI] Sent deferred RUN_STARTED with threadId: ${aguiThreadId}`);
+                }
+              } catch (writeError) {
+                console.error('Failed to write AGUI RUN_STARTED event:', writeError);
+              }
             }
           }
 
@@ -1005,6 +1052,7 @@ router.post('/chat', async (req, res) => {
           } catch (writeError: unknown) {
             console.error('Failed to write SSE data:', writeError);
             const errorMessage = writeError instanceof Error ? writeError.message : 'unknown write error';
+            ensureAguiRunFinished();
             connectionManager.safeCloseConnection(`write error: ${errorMessage}`);
             return;
           }
@@ -1041,16 +1089,50 @@ router.post('/chat', async (req, res) => {
             if (outputFormat === 'agui' && aguiAdapter) {
               try {
                 const finalEvents = aguiAdapter.finalize();
-                for (const event of finalEvents) {
+
+                // Separate RUN_FINISHED from other finalize events so we can
+                // execute the onRunFinished hook before it is sent.
+                const runFinishedEvent = finalEvents.find(e => e.type === AGUIEventType.RUN_FINISHED);
+                const otherEvents = finalEvents.filter(e => e.type !== AGUIEventType.RUN_FINISHED);
+
+                // Send all non-RUN_FINISHED finalize events first
+                for (const event of otherEvents) {
                   if (!res.destroyed && !connectionManager.isConnectionClosed()) {
                     res.write(formatAguiEventAsSSE(event));
                   }
                 }
+
+                // Execute onRunFinished hook (if configured) before sending RUN_FINISHED
+                if (onRunFinishedHook && projectPath && !res.destroyed && !connectionManager.isConnectionClosed()) {
+                  try {
+                    const hookEvents = await runOnRunFinishedHook(onRunFinishedHook, {
+                      projectPath,
+                      agentId,
+                      sessionId: actualSessionId || currentSessionId || undefined,
+                    });
+                    for (const hookEvent of hookEvents) {
+                      if (!res.destroyed && !connectionManager.isConnectionClosed()) {
+                        res.write(formatAguiEventAsSSE(hookEvent));
+                      }
+                    }
+                  } catch (hookError: any) {
+                    console.warn(`[onRunFinished hook] Error: ${hookError.message}`);
+                  }
+                }
+
+                // Now send the deferred RUN_FINISHED
+                if (runFinishedEvent && !res.destroyed && !connectionManager.isConnectionClosed()) {
+                  res.write(formatAguiEventAsSSE(runFinishedEvent));
+                }
+
+                aguiRunFinishedSent = true; // finalize() includes RUN_FINISHED
               } catch (finalizeError) {
                 console.error('Failed to write AGUI finalize events:', finalizeError);
               }
             }
 
+            // Safety net: ensure RUN_FINISHED is sent even if finalize() failed
+            ensureAguiRunFinished();
             console.log(`✅ Received result event (subtype: ${resultMsg.subtype}), closing SSE connection for sessionId: ${actualSessionId || currentSessionId}`);
             connectionManager.safeCloseConnection('request completed');
           }
@@ -1113,6 +1195,7 @@ router.post('/chat', async (req, res) => {
           } catch (writeError) {
             console.error('Failed to write error message:', writeError);
           }
+          ensureAguiRunFinished();
           connectionManager.safeCloseConnection(`session error: ${errorMessage}`);
         }
         break; // 跳出重试循环
@@ -1138,6 +1221,7 @@ router.post('/chat', async (req, res) => {
             message: errorMessage,
             timestamp: Date.now()
           })}\n\n`);
+          _ensureAguiRunFinished();
           res.end();
         }
       } catch (writeError) {
@@ -1182,6 +1266,17 @@ router.post('/user-response', async (req, res) => {
     const { toolUseId, response, sessionId, agentId } = validation.data;
 
     console.log(`🎤 [AskUserQuestion] Received user response for tool: ${toolUseId}`);
+    console.log(`🎤 [AskUserQuestion]   Frontend sessionId: ${sessionId || '(not provided)'}`);
+    console.log(`🎤 [AskUserQuestion]   Frontend agentId: ${agentId || '(not provided)'}`);
+
+    // Log the pending entry's expected values for debugging
+    const pendingEntry = userInputRegistry.getPendingInput(toolUseId);
+    if (pendingEntry) {
+      console.log(`🎤 [AskUserQuestion]   Pending sessionId: ${pendingEntry.sessionId}`);
+      console.log(`🎤 [AskUserQuestion]   Pending agentId: ${pendingEntry.agentId}`);
+    } else {
+      console.log(`🎤 [AskUserQuestion]   No pending entry found for toolUseId: ${toolUseId}`);
+    }
 
     // 使用带验证的提交方法，防止伪造响应
     const result = userInputRegistry.validateAndSubmitUserResponse(

@@ -432,6 +432,31 @@ export const useMessageSender = (props: UseMessageSenderProps) => {
                 }
               }
               break;
+              break;
+
+            case 'TOOL_CALL_RESULT':
+              const stateForResult = useAgentStore.getState();
+              const lastMsgForResult = stateForResult.messages[stateForResult.messages.length - 1];
+              if (lastMsgForResult && lastMsgForResult.role === 'assistant') {
+                updateToolPartInMessage(lastMsgForResult.id, event.toolCallId, {
+                  toolResult: event.result,
+                  isError: event.isError || false,
+                  isExecuting: false,
+                });
+              }
+              break;
+
+            case 'CUSTOM': {
+              // Handle session ID sync from Cursor CLI
+              const customEvent = event as { name?: string; data?: { sessionId?: string } };
+              if (customEvent.name === 'session_id_updated' && customEvent.data?.sessionId) {
+                const cliSessionId = customEvent.data.sessionId;
+                console.log(`🔄 [AGUI] Session ID updated from CLI: ${cliSessionId}`);
+                setCurrentSessionId(cliSessionId);
+                onSessionChange?.(cliSessionId);
+              }
+              break;
+            }
           }
         };
         

@@ -3,6 +3,7 @@ import { Server, Settings, CheckCircle, XCircle, ArrowLeftRight } from 'lucide-r
 import { useTranslation } from 'react-i18next';
 import { useBackendServices } from '../hooks/useBackendServices';
 import { getApiBase } from '../lib/config';
+import { normalizeServiceUrl } from '../utils/backendServiceStorage';
 
 interface ServiceStatusIndicatorProps {
   className?: string;
@@ -79,7 +80,7 @@ export const ServiceStatusIndicator: React.FC<ServiceStatusIndicatorProps> = ({
     const updatedServices = await Promise.all(
       services.map(async (service) => {
         try {
-          const testUrl = `${service.url}/api/health`;
+          const testUrl = `${normalizeServiceUrl(service.url)}/api/health`;
           const response = await fetch(testUrl, {
             method: 'GET',
             headers: {
@@ -138,7 +139,7 @@ export const ServiceStatusIndicator: React.FC<ServiceStatusIndicatorProps> = ({
     if (service && service.id !== currentService?.id) {
       // Test connection before switching
       try {
-        const testUrl = `${service.url}/api/health`;
+        const testUrl = `${normalizeServiceUrl(service.url)}/api/health`;
         const response = await fetch(testUrl, {
           method: 'GET',
           headers: {
@@ -199,44 +200,45 @@ export const ServiceStatusIndicator: React.FC<ServiceStatusIndicatorProps> = ({
 
   return (
     <div className={`relative w-full ${className}`} ref={dropdownRef}>
-      <div className="flex items-center justify-between w-full px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors rounded-md">
+      <div className="flex items-center w-full px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors rounded-md">
         {/* Status Display */}
         <div 
-          className="flex items-center space-x-2 flex-1"
+          className="flex items-center space-x-2 flex-1 min-w-0 overflow-hidden"
           onMouseEnter={() => setShowTooltip(true)}
           onMouseLeave={() => setShowTooltip(false)}
         >
-          <Server className="w-4 h-4 text-gray-500" />
-          <div className="flex items-center space-x-1.5 flex-1 min-w-0">
-            <span className={`font-medium text-sm truncate ${getStatusColor()}`}>
-              {getStatusText()}
-            </span>
-            {getStatusIcon()}
-          </div>
+          <Server className="w-4 h-4 text-gray-500 flex-shrink-0" />
+          <span className={`font-medium text-sm truncate ${getStatusColor()}`}>
+            {getStatusText()}
+          </span>
+          <span className="flex-shrink-0">{getStatusIcon()}</span>
         </div>
 
-        {/* Switch Button */}
-        <button
-          onClick={() => setShowQuickSwitch(!showQuickSwitch)}
-          className="p-1 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 
-                   hover:bg-gray-100 dark:hover:bg-gray-600 rounded transition-colors"
-          title={t('serviceStatusIndicator.quickSwitch')}
-        >
-          <ArrowLeftRight className="w-3.5 h-3.5" />
-        </button>
+        {/* Action Buttons */}
+        <div className="flex items-center flex-shrink-0 ml-1">
+          {/* Switch Button */}
+          <button
+            onClick={() => setShowQuickSwitch(!showQuickSwitch)}
+            className="p-1 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 
+                     hover:bg-gray-100 dark:hover:bg-gray-600 rounded transition-colors"
+            title={t('serviceStatusIndicator.quickSwitch')}
+          >
+            <ArrowLeftRight className="w-3.5 h-3.5" />
+          </button>
 
-        {/* Settings Button */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onManageServices?.();
-          }}
-          className="p-1 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 
-                   hover:bg-gray-100 dark:hover:bg-gray-600 rounded transition-colors"
-          title={t('serviceStatusIndicator.manageServices')}
-        >
-          <Settings className="w-3.5 h-3.5" />
-        </button>
+          {/* Settings Button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onManageServices?.();
+            }}
+            className="p-1 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 
+                     hover:bg-gray-100 dark:hover:bg-gray-600 rounded transition-colors"
+            title={t('serviceStatusIndicator.manageServices')}
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Quick Switch Dropdown */}

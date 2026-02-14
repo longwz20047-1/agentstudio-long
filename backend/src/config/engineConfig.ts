@@ -65,16 +65,38 @@ function detectEngineType(): ServiceEngineType {
 }
 
 /**
- * Validate engine type
+ * Validate and normalize engine type
+ * Supports case-insensitive matching and common aliases
  */
 function validateEngineType(engine: string): ServiceEngineType {
   const validEngines: ServiceEngineType[] = ['cursor-cli', 'claude-sdk'];
-  if (!validEngines.includes(engine as ServiceEngineType)) {
-    console.warn(`⚠️  Invalid ENGINE="${engine}", falling back to "claude-sdk"`);
-    console.warn(`⚠️  Supported engines: ${validEngines.join(', ')}`);
-    return 'claude-sdk';
+  const normalized = engine.trim().toLowerCase();
+
+  // 直接匹配
+  if (validEngines.includes(normalized as ServiceEngineType)) {
+    return normalized as ServiceEngineType;
   }
-  return engine as ServiceEngineType;
+
+  // 常见别名映射
+  const aliasMap: Record<string, ServiceEngineType> = {
+    'cursor': 'cursor-cli',
+    'cursor_cli': 'cursor-cli',
+    'cursorcli': 'cursor-cli',
+    'claude': 'claude-sdk',
+    'claude_sdk': 'claude-sdk',
+    'claudesdk': 'claude-sdk',
+    'claude-code': 'claude-sdk',
+  };
+
+  const mapped = aliasMap[normalized];
+  if (mapped) {
+    console.log(`🔧 Engine alias "${engine}" resolved to "${mapped}"`);
+    return mapped;
+  }
+
+  console.warn(`⚠️  Invalid ENGINE="${engine}", falling back to "claude-sdk"`);
+  console.warn(`⚠️  Supported engines: ${validEngines.join(', ')}`);
+  return 'claude-sdk';
 }
 
 // =============================================================================
@@ -197,9 +219,12 @@ function getClaudeSdkPaths(): EnginePathConfig {
   return {
     userConfigDir: sdkDir,
     mcpConfigPath: path.join(sdkDir, 'mcp.json'),
+    mcpDir: path.join(sdkDir, 'mcp'),
     rulesDir: path.join(sdkDir, 'rules'),
     commandsDir: path.join(sdkDir, 'commands'),
+    agentsDir: path.join(sdkDir, 'agents'),
     skillsDir: path.join(sdkDir, 'skills'),
+    hooksDir: path.join(sdkDir, 'hooks'),
     pluginsDir: path.join(sdkDir, 'plugins'),
     projectsDataDir: path.join(sdkDir, 'projects'),
   };
@@ -213,10 +238,13 @@ function getCursorCliPaths(): EnginePathConfig {
   return {
     userConfigDir: cursorDir,
     mcpConfigPath: path.join(cursorDir, 'mcp.json'),
+    mcpDir: path.join(cursorDir, 'mcp'),
     rulesDir: path.join(cursorDir, 'rules'),
     commandsDir: path.join(cursorDir, 'commands'),
+    agentsDir: path.join(cursorDir, 'agents'),
     skillsDir: path.join(cursorDir, 'skills'),
     builtinSkillsDir: path.join(cursorDir, 'skills-cursor'),
+    hooksDir: path.join(cursorDir, 'hooks'),
     pluginsDir: path.join(cursorDir, 'plugins'),
     projectsDataDir: path.join(cursorDir, 'projects'),
   };
@@ -393,6 +421,30 @@ export function getCommandsDir(): string {
  */
 export function getSkillsDir(): string {
   return getEnginePaths().skillsDir;
+}
+
+/**
+ * Get agents directory (backward compatible)
+ * @deprecated Use getEnginePaths().agentsDir instead
+ */
+export function getAgentsDir(): string {
+  return getEnginePaths().agentsDir;
+}
+
+/**
+ * Get hooks directory (backward compatible)
+ * @deprecated Use getEnginePaths().hooksDir instead
+ */
+export function getHooksDir(): string {
+  return getEnginePaths().hooksDir;
+}
+
+/**
+ * Get MCP directory (backward compatible)
+ * @deprecated Use getEnginePaths().mcpDir instead
+ */
+export function getMcpDir(): string {
+  return getEnginePaths().mcpDir;
 }
 
 /**

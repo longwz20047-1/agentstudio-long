@@ -19,10 +19,17 @@ import { sessionManager } from '../../services/sessionManager.js';
 import { buildQueryOptions } from '../../utils/claudeUtils.js';
 import { handleSessionManagement, buildUserMessageContent } from '../../utils/sessionUtils.js';
 import { AgentStorage } from '../../services/agentStorage.js';
+import { getDefaultVersionId, getVersionByIdInternal } from '../../services/claudeVersionStorage.js';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 
 // Agent storage for getting agent configurations
 const globalAgentStorage = new AgentStorage();
+
+// Cache for Claude models (similar to Cursor engine)
+let cachedModels: ModelInfo[] | null = null;
+let modelsCacheTime: number = 0;
+const MODEL_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 // Default agent configuration for AGUI mode
 const DEFAULT_AGUI_AGENT = {
@@ -85,16 +92,255 @@ export class ClaudeEngine implements IAgentEngine {
   };
 
   /**
-   * Get supported models for Claude engine
+   * Get supported models for Claude engine.
+   * 
+   * Uses a 4-level fallback strategy with caching:
+   * 1. SDK `query().supportedModels()` — most accurate (reflects API key permissions & CLI version)
+   * 2. REST API `GET {ANTHROPIC_BASE_URL}/v1/models` — broad model list from API
+   * 3. Default provider config from `claudeVersionStorage` — works offline
+   * 4. Hardcoded fallback — always available
+   * 
+   * Results are cached for MODEL_CACHE_TTL (5 minutes) to avoid repeated
+   * SDK/API calls on frequent frontend polling.
    */
-  getSupportedModels(): ModelInfo[] {
-    // These are the default models; actual models come from providers
+  async getSupportedModels(): Promise<ModelInfo[]> {
+    // Check cache first
+    const now = Date.now();
+    if (cachedModels && (now - modelsCacheTime) < MODEL_CACHE_TTL) {
+      return cachedModels;
+    }
+
+    // Level 1: SDK supportedModels() — most accurate
+    const fromSdk = await this.fetchModelsFromSdk();
+    if (fromSdk.length > 0) {
+      cachedModels = fromSdk;
+      modelsCacheTime = now;
+      return fromSdk;
+    }
+
+    // Level 2: REST API /v1/models
+    const fromApi = await this.fetchModelsFromApi();
+    if (fromApi.length > 0) {
+      cachedModels = fromApi;
+      modelsCacheTime = now;
+      return fromApi;
+    }
+
+    // Level 3: Default provider config
+    const fromProvider = await this.getModelsFromDefaultProvider();
+    if (fromProvider.length > 0) {
+      cachedModels = fromProvider;
+      modelsCacheTime = now;
+      return fromProvider;
+    }
+
+    // Level 4: Hardcoded fallback (no cache — always re-evaluate upper levels next time)
+    return this.getHardcodedModels();
+  }
+
+  /**
+   * Force refresh models from all sources (bypasses cache).
+   * Analogous to CursorEngine.refreshModels().
+   */
+  async refreshModels(): Promise<ModelInfo[]> {
+    cachedModels = null;
+    modelsCacheTime = 0;
+    return this.getSupportedModels();
+  }
+
+  /**
+   * Level 1: Fetch models via Claude Agent SDK's Query.supportedModels().
+   * 
+   * This creates a lightweight query instance, waits for initialization,
+   * calls supportedModels(), then immediately aborts the session.
+   * The result is the most accurate list because the SDK reflects the
+   * current API key permissions and CLI version.
+   */
+  private async fetchModelsFromSdk(): Promise<ModelInfo[]> {
+    try {
+      const abortController = new AbortController();
+      const timeoutMs = 15_000; // 15s timeout for SDK init + model fetch
+
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => {
+          abortController.abort();
+          reject(new Error('SDK supportedModels() timeout'));
+        }, timeoutMs)
+      );
+
+      const q = query({
+        prompt: '.',
+        options: {
+          abortController,
+          cwd: process.cwd(),
+          allowedTools: ['Read'],
+          maxTurns: 1,
+        },
+      });
+
+      // supportedModels() waits on Query's internal "initialization" promise.
+      // Initialization is triggered when the session starts (first iteration).
+      const modelsPromise = q.supportedModels();
+
+      // Start iteration so the SDK starts the CLI and sends init
+      const iter = q[Symbol.asyncIterator]();
+      const firstResultPromise = iter.next();
+
+      const sdkModels = await Promise.race([
+        Promise.all([modelsPromise, firstResultPromise]).then(([models]) => models),
+        timeoutPromise,
+      ]);
+
+      // Immediately abort — we only needed the model list
+      abortController.abort();
+
+      if (!Array.isArray(sdkModels) || sdkModels.length === 0) return [];
+
+      const models: ModelInfo[] = sdkModels.map((m) => ({
+        id: m.value,
+        name: m.displayName,
+        isVision: !m.displayName.toLowerCase().includes('haiku'), // Haiku has limited vision support
+        isThinking: m.displayName.toLowerCase().includes('thinking'),
+        description: m.description,
+      }));
+
+      console.log(`[ClaudeEngine] Fetched ${models.length} models from SDK supportedModels()`);
+      return models;
+    } catch (error) {
+      console.warn('[ClaudeEngine] Failed to fetch models from SDK:', error instanceof Error ? error.message : error);
+      return [];
+    }
+  }
+
+  /**
+   * Level 2: Fetch models from Anthropic REST API `/v1/models`.
+   */
+  private async fetchModelsFromApi(): Promise<ModelInfo[]> {
+    const baseUrl = (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '');
+    const url = `${baseUrl}/v1/models`;
+
+    const apiKey =
+      process.env.ANTHROPIC_API_KEY ||
+      process.env.ANTHROPIC_AUTH_TOKEN ||
+      (await this.getApiKeyFromDefaultProvider());
+
+    if (!apiKey) {
+      console.warn('[ClaudeEngine] No API key for /v1/models (ANTHROPIC_API_KEY or default provider)');
+      return [];
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000);
+
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (!res.ok) {
+        console.warn(`[ClaudeEngine] /v1/models returned ${res.status}`);
+        return [];
+      }
+
+      const json = (await res.json()) as {
+        data?: Array<{
+          id: string;
+          object?: string;
+          created?: number;
+          created_at?: string;
+          display_name?: string;
+          name?: string;
+          owned_by?: string;
+        }>;
+        object?: string;
+      };
+
+      const data = json?.data;
+      if (!Array.isArray(data) || data.length === 0) return [];
+
+      const models: ModelInfo[] = data.map((m) => {
+        const name =
+          m.display_name ?? (m as { name?: string }).name ?? m.id;
+        const nameLower = name.toLowerCase();
+        const isThinking = nameLower.includes('thinking');
+        const isVision = !nameLower.includes('haiku');
+        return {
+          id: m.id,
+          name,
+          isVision,
+          isThinking,
+          description: m.owned_by ? `${m.owned_by}: ${name}` : undefined,
+        };
+      });
+
+      console.log(`[ClaudeEngine] Fetched ${models.length} models from ${url}`);
+      return models;
+    } catch (error) {
+      console.warn('[ClaudeEngine] Failed to fetch models from API:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Helper: Get API key from the default provider in claudeVersionStorage.
+   */
+  private async getApiKeyFromDefaultProvider(): Promise<string | null> {
+    try {
+      const versionId = await getDefaultVersionId();
+      if (!versionId) return null;
+      const version = await getVersionByIdInternal(versionId);
+      const env = version?.environmentVariables ?? {};
+      return env.ANTHROPIC_API_KEY ?? env.ANTHROPIC_AUTH_TOKEN ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Level 3: Get models from the default provider config in claudeVersionStorage.
+   */
+  private async getModelsFromDefaultProvider(): Promise<ModelInfo[]> {
+    try {
+      const versionId = await getDefaultVersionId();
+      if (!versionId) return [];
+      const version = await getVersionByIdInternal(versionId);
+      if (!version?.models?.length) return [];
+
+      const models: ModelInfo[] = version.models.map((m) => ({
+        id: m.id,
+        name: m.name,
+        isVision: m.isVision ?? true,
+        isThinking: (m.name || '').toLowerCase().includes('thinking'),
+        description: m.description,
+      }));
+      console.log(`[ClaudeEngine] Using ${models.length} models from default provider (${version.alias})`);
+      return models;
+    } catch (error) {
+      console.warn('[ClaudeEngine] Failed to get models from default provider:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Level 4: Hardcoded fallback model list.
+   * Uses short aliases that Claude CLI / SDK accepts as valid model identifiers.
+   */
+  private getHardcodedModels(): ModelInfo[] {
+    console.log('[ClaudeEngine] Using hardcoded model list (all remote sources unavailable)');
     return [
-      { id: 'sonnet', name: 'Claude Sonnet', isVision: true },
-      { id: 'sonnet-thinking', name: 'Claude Sonnet (Thinking)', isVision: true, isThinking: true },
-      { id: 'opus', name: 'Claude Opus', isVision: true },
-      { id: 'opus-thinking', name: 'Claude Opus (Thinking)', isVision: true, isThinking: true },
-      { id: 'haiku', name: 'Claude Haiku', isVision: false },
+      { id: 'sonnet', name: 'Claude Sonnet', isVision: true, description: 'Balanced performance and cost' },
+      { id: 'sonnet-thinking', name: 'Claude Sonnet (Thinking)', isVision: true, isThinking: true, description: 'Sonnet with extended thinking' },
+      { id: 'opus', name: 'Claude Opus', isVision: true, description: 'Most capable model' },
+      { id: 'opus-thinking', name: 'Claude Opus (Thinking)', isVision: true, isThinking: true, description: 'Opus with extended thinking' },
+      { id: 'haiku', name: 'Claude Haiku', isVision: false, description: 'Fast and cost-effective' },
     ];
   }
 

@@ -19,6 +19,7 @@ import { ProjectSubAgentsModal } from '../components/ProjectSubAgentsModal';
 import { ProjectA2AModal } from '../components/ProjectA2AModal';
 import { ProjectSettingsModal } from '../components/ProjectSettingsModal';
 import { ProjectUserSelector } from '../components/ProjectUserSelector';
+import { ProjectVersionModal } from '../components/ProjectVersionModal';
 import { useConfirm } from '../hooks/useConfirm';
 
 interface Project {
@@ -261,6 +262,7 @@ export const ProjectsPage: React.FC = () => {
   const [subAgentsProject, setSubAgentsProject] = useState<Project | null>(null);
   const [a2aProject, setA2aProject] = useState<Project | null>(null);
   const [settingsProject, setSettingsProject] = useState<Project | null>(null);
+  const [versionProject, setVersionProject] = useState<Project | null>(null);
   const [agentSelectProject, setAgentSelectProject] = useState<Project | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importProjectPath, setImportProjectPath] = useState('');
@@ -420,6 +422,10 @@ export const ProjectsPage: React.FC = () => {
 
   const handleSettings = (project: Project) => {
     setSettingsProject(project);
+  };
+
+  const handleVersionManagement = (project: Project) => {
+    setVersionProject(project);
   };
 
   const handleAgentChanged = (projectId: string, newAgent: any) => {
@@ -634,6 +640,7 @@ export const ProjectsPage: React.FC = () => {
           onCommandManagement={handleCommandManagement}
           onSubAgentManagement={handleSubAgentManagement}
           onA2AManagement={handleA2AManagement}
+          onVersionManagement={handleVersionManagement}
           onSettings={handleSettings}
           onDeleteProject={handleDeleteProject}
           onAgentChanged={handleAgentChanged}
@@ -775,6 +782,13 @@ export const ProjectsPage: React.FC = () => {
           }}
         />
       )}
+
+      {/* Project Version Modal */}
+      <ProjectVersionModal
+        isOpen={!!versionProject}
+        project={versionProject}
+        onClose={() => setVersionProject(null)}
+      />
 
       {/* Agent Selection Modal */}
       {agentSelectProject && (

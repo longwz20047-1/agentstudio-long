@@ -1,14 +1,23 @@
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
-import { getSdkDir, getPluginsDir, getCommandsDir, getAgentsDir, getSkillsDir, getHooksDir, getMcpDir } from '../config/sdkConfig.js';
+import { getEnginePaths, getEngineType } from '../config/engineConfig.js';
+
+// Backward-compatible path accessors derived from engineConfig
+const getSdkDir = () => getEnginePaths().userConfigDir;
+const getPluginsDir = () => getEnginePaths().pluginsDir || path.join(getSdkDir(), 'plugins');
+const getCommandsDir = () => getEnginePaths().commandsDir;
+const getAgentsDir = () => getEnginePaths().agentsDir;
+const getSkillsDir = () => getEnginePaths().skillsDir;
+const getHooksDir = () => getEnginePaths().hooksDir;
+const getMcpDir = () => getEnginePaths().mcpDir;
 
 /**
  * Plugin Paths Service
- * Manages paths according to Agent SDK's standard structure
+ * Manages paths according to the current engine's standard structure
  * 
- * Supports multiple SDK engines (claude-code, claude-internal, code-buddy)
- * configured via AGENT_SDK environment variable
+ * Supports engines: cursor-cli (uses ~/.cursor), claude-sdk (uses ~/.claude)
+ * configured via ENGINE environment variable
  */
 class PluginPaths {
   private claudeDir: string;
@@ -69,10 +78,12 @@ class PluginPaths {
 
         if (manifest.plugins && Array.isArray(manifest.plugins)) {
           const pluginDef = manifest.plugins.find((p: any) => p.name === pluginName);
-          if (pluginDef && pluginDef.source) {
-            // Resolve source path relative to marketplace
+          if (pluginDef && pluginDef.source && typeof pluginDef.source === 'string') {
+            // Resolve local source path relative to marketplace
             return path.resolve(marketplacePath, pluginDef.source);
           }
+          // Note: source can be an object for remote plugins (e.g. { source: "url", url: "..." })
+          // These are not resolvable locally and fall through to standard/flat structure detection
         }
       } catch (error) {
         console.error(`Failed to read marketplace manifest for ${marketplaceName}:`, error);
@@ -201,8 +212,16 @@ class PluginPaths {
         const manifest = JSON.parse(manifestContent);
 
         // If marketplace.json has plugins array, use that
+        // Filter out plugins with non-string source (remote URL plugins that can't be installed locally)
         if (manifest.plugins && Array.isArray(manifest.plugins)) {
-          return manifest.plugins.map((p: any) => p.name);
+          return manifest.plugins
+            .filter((p: any) => {
+              // Include plugins with local string source paths
+              if (typeof p.source === 'string') return true;
+              // Exclude plugins with object source (remote plugins like { source: "url", url: "..." })
+              return false;
+            })
+            .map((p: any) => p.name);
         }
       } catch (error) {
         console.error(`Failed to read marketplace manifest for ${marketplaceName}:`, error);

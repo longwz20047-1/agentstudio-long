@@ -14,6 +14,7 @@
 import express, { Router } from 'express';
 import { z } from 'zod';
 import path from 'path';
+import { randomUUID } from 'crypto';
 import {
   engineManager,
   initializeEngines,
@@ -23,9 +24,14 @@ import {
   type AGUIEvent,
 } from '../engines/index.js';
 import { ProjectMetadataStorage } from '../services/projectMetadataStorage.js';
+import { sessionEventBus, type SessionEvent } from '../services/sessionEventBus.js';
+import { runOnRunFinishedHook } from '../services/runFinishedHooks.js';
+import { AgentStorage } from '../services/agentStorage.js';
 
 // Project storage for resolving project names to paths
 const projectStorage = new ProjectMetadataStorage();
+// Agent storage for reading agent hooks config
+const agentStorage = new AgentStorage();
 
 const router: Router = express.Router();
 
@@ -82,20 +88,24 @@ const ChatRequestSchema = z.object({
  * 
  * List all available engines and their capabilities
  */
-router.get('/engines', (_req, res) => {
+router.get('/engines', async (_req, res) => {
   try {
     const engines = engineManager.getRegisteredEngines();
     const capabilities = engineManager.getAllEngineCapabilities();
     const defaultEngine = engineManager.getDefaultEngineType();
 
-    res.json({
-      engines: engines.map(type => ({
+    const enginesWithModels = await Promise.all(
+      engines.map(async (type) => ({
         type,
         isDefault: type === defaultEngine,
         capabilities: capabilities[type],
-        models: engineManager.getSupportedModels(type),
+        models: await engineManager.getSupportedModels(type),
         activeSessions: engineManager.getActiveSessionCountByEngine()[type],
-      })),
+      }))
+    );
+
+    res.json({
+      engines: enginesWithModels,
       defaultEngine,
       totalActiveSessions: engineManager.getTotalActiveSessionCount(),
     });
@@ -110,7 +120,7 @@ router.get('/engines', (_req, res) => {
  * 
  * Get detailed information about a specific engine
  */
-router.get('/engines/:type', (req, res) => {
+router.get('/engines/:type', async (req, res) => {
   try {
     const engineType = req.params.type as EngineType;
     
@@ -119,7 +129,7 @@ router.get('/engines/:type', (req, res) => {
     }
 
     const capabilities = engineManager.getEngineCapabilities(engineType);
-    const models = engineManager.getSupportedModels(engineType);
+    const models = await engineManager.getSupportedModels(engineType);
     const activeSessions = engineManager.getActiveSessionCountByEngine()[engineType];
 
     res.json({
@@ -230,15 +240,45 @@ router.post('/chat', async (req, res) => {
       }
     }, 5000);
 
+    // Track session ID for event bus broadcasting
+    let activeSessionId: string | null = sessionId || null;
+
+    // Resolve agent hooks (if an agentId-like identifier is available from the request)
+    // For AGUI, we try to find an agent whose hooks should apply.
+    // The request body may carry an agentId field (forwarded by the frontend).
+    const requestAgentId = (req.body as any)?.agentId as string | undefined;
+    const aguiAgent = requestAgentId ? agentStorage.getAgent(requestAgentId) : null;
+    const onRunFinishedHook = aguiAgent?.hooks?.onRunFinished;
+
+    // If there's an onRunFinished hook, we intercept RUN_FINISHED so we can
+    // execute the hook and emit its events before the run-finished signal.
+    let pendingRunFinished: AGUIEvent | null = null;
+
     // AGUI event callback (used by Cursor engine)
     const onAguiEvent = (event: AGUIEvent) => {
       if (isConnectionClosed) return;
+
+      // Extract session ID from RUN_STARTED event
+      if (event.type === AGUIEventType.RUN_STARTED && 'threadId' in event) {
+        activeSessionId = (event as any).threadId || activeSessionId;
+      }
+
+      // Intercept RUN_FINISHED when an onRunFinished hook is configured
+      if (event.type === AGUIEventType.RUN_FINISHED && onRunFinishedHook && resolvedWorkspace) {
+        pendingRunFinished = event;
+        return; // Don't write yet — will be sent after hook execution
+      }
 
       try {
         res.write(formatAguiEventAsSSE(event));
       } catch (error) {
         console.error('[AGUI] Error writing event:', error);
         isConnectionClosed = true;
+      }
+
+      // Also broadcast to observers via event bus
+      if (activeSessionId && sessionEventBus.hasObservers(activeSessionId)) {
+        sessionEventBus.emit(activeSessionId, event);
       }
     };
 
@@ -259,6 +299,30 @@ router.post('/chat', async (req, res) => {
           onAguiEvent
         );
         console.log(`✅ [AGUI] Cursor request completed, sessionId: ${result.sessionId}`);
+
+        // Execute onRunFinished hook (if configured) before sending RUN_FINISHED
+        if (pendingRunFinished && onRunFinishedHook && resolvedWorkspace && !isConnectionClosed) {
+          try {
+            const hookEvents = await runOnRunFinishedHook(onRunFinishedHook, {
+              projectPath: resolvedWorkspace,
+              agentId: requestAgentId || 'cursor',
+              sessionId: activeSessionId || sessionId,
+            });
+            for (const hookEvent of hookEvents) {
+              res.write(formatAguiEventAsSSE(hookEvent));
+            }
+          } catch (hookError: any) {
+            console.warn(`[onRunFinished hook] Error: ${hookError.message}`);
+          }
+
+          // Now send the deferred RUN_FINISHED
+          try {
+            res.write(formatAguiEventAsSSE(pendingRunFinished));
+          } catch (error) {
+            console.error('[AGUI] Error writing deferred RUN_FINISHED:', error);
+          }
+          pendingRunFinished = null;
+        }
       } else {
         // Claude engine: Redirect to /api/agents/chat with outputFormat=agui
         // Note: We can't proxy SSE-to-SSE, so we inform the client to use the direct endpoint
@@ -382,6 +446,212 @@ router.get('/status', (_req, res) => {
     console.error('[AGUI] Error getting status:', error);
     res.status(500).json({ error: 'Failed to get status' });
   }
+});
+
+// =============================================================================
+// Session Inject API (for Facilitator Agent)
+// =============================================================================
+
+/**
+ * POST /api/agui/sessions/:sessionId/inject
+ * 
+ * Inject a message into an existing session as if the owner sent it.
+ * Used by Facilitator Agent to send collected requirements to the ChatPanel.
+ * 
+ * The message is:
+ * 1. Broadcast as USER_MESSAGE event to all session observers
+ * 2. Sent to the AI engine for processing
+ * 3. AI response events are broadcast to all observers
+ * 4. Returns JSON result when processing completes
+ */
+router.post('/sessions/:sessionId/inject', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { message, sender = 'facilitator-agent', engineType = 'cursor', workspace } = req.body as {
+      message: string;
+      sender?: string;
+      engineType?: EngineType;
+      workspace?: string;
+    };
+
+    if (!message || typeof message !== 'string' || !message.trim()) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    if (!workspace) {
+      return res.status(400).json({ error: 'Workspace is required' });
+    }
+
+    console.log(`💉 [AGUI] Inject request for session ${sessionId} from ${sender}`);
+
+    // Validate engine
+    if (!engineManager.hasEngine(engineType)) {
+      return res.status(400).json({ error: `Unknown engine type: ${engineType}` });
+    }
+
+    // 1. Broadcast USER_MESSAGE event to all observers
+    sessionEventBus.emit(sessionId, {
+      type: 'USER_MESSAGE',
+      content: message.trim(),
+      sender,
+      timestamp: Date.now(),
+      sessionId,
+    });
+
+    // 2. Send to engine and collect events
+    const events: AGUIEvent[] = [];
+    let resultSessionId = sessionId;
+
+    const onAguiEvent = (event: AGUIEvent) => {
+      events.push(event);
+
+      // Extract session ID from RUN_STARTED
+      if (event.type === AGUIEventType.RUN_STARTED && 'threadId' in event) {
+        resultSessionId = (event as any).threadId || resultSessionId;
+      }
+
+      // Broadcast AI response events to observers
+      if (sessionEventBus.hasObservers(sessionId)) {
+        sessionEventBus.emit(sessionId, event);
+      }
+    };
+
+    // Resolve workspace path
+    let resolvedWorkspace = workspace;
+    if (!workspace.startsWith('/')) {
+      const matchedProject = projectStorage.getAllProjects().find(
+        (p: any) => p.name === workspace || p.dirName === workspace
+      );
+      if (matchedProject) {
+        resolvedWorkspace = matchedProject.path;
+      }
+    }
+
+    // 3. Process with engine
+    const result = await engineManager.sendMessage(
+      engineType,
+      message.trim(),
+      {
+        type: engineType,
+        workspace: resolvedWorkspace,
+        sessionId,
+      },
+      onAguiEvent
+    );
+
+    console.log(`✅ [AGUI] Inject completed for session ${sessionId}, events: ${events.length}`);
+
+    res.json({
+      success: true,
+      sessionId: resultSessionId,
+      eventsCount: events.length,
+    });
+
+  } catch (error) {
+    console.error('[AGUI] Inject error:', error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
+// =============================================================================
+// Session Observe SSE (for spectators / group chat members)
+// =============================================================================
+
+/**
+ * GET /api/agui/sessions/:sessionId/observe
+ * 
+ * Subscribe to a session's event stream as an observer (read-only).
+ * Returns SSE stream with both USER_MESSAGE and AI response events.
+ * 
+ * Used by:
+ * - Group chat members to watch the ChatPanel in real-time
+ * - Facilitator Agent to see AI responses
+ */
+router.get('/sessions/:sessionId/observe', (req, res) => {
+  const { sessionId } = req.params;
+  const clientId = (req.query.clientId as string) || randomUUID();
+  const userId = req.headers['x-sandboxproxy-auth-oid'] as string | undefined;
+
+  console.log(`👁️ [AGUI] Observe request for session ${sessionId} from client ${clientId}${userId ? ` user ${userId}` : ''}`);
+
+  // Set up SSE headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.flushHeaders();
+
+  let isConnectionClosed = false;
+
+  // Send initial connected event
+  res.write(`event: connected\ndata: ${JSON.stringify({ sessionId, clientId, timestamp: Date.now() })}\n\n`);
+
+  // Subscribe to session events
+  const unsubscribe = sessionEventBus.subscribe(sessionId, clientId, (event: SessionEvent) => {
+    if (isConnectionClosed) return;
+
+    try {
+      if (event.type === 'USER_MESSAGE') {
+        // Custom event format for user messages
+        res.write(`event: USER_MESSAGE\ndata: ${JSON.stringify(event)}\n\n`);
+      } else {
+        // Standard AGUI event format
+        res.write(formatAguiEventAsSSE(event as AGUIEvent));
+      }
+    } catch (error) {
+      console.error(`[AGUI] Error writing observe event to ${clientId}:`, error);
+      isConnectionClosed = true;
+    }
+  });
+
+  // Heartbeat
+  const heartbeatInterval = setInterval(() => {
+    if (!isConnectionClosed) {
+      try {
+        res.write(': heartbeat\n\n');
+      } catch {
+        isConnectionClosed = true;
+      }
+    } else {
+      clearInterval(heartbeatInterval);
+    }
+  }, 5000);
+
+  // Cleanup on disconnect
+  res.on('close', () => {
+    console.log(`[AGUI] Observer ${clientId} disconnected from session ${sessionId}`);
+    isConnectionClosed = true;
+    clearInterval(heartbeatInterval);
+    unsubscribe();
+
+  });
+
+  res.on('error', () => {
+    isConnectionClosed = true;
+    clearInterval(heartbeatInterval);
+    unsubscribe();
+  });
+});
+
+// =============================================================================
+// Session Observer Management
+// =============================================================================
+
+/**
+ * GET /api/agui/sessions/:sessionId/observers
+ * 
+ * Get the number of observers for a session
+ */
+router.get('/sessions/:sessionId/observers', (req, res) => {
+  const { sessionId } = req.params;
+  res.json({
+    sessionId,
+    observerCount: sessionEventBus.getObserverCount(sessionId),
+    hasObservers: sessionEventBus.hasObservers(sessionId),
+  });
 });
 
 export default router;

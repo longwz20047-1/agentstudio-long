@@ -218,7 +218,7 @@ router.get('/.well-known/agent-card.json', async (req: A2ARequest, res: Response
 
     if (engineType === 'cursor') {
       // Generate Cursor Agent Card
-      agentCard = generateCursorAgentCard(projectContext);
+      agentCard = await generateCursorAgentCard(projectContext);
 
       console.info('[A2A] Cursor Agent Card generated:', {
         a2aAgentId: a2aContext.a2aAgentId,
@@ -325,6 +325,10 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
 
     const { message, sessionId, sessionMode = 'new', context, images } = validation.data;
     const stream = req.query.stream === 'true' || req.headers.accept === 'text/event-stream';
+    
+    if (images && images.length > 0) {
+      console.log(`🖼️ [A2A] Received ${images.length} image(s) with message`);
+    }
     
     // Determine engine type based on agentType
     const engineType = getEngineType(a2aContext.agentType);
@@ -594,7 +598,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
         try {
           const result = await executeA2AQueryStreaming(
             message,
-            images, // 传递图片数组
+            images, // multimodal images
             queryOptions,
             async (sdkMessage: SDKMessage) => {
               // Capture session ID from SDK（仅用于新会话）
@@ -687,7 +691,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
           let capturedSessionId: string | null = sessionId || null;
           const result = await executeA2AQuery(
             message,
-            images, // 传递图片数组
+            images, // multimodal images
             queryOptions,
             async (sdkMessage: SDKMessage) => {
               // Capture session ID if not already captured
@@ -794,6 +798,14 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
         res.flushHeaders();
+
+        const messageContent: any[] = [];
+        if (images && images.length > 0) {
+          for (const img of images) {
+            messageContent.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } });
+          }
+        }
+        messageContent.push({ type: 'text', text: message });
 
         const userMessage = {
           type: 'user',

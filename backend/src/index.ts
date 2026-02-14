@@ -20,6 +20,7 @@ import configRouter from './routes/config';
 import slackRouter from './routes/slack';
 import skillsRouter from './routes/skills';
 import pluginsRouter from './routes/plugins';
+import marketplaceSkillsRouter from './routes/marketplaceSkills';
 import a2aRouter from './routes/a2a';
 import a2aManagementRouter from './routes/a2aManagement';
 import scheduledTasksRouter from './routes/scheduledTasks';
@@ -40,9 +41,12 @@ import shareRouter, { initShareRoutes, getShareServices } from './routes/share';
 import shareLinkRouter, { initShareLinkRoutes } from './routes/shareLink';
 import { kbRouter, initKbRoutes } from './routes/kb';
 import { authMiddleware } from './middleware/auth';
+import { callChainMiddleware } from './middleware/callChain';
+import { requestIdMiddleware } from './middleware/requestId';
 import { httpsOnly } from './middleware/httpsOnly';
 import { loadConfig, getSlidesDir } from './config/index';
 import cookieParser from 'cookie-parser';
+import { runMigrations } from './config/migration.js';
 import { cleanupOrphanedTasks } from './services/a2a/taskCleanup';
 import { initializeScheduler, shutdownScheduler } from './services/schedulerService';
 import { initializeTaskExecutor, shutdownTaskExecutor } from './services/taskExecutor/index.js';
@@ -51,36 +55,83 @@ import { logSdkConfig } from './config/sdkConfig.js';
 import { initializeEngine, logEngineConfig } from './config/engineConfig.js';
 import { initializeMarketplaceUpdateService, shutdownMarketplaceUpdateService } from './services/marketplaceUpdateService.js';
 import { getEngineStatus } from './engines/index.js';
+import gitVersionsRouter from './routes/gitVersions';
+import { syncBuiltinMarketplaces } from './services/builtinMarketplaceService.js';
 
 dotenv.config();
+
+// Builtin marketplace initialization is handled by builtinMarketplaceService.ts
 
 // ============================================================================
 // Global Error Handlers - Prevent process crashes
 // ============================================================================
 
+// EPIPE Guard: Prevent infinite loop when stdout/stderr pipes are broken.
+// When the launching terminal is closed, stdout/stderr become broken pipes.
+// Any console.log/error call will then throw EPIPE, and if an uncaughtException
+// handler also uses console.error, it creates an infinite recursion:
+//   uncaughtException → console.error() → EPIPE → uncaughtException → ...
+// These handlers silently swallow EPIPE errors on stdout/stderr to break the cycle.
+process.stdout.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EPIPE') return;
+  // For non-EPIPE errors, we can't safely write to stdout, so just ignore
+});
+process.stderr.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EPIPE') return;
+  // For non-EPIPE errors, we can't safely write to stderr, so just ignore
+});
+
+// Safe logging helper: writes to stderr only if the stream is still writable.
+// Falls back silently if the pipe is broken, preventing EPIPE cascades.
+function safeErrorLog(...args: unknown[]): void {
+  try {
+    if (process.stderr.writable) {
+      console.error(...args);
+    }
+  } catch {
+    // If writing fails (e.g., EPIPE), silently ignore to prevent recursion
+  }
+}
+
 // Handle uncaught exceptions
-process.on('uncaughtException', (error: Error) => {
-  console.error('[Fatal] Uncaught Exception:', error);
-  console.error('[Fatal] Stack:', error.stack);
+process.on('uncaughtException', (error: Error & { code?: string }) => {
+  // Silently ignore EPIPE errors to prevent infinite recursion.
+  // EPIPE occurs when stdout/stderr pipes are broken (e.g., terminal closed).
+  if (error.code === 'EPIPE') {
+    return;
+  }
+  safeErrorLog('[Fatal] Uncaught Exception:', error);
+  safeErrorLog('[Fatal] Stack:', error.stack);
   // Don't exit the process - log and continue
   // This prevents the entire server from crashing due to a single unhandled error
 });
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
-  console.error('[Fatal] Unhandled Promise Rejection at:', promise);
-  console.error('[Fatal] Reason:', reason);
+  // Silently ignore EPIPE-related rejections
+  if (reason && (reason.code === 'EPIPE' || (reason instanceof Error && (reason as any).code === 'EPIPE'))) {
+    return;
+  }
+  safeErrorLog('[Fatal] Unhandled Promise Rejection at:', promise);
+  safeErrorLog('[Fatal] Reason:', reason);
   // Don't exit the process - log and continue
   // This is especially important for MCP fetch operations and other async code
 });
 
 // Handle uncaught exceptions in async functions
-process.on('uncaughtExceptionMonitor', (error: Error, origin: string) => {
-  console.error('[Monitor] Uncaught Exception Monitor triggered');
-  console.error('[Monitor] Origin:', origin);
-  console.error('[Monitor] Error:', error);
-  console.error('[Monitor] Stack:', error.stack);
+process.on('uncaughtExceptionMonitor', (error: Error & { code?: string }, origin: string) => {
+  // Skip EPIPE errors in monitor as well
+  if (error.code === 'EPIPE') {
+    return;
+  }
+  safeErrorLog('[Monitor] Uncaught Exception Monitor triggered');
+  safeErrorLog('[Monitor] Origin:', origin);
+  safeErrorLog('[Monitor] Error:', error);
+  safeErrorLog('[Monitor] Stack:', error.stack);
 });
+
+// Run directory migrations (from legacy layout to unified ~/.agentstudio/)
+runMigrations();
 
 // Initialize and log engine configuration at startup
 initializeEngine();
@@ -264,9 +315,14 @@ const app: express.Express = express();
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'X-Requested-With'],
-    exposedHeaders: ['Content-Range', 'X-Content-Range']
+    allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'X-Requested-With', 'X-Project-Path', 'X-Call-Chain', 'X-Request-ID'],
+    exposedHeaders: ['Content-Range', 'X-Content-Range', 'X-Call-Chain', 'X-Request-ID']
   }));
+
+  // X-Call-Chain: outermost first, append this service on every response (e.g. nginx->as-mate->as-mate-chat)
+  app.use(callChainMiddleware);
+  // X-Request-ID: pass through or generate, set on request and response
+  app.use(requestIdMiddleware);
 
   // JSON parser - skip /api/slack (needs raw body for signature verification)
   app.use((req, res, next) => {
@@ -348,7 +404,8 @@ const app: express.Express = express();
   }
 
   // 5. Marketplace Update Service: Initialize background update checker
-  const enableMarketplaceUpdates = process.env.ENABLE_MARKETPLACE_UPDATES !== 'false'; // Default to true
+  // Default to DISABLED - builtin marketplaces use the reinitialize-builtin API instead
+  const enableMarketplaceUpdates = process.env.ENABLE_MARKETPLACE_UPDATES === 'true'; // Default to false
   console.info('[MarketplaceUpdate] Initializing marketplace update service...');
   try {
     initializeMarketplaceUpdateService({
@@ -359,6 +416,21 @@ const app: express.Express = express();
     console.info('[MarketplaceUpdate] Marketplace update service initialized');
   } catch (error) {
     console.error('[MarketplaceUpdate] Error initializing marketplace update service:', error);
+  }
+
+  // 6. Builtin Marketplaces: Auto-register and install from local paths
+  if (process.env.BUILTIN_MARKETPLACES) {
+    console.info('[BuiltinMarketplaces] Initializing builtin marketplaces...');
+    try {
+      const result = await syncBuiltinMarketplaces();
+      if (result.success) {
+        console.info(`[BuiltinMarketplaces] Initialized in ${result.duration}ms`);
+      } else {
+        console.error(`[BuiltinMarketplaces] Failed: ${result.error}`);
+      }
+    } catch (error) {
+      console.error('[BuiltinMarketplaces] Error:', error);
+    }
   }
 
   // Static files - serve embedded frontend (for npm package) or development frontend
@@ -484,9 +556,11 @@ const app: express.Express = express();
   app.use('/api/commands', authMiddleware, commandsRouter);
   app.use('/api/subagents', authMiddleware, subagentsRouter);
   app.use('/api/projects', authMiddleware, projectsRouter);
+  app.use('/api/projects/:projectId/versions', authMiddleware, gitVersionsRouter);
   app.use('/api/a2a', authMiddleware, a2aManagementRouter); // A2A management routes with user auth
   app.use('/api/skills', authMiddleware, skillsRouter);
   app.use('/api/plugins', authMiddleware, pluginsRouter);
+  app.use('/api/marketplace-skills', authMiddleware, marketplaceSkillsRouter);
   app.use('/api/scheduled-tasks', authMiddleware, scheduledTasksRouter);
   app.use('/api/mcp-admin-management', authMiddleware, mcpAdminManagementRouter); // MCP Admin management with JWT auth
   app.use('/api/cloudflare-tunnel', authMiddleware, cloudflareTunnelRouter); // Cloudflare Tunnel management
