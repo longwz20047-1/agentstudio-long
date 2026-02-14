@@ -3,8 +3,10 @@
 import express from 'express';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import { pipeline } from 'stream/promises';
 import { ShareService } from '../services/shareService.js';
 import { ShareContentService } from '../services/shareContentService.js';
+import { getMinioFileStream } from '../services/minioService.js';
 
 const router: express.Router = express.Router();
 
@@ -187,6 +189,17 @@ router.get('/:token/kb/tags', validateLinkCookie, async (req: express.Request, r
   }
 });
 
+// 链接分享 - 树形文档分类标签
+router.get('/:token/kb/tag-tree', validateLinkCookie, async (req: express.Request, res: express.Response) => {
+  try {
+    const share = (req as any).share;
+    const data = await contentService.getTagTree(share.id);
+    res.json({ success: true, data });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // 链接分享 - 文档列表
 router.get('/:token/kb/documents', validateLinkCookie, async (req: express.Request, res: express.Response) => {
   try {
@@ -237,15 +250,32 @@ router.get('/:token/doc/download', validateLinkCookie, async (req: express.Reque
     const docId = req.query.docId as string | undefined;
     const downloadInfo = await contentService.getDownloadInfo(share.id, docId);
 
-    res.setHeader('Content-Type', downloadInfo.fileType || 'application/octet-stream');
+    const contentType = downloadInfo.fileType && downloadInfo.fileType.includes('/')
+      ? downloadInfo.fileType
+      : 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(downloadInfo.fileName)}"`);
-    res.setHeader('Content-Length', downloadInfo.fileSize);
+    if (downloadInfo.fileSize) {
+      res.setHeader('Content-Length', downloadInfo.fileSize);
+    }
 
-    const fileStream = fs.createReadStream(downloadInfo.filePath);
-    fileStream.pipe(res);
+    if (downloadInfo.isMinioPath) {
+      // MinIO 存储：通过 MinIO SDK 认证下载
+      const fileStream = await getMinioFileStream(downloadInfo.filePath);
+      await pipeline(fileStream, res);
+    } else {
+      // 本地文件
+      const fileStream = fs.createReadStream(downloadInfo.filePath);
+      fileStream.pipe(res);
+    }
   } catch (error: any) {
-    const status = error.message === 'FILE_NOT_FOUND' ? 404 : 500;
-    res.status(status).json({ success: false, error: error.message });
+    if (!res.headersSent) {
+      res.removeHeader('Content-Type');
+      res.removeHeader('Content-Disposition');
+      res.removeHeader('Content-Length');
+      const status = error.message === 'FILE_NOT_FOUND' ? 404 : 500;
+      res.status(status).json({ success: false, error: error.message });
+    }
   }
 });
 

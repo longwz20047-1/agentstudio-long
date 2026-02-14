@@ -3,9 +3,11 @@
 
 import express from 'express';
 import * as fs from 'fs';
+import { pipeline } from 'stream/promises';
 import { ShareService } from '../services/shareService.js';
 import { ShareContentService } from '../services/shareContentService.js';
 import { weknoraUserService } from '../services/weknoraUserService.js';
+import { getMinioFileStream } from '../services/minioService.js';
 
 const router: express.Router = express.Router();
 
@@ -423,6 +425,20 @@ router.get('/:shareId/kb/tags', async (req: express.Request, res: express.Respon
   }
 });
 
+// 获取知识库的树形文档分类标签
+router.get('/:shareId/kb/tag-tree', async (req: express.Request, res: express.Response) => {
+  try {
+    const access = await verifyAccess(req, res, req.params.shareId);
+    if (!access) return;
+
+    const data = await contentService.getTagTree(req.params.shareId);
+    res.json({ success: true, data });
+  } catch (error: any) {
+    const status = error.message === 'SHARE_NOT_FOUND' ? 404 : 500;
+    res.status(status).json({ success: false, error: error.message });
+  }
+});
+
 router.get('/:shareId/kb/documents', async (req: express.Request, res: express.Response) => {
   try {
     const access = await verifyAccess(req, res, req.params.shareId);
@@ -482,15 +498,33 @@ router.get('/:shareId/doc/download', async (req: express.Request, res: express.R
 
     await shareService.logAccess(req.params.shareId, 'download', getUserId(req), req.ip);
 
-    res.setHeader('Content-Type', downloadInfo.fileType || 'application/octet-stream');
+    // fileType 可能是 "pdf" 等非标准 MIME，需包含 "/" 才是合法 Content-Type
+    const contentType = downloadInfo.fileType && downloadInfo.fileType.includes('/')
+      ? downloadInfo.fileType
+      : 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(downloadInfo.fileName)}"`);
-    res.setHeader('Content-Length', downloadInfo.fileSize);
+    if (downloadInfo.fileSize) {
+      res.setHeader('Content-Length', downloadInfo.fileSize);
+    }
 
-    const fileStream = fs.createReadStream(downloadInfo.filePath);
-    fileStream.pipe(res);
+    if (downloadInfo.isMinioPath) {
+      // MinIO 存储：通过 MinIO SDK 认证下载
+      const fileStream = await getMinioFileStream(downloadInfo.filePath);
+      await pipeline(fileStream, res);
+    } else {
+      // 本地文件
+      const fileStream = fs.createReadStream(downloadInfo.filePath);
+      fileStream.pipe(res);
+    }
   } catch (error: any) {
-    const status = error.message === 'FILE_NOT_FOUND' ? 404 : 500;
-    res.status(status).json({ success: false, error: error.message });
+    if (!res.headersSent) {
+      res.removeHeader('Content-Type');
+      res.removeHeader('Content-Disposition');
+      res.removeHeader('Content-Length');
+      const status = error.message === 'FILE_NOT_FOUND' ? 404 : 500;
+      res.status(status).json({ success: false, error: error.message });
+    }
   }
 });
 

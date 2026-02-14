@@ -2,6 +2,18 @@
 import { Pool } from 'pg';
 import path from 'path';
 import { ShareService } from './shareService.js';
+import { TagService } from './tagService.js';
+
+/**
+ * 将 MinIO 存储路径转换为 HTTP URL
+ * 例如: "minio:\weknora-files\10001\abc\file.png" → "http://host:9000/weknora-files/10001/abc/file.png"
+ */
+function minioPathToUrl(filePath: string): string {
+  const minioEndpoint = process.env.WEKNORA_MINIO_ENDPOINT || 'http://192.168.100.30:9000';
+  // 去掉 "minio:" 或 "minio\" 前缀，统一斜杠
+  const objectPath = filePath.replace(/^minio[:\\/]+/, '').replace(/\\/g, '/');
+  return `${minioEndpoint}/${objectPath}`;
+}
 
 export class ShareContentService {
   constructor(
@@ -245,12 +257,17 @@ export class ShareContentService {
     const doc = result.rows[0];
     if (!doc.file_path) throw new Error('FILE_NOT_FOUND');
 
-    // 路径安全校验：确保文件路径在允许的目录范围内
-    const allowedBase = process.env.WEKNORA_FILES_DIR;
-    if (allowedBase) {
-      const resolved = path.resolve(doc.file_path);
-      if (!resolved.startsWith(path.resolve(allowedBase))) {
-        throw new Error('FILE_NOT_FOUND');
+    // 判断是否为 MinIO 存储路径（格式: minio:\bucket\path 或 minio:/bucket/path）
+    const isMinioPath = /^minio[:\\/]/.test(doc.file_path);
+
+    if (!isMinioPath) {
+      // 本地文件路径安全校验
+      const allowedBase = process.env.WEKNORA_FILES_DIR;
+      if (allowedBase) {
+        const resolved = path.resolve(doc.file_path);
+        if (!resolved.startsWith(path.resolve(allowedBase))) {
+          throw new Error('FILE_NOT_FOUND');
+        }
       }
     }
 
@@ -259,6 +276,7 @@ export class ShareContentService {
       fileType: doc.file_type,
       fileSize: doc.file_size,
       filePath: doc.file_path,
+      isMinioPath,
     };
   }
 
@@ -296,6 +314,29 @@ export class ShareContentService {
         knowledge_count: parseInt(row.knowledge_count) || 0,
       })),
     };
+  }
+
+  /**
+   * 获取知识库的树形文档分类标签（只读）
+   */
+  async getTagTree(shareId: string) {
+    const share = await this.shareService.getShareById(shareId);
+    if (!share) throw new Error('SHARE_NOT_FOUND');
+
+    const kbId = share.share_type === 'knowledge_base'
+      ? share.target_id
+      : share.target_kb_id;
+
+    if (!kbId) throw new Error('KB_NOT_FOUND');
+
+    const tagService = new TagService(this.pool);
+    const [tags, counts] = await Promise.all([
+      tagService.getTagsByKbId(kbId),
+      tagService.getDocumentCounts(kbId),
+    ]);
+    const tree = TagService.buildTagTree(tags);
+
+    return { items: tree, total: tags.length, total_count: counts.total_count, untagged_count: counts.untagged_count };
   }
 
   /**

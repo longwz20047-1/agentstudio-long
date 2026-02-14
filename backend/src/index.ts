@@ -38,6 +38,7 @@ import hooksRouter from './routes/hooks';
 import usersRouter from './routes/users';
 import shareRouter, { initShareRoutes, getShareServices } from './routes/share';
 import shareLinkRouter, { initShareLinkRoutes } from './routes/shareLink';
+import { kbRouter, initKbRoutes } from './routes/kb';
 import { authMiddleware } from './middleware/auth';
 import { httpsOnly } from './middleware/httpsOnly';
 import { loadConfig, getSlidesDir } from './config/index';
@@ -330,6 +331,13 @@ const app: express.Express = express();
     console.error('[ShareRoutes] Failed to initialize share routes:', error);
   }
 
+  // 3.6. KB Service: Initialize KB tag management routes
+  try {
+    initKbRoutes();
+  } catch (error) {
+    console.error('[KbRoutes] Failed to initialize KB routes:', error);
+  }
+
   // 4. Tunnel Service: Initialize WebSocket tunnel for external access
   console.info('[Tunnel] Initializing tunnel service...');
   try {
@@ -493,6 +501,7 @@ const app: express.Express = express();
   app.use('/api/hooks', authMiddleware, hooksRouter); // Hooks management (Claude only)
   app.use('/api/users', authMiddleware, usersRouter); // User management
   app.use('/api/share', authMiddleware, shareRouter); // Share management
+  app.use('/api/kb', authMiddleware, kbRouter); // KB tag management
   app.use('/api/media', mediaAuthRouter); // Media auth endpoints
   app.use('/media', mediaRouter); // Remove authMiddleware - media files are now public
 
