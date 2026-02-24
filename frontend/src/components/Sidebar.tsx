@@ -25,7 +25,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { ServiceStatusIndicator } from './ServiceStatusIndicator';
 import { ServiceManagementModal } from './ServiceManagementModal';
-import { UpdateNotification } from './UpdateNotification';
+
 import { useMobileContext } from '../contexts/MobileContext';
 import useEngine from '../hooks/useEngine';
 import type { EngineFeatureKey, ConfigCapabilityKey } from '../types/engine';
@@ -354,8 +354,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
       {/* Footer */}
       <div className="flex-shrink-0 p-4 border-t border-gray-200 dark:border-gray-700">
         <div className="space-y-3">
-          {/* Update Notification */}
-          <UpdateNotification compact />
           {/* Service Status Indicator */}
           <ServiceStatusIndicator onManageServices={() => setShowServiceManagement(true)} />
         </div>
