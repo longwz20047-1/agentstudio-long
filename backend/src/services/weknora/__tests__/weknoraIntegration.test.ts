@@ -53,4 +53,37 @@ describe('WeKnora Integration', () => {
       expect(toolName).toBe('mcp__weknora__weknora_search');
     });
   });
+
+  describe('WeknoraContext with knowledge_ids', () => {
+    const contextWithKnowledgeIds: WeknoraContext = {
+      api_key: 'test-api-key',
+      kb_ids: ['kb-1'],
+      knowledge_ids: ['doc-1', 'doc-2'],
+      base_url: 'http://test-weknora.local'
+    };
+
+    it('should integrate with knowledge_ids in context', async () => {
+      const queryOptions: any = {};
+      await integrateWeKnoraMcpServer(queryOptions, contextWithKnowledgeIds);
+      expect(queryOptions.mcpServers.weknora).toBeDefined();
+    });
+
+    it('should work without knowledge_ids (backward compatible)', async () => {
+      const queryOptions: any = {};
+      await integrateWeKnoraMcpServer(queryOptions, mockContext);
+      expect(queryOptions.mcpServers.weknora).toBeDefined();
+    });
+
+    it('should work with only knowledge_ids and empty kb_ids', async () => {
+      const contextOnlyDocs: WeknoraContext = {
+        api_key: 'test-api-key',
+        kb_ids: [],
+        knowledge_ids: ['doc-1'],
+        base_url: 'http://test-weknora.local'
+      };
+      const queryOptions: any = {};
+      await integrateWeKnoraMcpServer(queryOptions, contextOnlyDocs);
+      expect(queryOptions.mcpServers.weknora).toBeDefined();
+    });
+  });
 });

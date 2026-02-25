@@ -509,9 +509,9 @@ export async function buildQueryOptions(
 
   // Integrate WeKnora SDK MCP server (only when context is provided and valid)
   const weknoraContext = extendedOptions?.weknoraContext;
-  if (weknoraContext?.api_key && weknoraContext?.kb_ids?.length > 0) {
+  if (weknoraContext?.api_key && (weknoraContext?.kb_ids?.length > 0 || weknoraContext?.knowledge_ids?.length > 0)) {
     await integrateWeKnoraMcpServer(queryOptions, weknoraContext);
-    console.log('✅ [WeKnora] MCP Server integrated with', weknoraContext.kb_ids.length, 'knowledge bases');
+    console.log(`✅ [WeKnora] MCP Server integrated: ${weknoraContext.kb_ids.length} KBs, ${weknoraContext.knowledge_ids?.length || 0} docs`);
   }
 
   // Integrate Graphiti Memory SDK MCP server (only when context is provided and valid)

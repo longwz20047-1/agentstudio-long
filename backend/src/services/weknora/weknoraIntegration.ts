@@ -14,6 +14,7 @@ import { z } from 'zod';
 export interface WeknoraContext {
   api_key: string;
   kb_ids: string[];
+  knowledge_ids?: string[];
   base_url: string;
 }
 
@@ -55,7 +56,7 @@ export async function integrateWeKnoraMcpServer(
  * Credentials are captured via closure at creation time.
  */
 async function createWeKnoraSdkMcpServer(context: WeknoraContext) {
-  const { api_key, kb_ids, base_url } = context;
+  const { api_key, kb_ids, knowledge_ids, base_url } = context;
 
   const weknoraSearchTool = tool(
     'weknora_search',
@@ -73,7 +74,7 @@ This tool queries the configured knowledge bases to find documents matching your
 - Use natural language for semantic search
 - Break complex queries into smaller, focused searches
 
-**Configured knowledge bases:** ${kb_ids.length} selected
+**Configured knowledge bases:** ${kb_ids.length} selected${knowledge_ids?.length ? `, ${knowledge_ids.length} specific documents` : ''}
 
 If results are insufficient, try rephrasing the query or breaking it into smaller parts.`,
 
@@ -92,6 +93,7 @@ If results are insufficient, try rephrasing the query or breaking it into smalle
       console.log('🔍 [WeKnora] Tool called with args:', {
         query,
         kb_ids_count: kb_ids.length,
+        knowledge_ids_count: knowledge_ids?.length || 0,
         base_url,
         api_key_present: !!api_key,
         api_key_preview: api_key ? `${api_key.substring(0, 10)}...` : 'MISSING'
@@ -99,10 +101,13 @@ If results are insufficient, try rephrasing the query or breaking it into smalle
 
       try {
         const requestUrl = `${base_url}/api/v1/knowledge-search`;
-        const requestBody = {
-          query: query,  // JSON tag is "query" (lowercase)
-          knowledge_base_ids: kb_ids,
+        const requestBody: Record<string, unknown> = {
+          query: query,
+          knowledge_base_ids: kb_ids.length > 0 ? kb_ids : undefined,
         };
+        if (knowledge_ids && knowledge_ids.length > 0) {
+          requestBody.knowledge_ids = knowledge_ids;
+        }
 
         console.log('🌐 [WeKnora] Calling API:', requestUrl);
         console.log('📤 [WeKnora] Request body:', JSON.stringify(requestBody));
