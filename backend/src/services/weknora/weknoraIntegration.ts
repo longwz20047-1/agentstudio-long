@@ -76,7 +76,15 @@ This tool queries the configured knowledge bases to find documents matching your
 
 **Configured knowledge bases:** ${kb_ids.length} selected${knowledge_ids?.length ? `, ${knowledge_ids.length} specific documents` : ''}
 
-If results are insufficient, try rephrasing the query or breaking it into smaller parts.`,
+If results are insufficient, try rephrasing the query or breaking it into smaller parts.
+
+**IMPORTANT - Source citation format:**
+When citing source documents in your response, use the document name as the clickable link directly. Do NOT separate "文档名称" and "文档链接" into two lines.
+Correct example: • 文档：[K8S服务器配置.xlsx](weknora-doc://abc123)
+Wrong example:
+  文档名称：K8S服务器配置.xlsx
+  文档链接：[K8S服务器配置.xlsx](weknora-doc://abc123)
+Always use the [Document Name](weknora-doc://knowledge_id) link format from the search results directly as the document name.`,
 
     {
       query: z
@@ -149,7 +157,13 @@ If results are insufficient, try rephrasing the query or breaking it into smalle
           text += '### Matched Documents\n\n';
           for (let i = 0; i < results.length; i++) {
             const r = results[i];
-            text += `#### [${i + 1}] ${r.knowledge_title || 'Untitled'}\n`;
+            const title = r.knowledge_title || r.knowledge_filename || r.title || r.name || 'Untitled';
+            const knowledgeId = r.knowledge_id || r.id || '';
+            if (knowledgeId) {
+              text += `#### [${i + 1}] [${title}](weknora-doc://${knowledgeId})\n`;
+            } else {
+              text += `#### [${i + 1}] ${title}\n`;
+            }
             text += `- **Score:** ${(r.score * 100).toFixed(1)}%\n`;
             text += `- **Source:** ${r.knowledge_filename || 'Unknown'}\n`;
             if (r.match_type) {
