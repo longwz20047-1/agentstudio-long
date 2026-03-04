@@ -32,7 +32,15 @@ Format: [Page Title](URL) or numbered list with links.
 Example:
   1. [Docker 官方文档](https://docs.docker.com/get-started/) - 容器化入门指南
   2. [Kubernetes 教程](https://kubernetes.io/docs/tutorials/) - K8s 官方教程
-Always cite the original URL so users can click to visit the source page.`;
+Always cite the original URL so users can click to visit the source page.
+
+**IMPORTANT - Image rendering:**
+When search results contain image thumbnails (marked with ![](url) syntax), you MUST include them in your response using markdown image syntax.
+Copy the image markdown exactly as provided in the results. Do NOT convert images to text links.
+Example for image results:
+  [![Cute dog photo](https://thumb.example.com/dog.jpg)](https://full.example.com/dog.jpg)
+  Source: [Example.com](https://example.com/dogs)
+This will render the image inline in the chat.`;
 
 export async function integrateSearchMcpServer(
   queryOptions: any,
