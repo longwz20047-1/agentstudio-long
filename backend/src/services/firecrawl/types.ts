@@ -8,7 +8,11 @@ export interface FirecrawlConfig {
 export function getFirecrawlConfigFromEnv(): FirecrawlConfig | null {
   const url = process.env.FIRECRAWL_URL;
   const apiKey = process.env.FIRECRAWL_API_KEY;
-  return url ? { base_url: url.replace(/\/+$/, ''), api_key: apiKey || 'placeholder' } : null;
+  if (!url) return null;
+  if (!apiKey) {
+    console.warn('⚠️ [Firecrawl] FIRECRAWL_API_KEY not set, using placeholder (self-hosted mode)');
+  }
+  return { base_url: url.replace(/\/+$/, ''), api_key: apiKey || 'placeholder' };
 }
 
 export interface ScrapeResult {

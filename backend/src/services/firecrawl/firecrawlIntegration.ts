@@ -30,12 +30,10 @@ export async function integrateFirecrawlMcpServer(
   config: FirecrawlConfig
 ): Promise<void> {
   try {
-    // Health check (2s timeout)
+    // Health check: lightweight connectivity test (2s timeout)
+    // Uses GET to root endpoint instead of a real scrape to avoid wasting API credits
     try {
-      await fetch(`${config.base_url}/v1/scrape`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.api_key}` },
-        body: JSON.stringify({ url: 'https://example.com', formats: ['markdown'] }),
+      await fetch(config.base_url, {
         signal: AbortSignal.timeout(2000),
       });
     } catch {

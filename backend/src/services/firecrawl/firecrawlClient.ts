@@ -134,30 +134,32 @@ export class FirecrawlClient {
   }): Promise<string[]> {
     validateUrl(url);
 
-    const resp = await fetch(`${this.baseUrl}/v1/map`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        url,
-        search: options?.search,
-        limit: options?.limit ?? 50,
-        includeSubdomains: true,
-      }),
-      signal: AbortSignal.timeout(30000),
+    return this.withRetry(async () => {
+      const resp = await fetch(`${this.baseUrl}/v1/map`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          url,
+          search: options?.search,
+          limit: options?.limit ?? 50,
+          includeSubdomains: true,
+        }),
+        signal: AbortSignal.timeout(30000),
+      });
+
+      if (!resp.ok) {
+        const errorText = await resp.text();
+        const err: any = new Error(`Firecrawl map ${resp.status}: ${errorText}`);
+        err.status = resp.status;
+        throw err;
+      }
+
+      const data: MapResponse = await resp.json();
+      if (!data.success) throw new Error('Firecrawl map returned success=false');
+      return data.links || [];
     });
-
-    if (!resp.ok) {
-      const errorText = await resp.text();
-      const err: any = new Error(`Firecrawl map ${resp.status}: ${errorText}`);
-      err.status = resp.status;
-      throw err;
-    }
-
-    const data: MapResponse = await resp.json();
-    if (!data.success) throw new Error('Firecrawl map returned success=false');
-    return data.links || [];
   }
 }
