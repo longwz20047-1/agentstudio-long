@@ -42,6 +42,8 @@ export function dedupeAndRank(results: SearXNGResult[], maxResults: number): Pro
         score: r.score,
         category: r.category,
         publishedDate: r.publishedDate,
+        thumbnail: r.thumbnail,
+        img_src: r.img_src,
       });
       const entry = map.get(key)!;
       entry.snippet = r.content;
@@ -59,6 +61,8 @@ export function dedupeAndRank(results: SearXNGResult[], maxResults: number): Pro
       score: entry.score,
       category: entry.category,
       publishedDate: entry.publishedDate,
+      thumbnail: entry.thumbnail,
+      img_src: entry.img_src,
     });
   }
 

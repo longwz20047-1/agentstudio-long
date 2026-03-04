@@ -24,7 +24,15 @@ Tips:
 - Use categories for broad search, engines for targeted search
 - engines="sogou wechat" for WeChat articles
 - language="zh-CN" for Chinese, "en" for English
-- categories="it" + engines="github,stackoverflow" for code search`;
+- categories="it" + engines="github,stackoverflow" for code search
+
+**IMPORTANT - Source citation format:**
+When presenting search results in your response, ALWAYS include clickable source links.
+Format: [Page Title](URL) or numbered list with links.
+Example:
+  1. [Docker 官方文档](https://docs.docker.com/get-started/) - 容器化入门指南
+  2. [Kubernetes 教程](https://kubernetes.io/docs/tutorials/) - K8s 官方教程
+Always cite the original URL so users can click to visit the source page.`;
 
 export async function integrateSearchMcpServer(
   queryOptions: any,
@@ -94,6 +102,12 @@ export async function integrateSearchMcpServer(
               text += `### [${i + 1}] [${r.title}](${r.url})\n`;
               text += `- **Engines:** ${r.engines.join(', ')} | **Score:** ${r.score.toFixed(2)}\n`;
               if (r.publishedDate) text += `- **Date:** ${r.publishedDate}\n`;
+              // Render image thumbnail for image search results
+              if (r.img_src) {
+                text += `\n[![${r.title}](${r.thumbnail || r.img_src})](${r.img_src})\n`;
+              } else if (r.thumbnail) {
+                text += `\n![${r.title}](${r.thumbnail})\n`;
+              }
               if (r.snippet) text += `\n> ${r.snippet}\n`;
               text += '\n';
             }

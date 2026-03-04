@@ -53,4 +53,6 @@ export interface ProcessedResult {
   score: number;
   category: string;
   publishedDate?: string;
+  thumbnail?: string;
+  img_src?: string;
 }
