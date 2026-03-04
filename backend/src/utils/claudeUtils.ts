@@ -19,6 +19,8 @@ import { integrateWeKnoraMcpServer, type WeknoraContext } from '../services/wekn
 import { integrateGraphitiMcpServer } from '../services/graphiti/graphitiIntegration.js';
 import { createGraphitiHooks } from '../services/graphiti/hooks/index.js';
 import type { GraphitiContext } from '../services/graphiti/types.js';
+import { integrateSearchMcpServer, getSearxngConfigFromEnv } from '../services/searxng/index.js';
+import { integrateFirecrawlMcpServer, getFirecrawlConfigFromEnv } from '../services/firecrawl/index.js';
 
 export type { SessionRef };
 import { MCP_SERVER_CONFIG_FILE } from '../config/paths.js';
@@ -529,6 +531,20 @@ export async function buildQueryOptions(
     const groupCount = (graphitiContext.group_ids?.length || 0) + 1;
     console.log('✅ [Graphiti] Memory MCP Server + Hooks integrated for user', graphitiContext.user_id, 'with', groupCount, 'groups');
     console.log('🔧 [Graphiti] Hooks configured:', Object.keys(graphitiHooks));
+  }
+
+  // Integrate SearXNG SDK MCP server (environment variable driven, auto-enabled)
+  const searxngConfig = getSearxngConfigFromEnv();
+  if (searxngConfig) {
+    await integrateSearchMcpServer(queryOptions, searxngConfig);
+    console.log(`✅ [SearXNG] MCP Server integrated: ${searxngConfig.base_url}`);
+  }
+
+  // Integrate Firecrawl SDK MCP server (environment variable driven, auto-enabled)
+  const firecrawlConfig = getFirecrawlConfigFromEnv();
+  if (firecrawlConfig) {
+    await integrateFirecrawlMcpServer(queryOptions, firecrawlConfig);
+    console.log(`✅ [Firecrawl] MCP Server integrated: ${firecrawlConfig.base_url}`);
   }
 
   // Integrate AskUserQuestion SDK MCP server
