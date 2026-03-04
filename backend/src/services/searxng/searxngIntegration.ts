@@ -79,43 +79,55 @@ export async function integrateSearchMcpServer(
 
           const processed = dedupeAndRank(response.results, max_results ?? 10);
 
-          let text = `## Search Results\n\n`;
-          text += `**Query:** ${query}\n`;
-          text += `**Found:** ${response.number_of_results} total, showing ${processed.length} (deduplicated)\n`;
-          if (response.suggestions.length > 0) {
-            text += `**Suggestions:** ${response.suggestions.join(', ')}\n`;
-          }
-          if (response.answers.length > 0) {
-            text += `**Answers:** ${response.answers.join('; ')}\n`;
-          }
-          if (response.unresponsive_engines.length > 0) {
-            text += `**Unresponsive engines:** ${response.unresponsive_engines.map(e => e[0]).join(', ')}\n`;
-          }
-
           // Detect if this is an image search
           const hasImages = processed.some(r => r.img_src || r.thumbnail);
-          if (hasImages) {
-            text += `\n**⚠️ IMAGE RESULTS: Copy all image markdown below into your response EXACTLY as-is so they render visually. Do NOT summarize as text.**\n`;
-          }
-          text += '\n';
 
-          if (processed.length > 0) {
+          let text = '';
+
+          if (hasImages) {
+            // Image search: build a ready-to-use visual gallery response
+            text += `为你搜索到 ${processed.length} 张「${query}」相关图片：\n\n`;
+
             for (let i = 0; i < processed.length; i++) {
               const r = processed[i];
-              text += `### [${i + 1}] [${r.title}](${r.url})\n`;
-              text += `- **Engines:** ${r.engines.join(', ')} | **Score:** ${r.score.toFixed(2)}\n`;
-              if (r.publishedDate) text += `- **Date:** ${r.publishedDate}\n`;
-              // Render image thumbnail for image search results
-              if (r.img_src) {
-                text += `\n[![${r.title}](${r.thumbnail || r.img_src})](${r.img_src})\n`;
-              } else if (r.thumbnail) {
-                text += `\n![${r.title}](${r.thumbnail})\n`;
+              const imgUrl = r.img_src || r.thumbnail || '';
+              const thumbUrl = r.thumbnail || r.img_src || '';
+              if (imgUrl) {
+                text += `[![${r.title}](${thumbUrl})](${imgUrl})\n`;
+                text += `**${i + 1}.** [${r.title}](${r.url})\n\n`;
               }
-              if (r.snippet) text += `\n> ${r.snippet}\n`;
-              text += '\n';
             }
+
+            text += `---\n来源引擎：${[...new Set(processed.flatMap(r => r.engines))].join(', ')}\n`;
+            text += `\n[INSTRUCTION TO ASSISTANT: The above is a complete response with inline images. Output it EXACTLY as-is to the user. Do NOT rewrite, summarize, or describe the images in text. The chat UI renders markdown images. If you convert images to text links, the user cannot see the pictures.]`;
           } else {
-            text += '_No results found. Try different keywords, categories, or engines._\n';
+            // Non-image search: standard text results
+            text += `## Search Results\n\n`;
+            text += `**Query:** ${query}\n`;
+            text += `**Found:** ${response.number_of_results} total, showing ${processed.length} (deduplicated)\n`;
+            if (response.suggestions.length > 0) {
+              text += `**Suggestions:** ${response.suggestions.join(', ')}\n`;
+            }
+            if (response.answers.length > 0) {
+              text += `**Answers:** ${response.answers.join('; ')}\n`;
+            }
+            if (response.unresponsive_engines.length > 0) {
+              text += `**Unresponsive engines:** ${response.unresponsive_engines.map(e => e[0]).join(', ')}\n`;
+            }
+            text += '\n';
+
+            if (processed.length > 0) {
+              for (let i = 0; i < processed.length; i++) {
+                const r = processed[i];
+                text += `### [${i + 1}] [${r.title}](${r.url})\n`;
+                text += `- **Engines:** ${r.engines.join(', ')} | **Score:** ${r.score.toFixed(2)}\n`;
+                if (r.publishedDate) text += `- **Date:** ${r.publishedDate}\n`;
+                if (r.snippet) text += `\n> ${r.snippet}\n`;
+                text += '\n';
+              }
+            } else {
+              text += '_No results found. Try different keywords, categories, or engines._\n';
+            }
           }
 
           return { content: [{ type: 'text', text }] };
