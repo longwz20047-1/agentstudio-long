@@ -26,21 +26,10 @@ Tips:
 - language="zh-CN" for Chinese, "en" for English
 - categories="it" + engines="github,stackoverflow" for code search
 
-**IMPORTANT - Source citation format:**
-When presenting search results in your response, ALWAYS include clickable source links.
-Format: [Page Title](URL) or numbered list with links.
-Example:
-  1. [Docker 官方文档](https://docs.docker.com/get-started/) - 容器化入门指南
-  2. [Kubernetes 教程](https://kubernetes.io/docs/tutorials/) - K8s 官方教程
-Always cite the original URL so users can click to visit the source page.
-
-**IMPORTANT - Image rendering:**
-When search results contain image thumbnails (marked with ![](url) syntax), you MUST include them in your response using markdown image syntax.
-Copy the image markdown exactly as provided in the results. Do NOT convert images to text links.
-Example for image results:
-  [![Cute dog photo](https://thumb.example.com/dog.jpg)](https://full.example.com/dog.jpg)
-  Source: [Example.com](https://example.com/dogs)
-This will render the image inline in the chat.`;
+**IMPORTANT - Response format rules:**
+1. ALWAYS include clickable source links: [Page Title](URL)
+2. For image search results (categories="images"): You MUST output the image markdown EXACTLY as provided in the tool results. Do NOT summarize images as text. Do NOT describe images in words. DIRECTLY copy every [![...](thumbnail)](full_url) line into your response so images render visually in the chat. This is critical - users expect to SEE the images, not read about them.
+3. For general/news results: Use numbered list with links and snippets.`;
 
 export async function integrateSearchMcpServer(
   queryOptions: any,
@@ -101,6 +90,12 @@ export async function integrateSearchMcpServer(
           }
           if (response.unresponsive_engines.length > 0) {
             text += `**Unresponsive engines:** ${response.unresponsive_engines.map(e => e[0]).join(', ')}\n`;
+          }
+
+          // Detect if this is an image search
+          const hasImages = processed.some(r => r.img_src || r.thumbnail);
+          if (hasImages) {
+            text += `\n**⚠️ IMAGE RESULTS: Copy all image markdown below into your response EXACTLY as-is so they render visually. Do NOT summarize as text.**\n`;
           }
           text += '\n';
 
