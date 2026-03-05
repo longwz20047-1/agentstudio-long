@@ -76,6 +76,21 @@ export class SkillStorage {
     return null;
   }
 
+  // Read SKILL.md content for a specific skill
+  async getSkillContent(skillId: string, scope?: 'user' | 'project'): Promise<string | null> {
+    const skill = await this.getSkill(skillId, scope);
+    if (!skill) return null;
+
+    const baseDir = skill.scope === 'user' ? this.userSkillsDir : this.projectSkillsDir;
+    const skillMdPath = path.join(baseDir, skillId, 'SKILL.md');
+
+    try {
+      return await fs.readFile(skillMdPath, 'utf8');
+    } catch {
+      return null;
+    }
+  }
+
   // Create skill
   async createSkill(
     skillData: {

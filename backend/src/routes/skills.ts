@@ -10,8 +10,8 @@ import type {
 
 const router: express.Router = express.Router();
 
-// Initialize skill storage
-const skillStorage = new SkillStorage();
+// Initialize skill storage (exported for reuse in other routes like a2a.ts)
+export const skillStorage = new SkillStorage();
 skillStorage.initialize().catch(console.error);
 
 // Validation schemas

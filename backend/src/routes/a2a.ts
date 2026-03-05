@@ -21,6 +21,7 @@
  */
 
 import express, { Router, Response } from 'express';
+import path from 'path';
 import { a2aAuth, type A2ARequest } from '../middleware/a2aAuth.js';
 import { a2aRateLimiter, a2aStrictRateLimiter } from '../middleware/rateLimiting.js';
 import {
@@ -57,6 +58,9 @@ import {
 } from '../services/a2a/cursorA2aService.js';
 import { CursorA2AAdapter } from '../engines/cursor/a2aAdapter.js';
 import { isCursorEngine } from '../config/engineConfig.js';
+import { skillStorage } from './skills.js';
+import { marketplaceSkillService } from '../services/marketplaceSkillService.js';
+import fsPromises from 'fs/promises';
 
 const router: Router = express.Router({ mergeParams: true });
 
@@ -100,6 +104,86 @@ function buildUserMessageContent(message: string, images?: A2AImageInput[]): Arr
   }
 
   return content;
+}
+
+// ============================================================================
+// Skill Command Detection
+// ============================================================================
+
+interface DetectedCommand {
+  isCommand: boolean;
+  skillId?: string;
+  args?: string;
+  /** Skill content to inject into systemPrompt (NOT as user message) */
+  skillContent?: string;
+  /** Clean user message (args only, or descriptive text if no args) */
+  userMessage?: string;
+}
+
+async function detectAndFormatSkillCommand(message: string): Promise<DetectedCommand> {
+  if (!message.startsWith('/')) return { isCommand: false };
+
+  const parts = message.slice(1).split(' ');
+  const skillId = parts[0];
+  if (!skillId) return { isCommand: false };
+
+  const args = parts.slice(1).join(' ') || undefined;
+
+  let content: string | null = null;
+
+  // 1. Try local skills (~/.claude/skills/)
+  const localSkill = await skillStorage.getSkill(skillId);
+  if (localSkill?.enabled) {
+    content = await skillStorage.getSkillContent(skillId);
+    console.log(`⚡ [A2A] Skill "${skillId}" found in local storage`);
+  }
+
+  // 2. Fallback: try plugin skills (marketplace)
+  if (!content) {
+    try {
+      const grouped = await marketplaceSkillService.getGroupedSkills();
+      for (const group of grouped.groups) {
+        const found = group.skills.find(s => s.name === skillId);
+        if (found?.sourcePath) {
+          const skillMdPath = path.join(found.sourcePath, 'SKILL.md');
+          console.log(`⚡ [A2A] Skill "${skillId}" found in plugin, reading: ${skillMdPath}`);
+          try {
+            content = await fsPromises.readFile(skillMdPath, 'utf8');
+          } catch (readErr) {
+            console.error(`⚡ [A2A] Failed to read SKILL.md at ${skillMdPath}:`, readErr);
+          }
+          break;
+        }
+      }
+      if (!content) {
+        console.log(`⚡ [A2A] Skill "${skillId}" not found in any source`);
+      }
+    } catch (e) {
+      console.warn('[A2A] Failed to search marketplace skills:', e);
+    }
+  }
+
+  if (!content) return { isCommand: false };
+
+  // Replace $ARGUMENTS placeholder in skill content
+  let skillContent = content;
+  if (args) {
+    skillContent = skillContent.replace(/\$ARGUMENTS/g, args);
+    // Append args at the end if $ARGUMENTS was not in the content
+    if (skillContent === content) {
+      skillContent = skillContent + '\n\nARGUMENTS: ' + args;
+    }
+  }
+
+  console.log(`⚡ [A2A] Skill "${skillId}" resolved, content length: ${skillContent.length}`);
+
+  return {
+    isCommand: true,
+    skillId,
+    args,
+    skillContent,
+    userMessage: args || `/${skillId}`,
+  };
 }
 
 // ============================================================================
@@ -323,8 +407,18 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       });
     }
 
-    const { message, sessionId, sessionMode = 'new', context, images } = validation.data;
+    const { message: rawMessage, sessionId, sessionMode = 'new', context, images } = validation.data;
     const stream = req.query.stream === 'true' || req.headers.accept === 'text/event-stream';
+
+    // Detect and format /skill command
+    const detected = await detectAndFormatSkillCommand(rawMessage);
+    // message: full skill content sent to SDK (so Claude actually executes the skill)
+    // historyMessage: clean user args saved to history (so frontend doesn't show skill source)
+    const message = detected.isCommand ? detected.skillContent! : rawMessage;
+    const historyMessage = detected.isCommand ? detected.userMessage! : rawMessage;
+    if (detected.isCommand) {
+      console.log(`⚡ [A2A] Skill command detected: /${detected.skillId}${detected.args ? ` (args: ${detected.args})` : ''}, skill content sent as message (${detected.skillContent!.length} chars), history shows: "${historyMessage}"`);
+    }
     
     if (images && images.length > 0) {
       console.log(`🖼️ [A2A] Received ${images.length} image(s) with message`);
@@ -571,10 +665,11 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
             type: 'user',
             message: {
               role: 'user',
-              content: buildUserMessageContent(message, images)
+              content: buildUserMessageContent(historyMessage, images)
             },
             sessionId: sessionId,
             timestamp: Date.now(),
+            ...(detected.isCommand ? { skillId: detected.skillId } : {}),
           };
           // 必须 await 确保写入完成，避免和后续流式事件写入交叉导致 JSON 损坏
           try {
@@ -589,10 +684,11 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
           type: 'user',
           message: {
             role: 'user',
-            content: buildUserMessageContent(message, images)
+            content: buildUserMessageContent(historyMessage, images)
           },
           sessionId: 'pending',
           timestamp: Date.now(),
+          ...(detected.isCommand ? { skillId: detected.skillId } : {}),
         };
 
         try {
@@ -676,10 +772,11 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
               type: 'user',
               message: {
                 role: 'user',
-                content: buildUserMessageContent(message, images)
+                content: buildUserMessageContent(historyMessage, images)
               },
               sessionId: sessionId,
               timestamp: Date.now(),
+              ...(detected.isCommand ? { skillId: detected.skillId } : {}),
             };
             try {
               await a2aHistoryService.appendEvent(a2aContext.workingDirectory, sessionId, userHistoryEvent);
@@ -712,10 +809,11 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
                     type: 'user',
                     message: {
                       role: 'user',
-                      content: buildUserMessageContent(message, images)
+                      content: buildUserMessageContent(historyMessage, images)
                     },
                     sessionId: capturedSessionId!,
                     timestamp: Date.now() - 1, // slightly before to ensure ordering
+                    ...(detected.isCommand ? { skillId: detected.skillId } : {}),
                   };
                   try {
                     await a2aHistoryService.appendEvent(a2aContext.workingDirectory, capturedSessionId!, userHistoryEvent);
@@ -807,18 +905,29 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
         }
         messageContent.push({ type: 'text', text: message });
 
-        const userMessage = {
+        // SDK message: contains full skill content for Claude to process
+        const sdkUserMessage = {
           type: 'user',
           message: {
             role: 'user',
-            content: buildUserMessageContent(message, images)
-          }
+            content: messageContent
+          },
+        };
+
+        // History message: contains clean args only (no skill source)
+        const historyUserMessage = {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: buildUserMessageContent(historyMessage, images)
+          },
+          ...(detected.isCommand ? { skillId: detected.skillId } : {}),
         };
 
         // Save user message to history first
         if (actualSessionId) {
           const userHistoryEvent = {
-            ...userMessage,
+            ...historyUserMessage,
             sessionId: actualSessionId,
             timestamp: Date.now(),
           };
@@ -830,7 +939,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
         }
 
         try {
-          await claudeSession.sendMessage(userMessage, async (sdkMessage: SDKMessage) => {
+          await claudeSession.sendMessage(sdkUserMessage, async (sdkMessage: SDKMessage) => {
             const eventData = {
               ...sdkMessage,
               sessionId: actualSessionId,
@@ -867,18 +976,36 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
         let tokensUsed = 0;
 
         try {
-          // Save user message to history first
-          const userMessage = {
+          // Build SDK message with full skill content
+          const sdkMessageContent: any[] = [];
+          if (images && images.length > 0) {
+            for (const img of images) {
+              sdkMessageContent.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } });
+            }
+          }
+          sdkMessageContent.push({ type: 'text', text: message });
+
+          const sdkUserMessage = {
             type: 'user',
             message: {
               role: 'user',
-              content: buildUserMessageContent(message, images)
-            }
+              content: sdkMessageContent
+            },
+          };
+
+          // History message: clean args only
+          const historyUserMessage = {
+            type: 'user',
+            message: {
+              role: 'user',
+              content: buildUserMessageContent(historyMessage, images)
+            },
+            ...(detected.isCommand ? { skillId: detected.skillId } : {}),
           };
 
           if (actualSessionId) {
             const userHistoryEvent = {
-              ...userMessage,
+              ...historyUserMessage,
               sessionId: actualSessionId,
               timestamp: Date.now(),
             };
@@ -890,7 +1017,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
           }
 
           await new Promise<void>((resolve, reject) => {
-            claudeSession.sendMessage(userMessage, async (sdkMessage: SDKMessage) => {
+            claudeSession.sendMessage(sdkUserMessage, async (sdkMessage: SDKMessage) => {
               const eventData = {
                 ...sdkMessage,
                 sessionId: actualSessionId,
@@ -1008,7 +1135,15 @@ router.post('/tasks', a2aStrictRateLimiter, async (req: A2ARequest, res: Respons
       });
     }
 
-    const { message, timeout, context, pushNotificationConfig } = validation.data;
+    const { message: rawTaskMessage, timeout, context, pushNotificationConfig } = validation.data;
+
+    // Detect and format /skill command for tasks
+    const taskDetected = await detectAndFormatSkillCommand(rawTaskMessage);
+    // For tasks: send skill content as the message, use clean args for display
+    const message = taskDetected.isCommand ? taskDetected.skillContent! : rawTaskMessage;
+    if (taskDetected.isCommand) {
+      console.log(`⚡ [A2A] Skill command detected in task: /${taskDetected.skillId}, skill content sent as message (${taskDetected.skillContent!.length} chars)`);
+    }
 
     console.info('[A2A] Task creation requested:', {
       a2aAgentId: a2aContext.a2aAgentId,
@@ -1370,6 +1505,47 @@ router.post('/user-response', a2aRateLimiter, async (req: A2ARequest, res: Respo
       success: false,
       error: 'Internal server error'
     });
+  }
+});
+
+// ============================================================================
+// GET /:a2aAgentId/skills — List available skills (A2A auth)
+// ============================================================================
+
+router.get('/skills', a2aAuth, async (req: A2ARequest, res: Response) => {
+  try {
+    const items: Array<{ id: string; name: string; description: string }> = [];
+    const seenIds = new Set<string>();
+
+    // 1. User/project skills from ~/.claude/skills/
+    const localSkills = await skillStorage.getAllSkills();
+    for (const s of localSkills) {
+      if (s.enabled && !seenIds.has(s.id)) {
+        seenIds.add(s.id);
+        items.push({ id: s.id, name: s.name, description: s.description });
+      }
+    }
+
+    // 2. Plugin skills from installed plugins (marketplace)
+    try {
+      const grouped = await marketplaceSkillService.getGroupedSkills();
+      for (const group of grouped.groups) {
+        for (const skill of group.skills) {
+          // Use skill.name as id (e.g. "brainstorming", not the full marketplace/plugin/skill path)
+          if (!seenIds.has(skill.name)) {
+            seenIds.add(skill.name);
+            items.push({ id: skill.name, name: skill.name, description: skill.description || '' });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[A2A] Failed to load marketplace skills:', e);
+    }
+
+    res.json({ skills: items });
+  } catch (error) {
+    console.error('Failed to get skills for A2A:', error);
+    res.status(500).json({ error: 'Failed to retrieve skills' });
   }
 });
 
