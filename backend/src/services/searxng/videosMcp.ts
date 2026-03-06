@@ -105,8 +105,8 @@ export async function integrateVideosMcp(
             platform: inferPlatform(r.url),
           };
 
-          const duration = (r as any).length;
-          const author = (r as any).author;
+          const duration = r.length;
+          const author = r.author;
 
           if (duration) result.duration = duration;
           if (author) result.author = author;

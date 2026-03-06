@@ -97,8 +97,8 @@ export async function integrateImagesMcp(
             sourceUrl: r.url,
           };
 
-          const imgWidth = (r as any).img_width;
-          const imgHeight = (r as any).img_height;
+          const imgWidth = r.img_width;
+          const imgHeight = r.img_height;
 
           if (imgWidth) result.width = imgWidth;
           if (imgHeight) result.height = imgHeight;

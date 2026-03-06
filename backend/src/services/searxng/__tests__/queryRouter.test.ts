@@ -90,6 +90,16 @@ describe('queryRouter', () => {
     it('tech name alone without action word → NOT code', () => {
       expect(getIntent('Python 最新版本')).not.toBe('code');
     });
+
+    it('product/brand names with camelCase → NOT code', () => {
+      expect(getIntent('iPhone 16 Pro')).not.toBe('code');
+      expect(getIntent('eCommerce platform')).not.toBe('code');
+      expect(getIntent('iPad Air review')).not.toBe('code');
+    });
+
+    it('IP-like dot notation → NOT code', () => {
+      expect(getIntent('192.168.1.1 network setup')).not.toBe('code');
+    });
   });
 
   describe('Tier 3: academic', () => {

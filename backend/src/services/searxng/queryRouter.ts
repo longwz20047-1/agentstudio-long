@@ -61,8 +61,10 @@ const STRUCTURE_RULES: StructureRule[] = [
 
 // ── Tier 2: Code Intent ─────────────────────────────────────────────
 
-// camelCase (starting lowercase) or dot-notation API names like useEffect, Array.prototype.map
-const API_PATTERN = /\b(?:[a-z]+[A-Z][a-zA-Z]*|\w+\.\w+\.\w+)\b/;
+// camelCase with ≥2 lowercase prefix (excludes product names like iPhone, iPad, eCommerce)
+// or dot-notation API names with alphabetic segments (excludes IP addresses like 192.168.1.1)
+const API_CAMEL = /\b[a-z]{2,}[A-Z][a-zA-Z]*\b/;
+const API_DOT   = /\b[a-zA-Z]\w*\.[a-zA-Z]\w*\.[a-zA-Z]\w*\b/;
 
 const TECH_NAMES = new Set([
   // languages
@@ -123,7 +125,7 @@ function detectIntent(query: string, options?: { timeRange?: string }): { intent
   }
 
   // Tier 2: Code intent
-  if (API_PATTERN.test(query)) {
+  if (API_CAMEL.test(query) || API_DOT.test(query)) {
     return { intent: 'code', matchedRule: 'tier2:api_pattern' };
   }
   if (TECH_PATTERN.test(query) && CODE_ACTION_PATTERN.test(query)) {

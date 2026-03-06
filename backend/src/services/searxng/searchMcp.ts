@@ -10,6 +10,7 @@ import { fetchAndExtract } from './contentExtractor.js';
 
 const SERVER_NAME = 'searxng-search';
 const TOOL_NAME = 'web_search';
+const MAX_CONCURRENT_FETCHES = 5;
 
 const TOOL_DESCRIPTION = `Search the web and fetch page content for comprehensive results.
 Use this tool when the user asks questions that require up-to-date
@@ -52,6 +53,31 @@ function getContentMaxLength(maxResults: number): number {
   return 800;
 }
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  fn: (item: T) => Promise<R>,
+  limit: number,
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let idx = 0;
+
+  async function worker() {
+    while (idx < items.length) {
+      const i = idx++;
+      try {
+        results[i] = { status: 'fulfilled', value: await fn(items[i]) };
+      } catch (reason) {
+        results[i] = { status: 'rejected', reason };
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+  return results;
+}
+
 export async function integrateSearchMcp(
   queryOptions: any,
   config: SearxngConfig
@@ -87,10 +113,12 @@ export async function integrateSearchMcp(
         // Step 3: Deduplicate and rank
         const ranked = dedupeAndRank(response.results, max_results);
 
-        // Step 4: Concurrent content extraction
+        // Step 4: Concurrent content extraction (max 5 concurrent)
         const contentMaxLength = getContentMaxLength(max_results);
-        const fetchResults = await Promise.allSettled(
-          ranked.map(r => fetchAndExtract(r.url, { maxLength: contentMaxLength }))
+        const fetchResults = await mapWithConcurrency(
+          ranked,
+          r => fetchAndExtract(r.url, { maxLength: contentMaxLength }),
+          MAX_CONCURRENT_FETCHES,
         );
 
         // Step 5: Assemble output
