@@ -14,6 +14,7 @@ export interface QueryAnalysis {
 // ── Language Detection ──────────────────────────────────────────────
 
 const CJK_RANGE = /[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/;
+// eslint-disable-next-line no-control-regex
 const NON_ASCII = /[^\x00-\x7f]/;
 
 function detectLanguage(query: string): QueryLanguage {

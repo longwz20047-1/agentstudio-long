@@ -3,7 +3,6 @@ import {
   analyzeQuery,
   SearchIntent,
   QueryLanguage,
-  QueryAnalysis,
 } from '../queryRouter.js';
 
 // Helper to get intent from analyzeQuery

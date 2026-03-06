@@ -28,7 +28,6 @@ vi.mock('../../firecrawl/firecrawlClient.js', () => ({
 // Now import the module under test
 import { fetchAndExtract, _resetCircuitBreaker } from '../contentExtractor.js';
 import { getFirecrawlConfigFromEnv } from '../../firecrawl/types.js';
-import { validateUrl } from '../../firecrawl/firecrawlClient.js';
 
 describe('contentExtractor', () => {
   beforeEach(() => {
