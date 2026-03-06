@@ -286,11 +286,30 @@ use firecrawl_scrape on individual URLs from the results.
 **API**：POST `/v1/extract`
 
 **前置条件**：
-在 WeKnora `docker-compose.yml` 的 `firecrawl-api` 服务 environment 中添加：
+在 WeKnora `docker-compose.yml` 的 `firecrawl-api` 服务 environment 中添加 LLM 配置：
+
 ```yaml
-OPENAI_API_KEY: ${OPENAI_API_KEY}          # 或中转 API Key
-OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}      # 中转 API 地址（可选）
+# ===== 方式一：中转 API（OpenAI 兼容，推荐） =====
+OPENAI_BASE_URL: ${FIRECRAWL_OPENAI_BASE_URL}    # 中转地址，如 https://your-transit-api.com/v1
+OPENAI_API_KEY: ${FIRECRAWL_OPENAI_API_KEY}       # 中转 API Key
+MODEL_NAME: ${FIRECRAWL_MODEL_NAME:-gpt-4o-mini}  # 模型名称（必须指定）
+
+# ===== 方式二：Ollama 本地模型（实验性） =====
+# OLLAMA_BASE_URL: http://host.docker.internal:11434/api
+# MODEL_NAME: deepseek-r1:7b
+# MODEL_EMBEDDING_NAME: nomic-embed-text
+
+# ===== 方式三：直连 OpenAI =====
+# OPENAI_API_KEY: sk-your-real-openai-key
+# （不设 OPENAI_BASE_URL 则默认用 api.openai.com）
 ```
+
+**注意**：`MODEL_NAME` 是必须的——Firecrawl 不会自动推断模型。中转 API 需设置为中转服务支持的模型名称。
+
+LLM 配置影响的功能：
+- `/v1/extract` — 结构化数据提取
+- scrape `formats: ["json"]` — JSON 格式输出
+- Summary / Branding / Change tracking 格式
 
 在 AgentStudio `backend/.env` 中添加：
 ```env
@@ -642,8 +661,9 @@ FirecrawlExtract: '数据提取' / 'Data Extract' / 'Извлечение дан
 
 | 操作 | 文件 | 说明 |
 |------|------|------|
-| 修改 | `WeKnora/docker-compose.yml` | firecrawl-api 添加 OPENAI_API_KEY/OPENAI_BASE_URL（Phase 2） |
-| 修改 | `WeKnora/.env.example` | 新增 OPENAI_API_KEY 模板 |
+| 修改 | `WeKnora/docker-compose.yml` | firecrawl-api 添加 OPENAI_API_KEY + OPENAI_BASE_URL + MODEL_NAME（Phase 2） |
+| 修改 | `WeKnora/.env` | 新增 FIRECRAWL_OPENAI_BASE_URL, FIRECRAWL_OPENAI_API_KEY, FIRECRAWL_MODEL_NAME |
+| 修改 | `WeKnora/.env.example` | 新增上述变量模板 |
 | 修改 | `agentstudio/backend/.env` | 新增 FIRECRAWL_EXTRACT_ENABLED |
 
 ---
