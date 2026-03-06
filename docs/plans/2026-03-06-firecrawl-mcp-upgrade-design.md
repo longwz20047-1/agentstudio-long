@@ -286,25 +286,35 @@ use firecrawl_scrape on individual URLs from the results.
 **API**：POST `/v1/extract`
 
 **前置条件**：
-在 WeKnora `docker-compose.yml` 的 `firecrawl-api` 服务 environment 中添加 LLM 配置：
+在 WeKnora `docker-compose.yml` 的 `firecrawl-api` 服务 environment 中添加 3 个变量：
 
 ```yaml
-# ===== 方式一：中转 API（OpenAI 兼容，推荐） =====
-OPENAI_BASE_URL: ${FIRECRAWL_OPENAI_BASE_URL}    # 中转地址，如 https://your-transit-api.com/v1
-OPENAI_API_KEY: ${FIRECRAWL_OPENAI_API_KEY}       # 中转 API Key
-MODEL_NAME: ${FIRECRAWL_MODEL_NAME:-gpt-4o-mini}  # 模型名称（必须指定）
-
-# ===== 方式二：Ollama 本地模型（实验性） =====
-# OLLAMA_BASE_URL: http://host.docker.internal:11434/api
-# MODEL_NAME: deepseek-r1:7b
-# MODEL_EMBEDDING_NAME: nomic-embed-text
-
-# ===== 方式三：直连 OpenAI =====
-# OPENAI_API_KEY: sk-your-real-openai-key
-# （不设 OPENAI_BASE_URL 则默认用 api.openai.com）
+# docker-compose.yml → firecrawl-api → environment 新增：
+- OPENAI_BASE_URL=${OPENAI_BASE_URL}       # 中转 API 地址，如 https://your-transit.com/v1
+- OPENAI_API_KEY=${OPENAI_API_KEY}         # 中转 API Key
+- MODEL_NAME=${FIRECRAWL_MODEL_NAME:-gpt-4o-mini}  # 模型名称
 ```
 
-**注意**：`MODEL_NAME` 是必须的——Firecrawl 不会自动推断模型。中转 API 需设置为中转服务支持的模型名称。
+对应 WeKnora `.env` 新增（OPENAI_API_KEY/OPENAI_BASE_URL 复用已有变量，MODEL_NAME 单独配）：
+```env
+# .env 新增
+FIRECRAWL_MODEL_NAME=gpt-4o-mini           # Firecrawl LLM 使用的模型名
+# OPENAI_API_KEY 和 OPENAI_BASE_URL 已有，与 WeKnora app 共享
+```
+
+**已验证的源码证据**（[generic-ai.ts](https://github.com/mendableai/firecrawl/blob/main/apps/api/src/lib/generic-ai.ts)）：
+```typescript
+// Firecrawl 内部用法：
+openai: createOpenAI({
+  apiKey: config.OPENAI_API_KEY,      // ← 读 process.env.OPENAI_API_KEY
+  baseURL: config.OPENAI_BASE_URL,    // ← 读 process.env.OPENAI_BASE_URL
+})
+const modelName = config.MODEL_NAME || name;  // ← 优先 process.env.MODEL_NAME
+```
+
+三个变量均在 [config.ts](https://github.com/mendableai/firecrawl/blob/main/apps/api/src/config.ts) 中注册为 `z.string().optional()`。
+
+**`MODEL_NAME` 的行为**：如果不设置，Firecrawl 默认用 `"gpt-4o-mini"`（硬编码在 `getModel` 函数中）。但中转 API 的模型名可能不同（如 `"claude-3-haiku"` 或自定义名称），所以建议显式指定。
 
 LLM 配置影响的功能：
 - `/v1/extract` — 结构化数据提取
@@ -661,10 +671,10 @@ FirecrawlExtract: '数据提取' / 'Data Extract' / 'Извлечение дан
 
 | 操作 | 文件 | 说明 |
 |------|------|------|
-| 修改 | `WeKnora/docker-compose.yml` | firecrawl-api 添加 OPENAI_API_KEY + OPENAI_BASE_URL + MODEL_NAME（Phase 2） |
-| 修改 | `WeKnora/.env` | 新增 FIRECRAWL_OPENAI_BASE_URL, FIRECRAWL_OPENAI_API_KEY, FIRECRAWL_MODEL_NAME |
-| 修改 | `WeKnora/.env.example` | 新增上述变量模板 |
-| 修改 | `agentstudio/backend/.env` | 新增 FIRECRAWL_EXTRACT_ENABLED |
+| 修改 | `WeKnora/docker-compose.yml` | firecrawl-api 添加 `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `MODEL_NAME`（Phase 2） |
+| 修改 | `WeKnora/.env` | 新增 `FIRECRAWL_MODEL_NAME`（OPENAI_API_KEY/BASE_URL 复用已有） |
+| 修改 | `WeKnora/.env.example` | 新增 `FIRECRAWL_MODEL_NAME` 模板 |
+| 修改 | `agentstudio/backend/.env` | 新增 `FIRECRAWL_EXTRACT_ENABLED` |
 
 ---
 
