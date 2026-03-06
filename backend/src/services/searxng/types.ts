@@ -42,7 +42,11 @@ export interface SearXNGResult {
   thumbnail?: string;
   img_src?: string;
   img_format?: string;
+  img_width?: number;
+  img_height?: number;
   iframe_src?: string;
+  length?: string;        // video duration e.g. "3:42"
+  author?: string;
 }
 
 export interface ProcessedResult {
