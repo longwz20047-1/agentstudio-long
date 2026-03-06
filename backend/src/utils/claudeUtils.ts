@@ -19,7 +19,12 @@ import { integrateWeKnoraMcpServer, type WeknoraContext } from '../services/wekn
 import { integrateGraphitiMcpServer } from '../services/graphiti/graphitiIntegration.js';
 import { createGraphitiHooks } from '../services/graphiti/hooks/index.js';
 import type { GraphitiContext } from '../services/graphiti/types.js';
-import { integrateSearchMcpServer, getSearxngConfigFromEnv } from '../services/searxng/index.js';
+import {
+  integrateSearchMcp,
+  integrateImagesMcp,
+  integrateVideosMcp,
+  getSearxngConfigFromEnv,
+} from '../services/searxng/index.js';
 import { integrateFirecrawlMcpServer, getFirecrawlConfigFromEnv } from '../services/firecrawl/index.js';
 
 export type { SessionRef };
@@ -533,11 +538,22 @@ export async function buildQueryOptions(
     console.log('🔧 [Graphiti] Hooks configured:', Object.keys(graphitiHooks));
   }
 
-  // Integrate SearXNG SDK MCP server (environment variable driven, auto-enabled)
-  const searxngConfig = getSearxngConfigFromEnv();
+  // Integrate SearXNG SDK MCP servers (environment variable driven, auto-enabled)
+  let searxngConfig = getSearxngConfigFromEnv();
   if (searxngConfig) {
-    await integrateSearchMcpServer(queryOptions, searxngConfig);
-    console.log(`✅ [SearXNG] MCP Server integrated: ${searxngConfig.base_url}`);
+    // Health check once, shared by all 3 MCPs
+    try {
+      await fetch(`${searxngConfig.base_url}/`, { signal: AbortSignal.timeout(5000) });
+    } catch {
+      console.warn('[SearXNG] Service unreachable, skipping all 3 MCPs');
+      searxngConfig = null;
+    }
+  }
+  if (searxngConfig) {
+    await integrateSearchMcp(queryOptions, searxngConfig);
+    await integrateImagesMcp(queryOptions, searxngConfig);
+    await integrateVideosMcp(queryOptions, searxngConfig);
+    console.log(`✅ [SearXNG] 3 MCP Servers integrated: ${searxngConfig.base_url}`);
   }
 
   // Integrate Firecrawl SDK MCP server (environment variable driven, auto-enabled)
