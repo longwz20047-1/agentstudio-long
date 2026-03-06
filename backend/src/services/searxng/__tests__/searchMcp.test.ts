@@ -56,7 +56,7 @@ vi.mock('../searxngClient.js', () => ({
   })),
 }));
 
-import { integrateSearchMcp, getSearchToolNames } from '../searchMcp.js';
+import { integrateSearchMcp, getSearchToolNames, _resetSearchCache } from '../searchMcp.js';
 import type { SearxngConfig } from '../types.js';
 
 describe('searchMcp', () => {
@@ -117,6 +117,13 @@ describe('searchMcp', () => {
     it('should return correct tool name format', () => {
       const names = getSearchToolNames();
       expect(names).toEqual(['mcp__searxng-search__web_search']);
+    });
+  });
+
+  describe('_resetSearchCache', () => {
+    it('should be a callable function', () => {
+      expect(typeof _resetSearchCache).toBe('function');
+      _resetSearchCache(); // Should not throw
     });
   });
 });

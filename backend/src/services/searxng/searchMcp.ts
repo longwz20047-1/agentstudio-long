@@ -12,6 +12,26 @@ const SERVER_NAME = 'searxng-search';
 const TOOL_NAME = 'web_search';
 const MAX_CONCURRENT_FETCHES = 5;
 
+// --- Search Result Cache (5-min TTL) ---
+
+const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+interface SearchCacheEntry {
+  output: string; // JSON string of the final output
+  expireAt: number;
+}
+
+const searchCache = new Map<string, SearchCacheEntry>();
+
+function getSearchCacheKey(query: string, timeRange?: string, maxResults?: number): string {
+  return `${query}|${timeRange || ''}|${maxResults || 5}`;
+}
+
+/** Exported for testing only */
+export function _resetSearchCache(): void {
+  searchCache.clear();
+}
+
 const TOOL_DESCRIPTION = `Search the web and fetch page content for comprehensive results.
 Use this tool when the user asks questions that require up-to-date
 information, factual lookup, or external knowledge beyond your training.
@@ -97,6 +117,16 @@ export async function integrateSearchMcp(
       const { query, time_range, max_results = 5 } = args;
 
       try {
+        // Check search cache
+        const cacheKey = getSearchCacheKey(query, time_range, max_results);
+        const cached = searchCache.get(cacheKey);
+        if (cached && Date.now() < cached.expireAt) {
+          console.log('[WebSearch] cache hit:', cacheKey);
+          return {
+            content: [{ type: 'text' as const, text: cached.output }],
+          };
+        }
+
         // Step 1: Analyze query for intent, engines, language
         const analysis = analyzeQuery(query, { timeRange: time_range });
 
@@ -165,8 +195,16 @@ export async function integrateSearchMcp(
           output.answers = response.answers;
         }
 
+        const outputJson = JSON.stringify(output);
+
+        // Store in cache
+        searchCache.set(cacheKey, {
+          output: outputJson,
+          expireAt: Date.now() + SEARCH_CACHE_TTL_MS,
+        });
+
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(output) }],
+          content: [{ type: 'text' as const, text: outputJson }],
         };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
