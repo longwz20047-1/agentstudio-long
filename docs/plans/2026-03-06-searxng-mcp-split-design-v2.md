@@ -80,9 +80,9 @@ searxng MCP (1 个 Server, 1 个工具)
 ```typescript
 // 输入
 interface WebSearchInput {
-  query: string           // 搜索关键词 (必填)
+  query: string           // 优化后的搜索关键词，非用户原话 (必填)
   time_range?: 'day' | 'week' | 'month' | 'year'  // 时间过滤
-  search_type?: 'general' | 'news' | 'code' | 'academic'  // 可选 override，通常不需要传
+  search_type?: 'general' | 'news' | 'code' | 'academic'  // 意图 override，知道意图时建议传
   max_results?: number    // 返回数量, 默认 5, 最大 10
 }
 
@@ -174,22 +174,24 @@ query + time_range + search_type(可选)
 
 ```
 Search the web and fetch page content for comprehensive results.
-The search engine is automatically selected based on query content.
-Most queries work well with auto-detection; use search_type only if results seem off-topic.
+
+IMPORTANT: Do NOT pass the user's raw question as query. Extract and optimize search keywords:
+- Remove filler words and conversational language
+- Add relevant technical terms the user may have omitted
+- Include specific version numbers, error codes, or proper nouns when available
+- For Chinese technical queries, use English technical terms (e.g., "useEffect" not "副作用钩子")
 
 Parameters:
-- query: Search keywords
-- search_type (optional): Override auto-detection. "general", "news", "code", "academic"
+- query: Optimized search keywords (NOT the user's raw question)
+- search_type (optional): Pass when you know the intent. "general", "news", "code", "academic". Auto-detected if omitted.
 - time_range: "day", "week", "month", "year"
 - max_results: 1-10, default 5
 
-Auto-detection examples:
-- "React useEffect bug" -> code engines (GitHub, StackOverflow, MDN)
-- "今天新闻" -> news engines (Google News, Bing News)
-- "transformer paper arxiv" -> academic engines (Google Scholar, arXiv)
-- "好吃的餐厅" -> general engines (Google, Baidu, DuckDuckGo)
-
-Returns structured results with page content excerpts.
+Examples of query optimization:
+- User: "我的useEffect一直重新渲染停不下来怎么办" -> query: "React useEffect infinite loop dependency array"
+- User: "那个注意力机制的论文叫什么" -> query: "Attention Is All You Need transformer paper", search_type: "academic"
+- User: "昨天小米出了什么新手机" -> query: "小米 新品发布 手机 2026", search_type: "news", time_range: "week"
+- User: "好吃的火锅店推荐" -> query: "火锅店 推荐 排名"
 
 Tip: For technical or academic queries in Chinese, if results lack depth,
 search again with an English translation of the query for broader coverage.
@@ -307,7 +309,9 @@ Results are displayed in a visual video gallery card.
 ### 设计目标
 
 旧方案：AI 从 109 个引擎中手动挑选 -> 经常选错、漏选。
-新方案：**系统自动识别查询意图，确定性路由到引擎组合**。`search_type` 降级为可选 override。
+新方案：**双层意图识别** — AI 传 `search_type` 时直接使用（AI 有对话上下文，判断更准）；不传时 queryRouter 基于规则自动检测。
+
+> **queryRouter 与 AI 的分工**: AI 负责 query 优化（重构关键词、去口语化、补术语）和意图判断（传 search_type）。queryRouter 是 fallback — 当 AI 不传 search_type 时，基于 query 文本做确定性规则匹配。两者互补：AI 有上下文但可能不传，queryRouter 无上下文但始终兜底。
 
 ### v1 -> v2 变更说明
 
