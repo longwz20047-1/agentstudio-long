@@ -54,6 +54,22 @@ const MAX_HTML_SIZE = 512 * 1024; // 512KB
 const FIRECRAWL_TIMEOUT_MS = 5000;
 const FETCH_TIMEOUT_MS = 3000;
 
+// --- Extraction Cache (10-min TTL) ---
+
+const EXTRACTION_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+interface CacheEntry {
+  result: { title: string; content: string } | null;
+  expireAt: number;
+}
+
+const extractionCache = new Map<string, CacheEntry>();
+
+/** Exported for testing only */
+export function _resetExtractionCache(): void {
+  extractionCache.clear();
+}
+
 // --- Main Function ---
 
 export async function fetchAndExtract(
@@ -62,11 +78,19 @@ export async function fetchAndExtract(
 ): Promise<{ title: string; content: string } | null> {
   const maxLength = options?.maxLength ?? DEFAULT_MAX_LENGTH;
 
+  // Check cache
+  const cached = extractionCache.get(url);
+  if (cached && Date.now() < cached.expireAt) {
+    return cached.result;
+  }
+
+  let result: { title: string; content: string } | null = null;
+
   try {
     // Try Firecrawl first
     if (firecrawlClient && !isCircuitOpen()) {
       try {
-        const result = await Promise.race([
+        const scrapeResult = await Promise.race([
           firecrawlClient.scrape(url, {
             onlyMainContent: true,
             formats: ['markdown'],
@@ -78,9 +102,9 @@ export async function fetchAndExtract(
         ]);
 
         recordFirecrawlSuccess();
-        return {
-          title: result.metadata?.title || '',
-          content: result.markdown.slice(0, maxLength),
+        result = {
+          title: scrapeResult.metadata?.title || '',
+          content: scrapeResult.markdown.slice(0, maxLength),
         };
       } catch {
         recordFirecrawlFailure();
@@ -88,11 +112,21 @@ export async function fetchAndExtract(
       }
     }
 
-    // Fallback: plain fetch
-    return await fetchFallback(url, maxLength);
+    // Fallback: plain fetch (only if Firecrawl didn't succeed)
+    if (!result) {
+      result = await fetchFallback(url, maxLength);
+    }
   } catch {
-    return null;
+    result = null;
   }
+
+  // Store in cache
+  extractionCache.set(url, {
+    result,
+    expireAt: Date.now() + EXTRACTION_CACHE_TTL_MS,
+  });
+
+  return result;
 }
 
 // --- Fetch Fallback ---

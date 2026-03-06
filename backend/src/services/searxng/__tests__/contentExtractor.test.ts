@@ -26,13 +26,14 @@ vi.mock('../../firecrawl/firecrawlClient.js', () => ({
 }));
 
 // Now import the module under test
-import { fetchAndExtract, _resetCircuitBreaker } from '../contentExtractor.js';
+import { fetchAndExtract, _resetCircuitBreaker, _resetExtractionCache } from '../contentExtractor.js';
 import { getFirecrawlConfigFromEnv } from '../../firecrawl/types.js';
 
 describe('contentExtractor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     _resetCircuitBreaker();
+    _resetExtractionCache();
     // Reset global fetch mock
     vi.stubGlobal('fetch', vi.fn());
   });
@@ -289,6 +290,64 @@ describe('contentExtractor', () => {
 
       expect(result).not.toBeNull();
       expect(result!.title).toBe('Fast');
+    });
+  });
+
+  describe('extraction cache', () => {
+    it('should return cached result for same URL within TTL', async () => {
+      mockScrape.mockResolvedValue({
+        markdown: 'cached content',
+        metadata: { title: 'Cached' },
+      });
+
+      const result1 = await fetchAndExtract('https://example.com/cached');
+      const result2 = await fetchAndExtract('https://example.com/cached');
+
+      expect(mockScrape).toHaveBeenCalledTimes(1);
+      expect(result1).toEqual(result2);
+    });
+
+    it('should not use cache for different URLs', async () => {
+      mockScrape.mockResolvedValue({
+        markdown: 'content',
+        metadata: { title: 'Title' },
+      });
+
+      await fetchAndExtract('https://example.com/a');
+      await fetchAndExtract('https://example.com/b');
+
+      expect(mockScrape).toHaveBeenCalledTimes(2);
+    });
+
+    it('should cache null results (failed extractions)', async () => {
+      mockScrape.mockRejectedValue(new Error('fail'));
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('fail'));
+
+      const result1 = await fetchAndExtract('https://example.com/fail');
+      const result2 = await fetchAndExtract('https://example.com/fail');
+
+      expect(result1).toBeNull();
+      expect(result2).toBeNull();
+      expect(mockScrape).toHaveBeenCalledTimes(1);
+    });
+
+    it('should clear cache with _resetExtractionCache', async () => {
+      mockScrape.mockResolvedValue({
+        markdown: 'first',
+        metadata: { title: 'First' },
+      });
+
+      await fetchAndExtract('https://example.com/reset');
+      _resetExtractionCache();
+
+      mockScrape.mockResolvedValue({
+        markdown: 'second',
+        metadata: { title: 'Second' },
+      });
+
+      const result = await fetchAndExtract('https://example.com/reset');
+      expect(result!.content).toBe('second');
+      expect(mockScrape).toHaveBeenCalledTimes(2);
     });
   });
 });
