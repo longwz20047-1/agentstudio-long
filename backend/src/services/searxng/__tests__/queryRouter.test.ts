@@ -7,17 +7,17 @@ import {
 } from '../queryRouter.js';
 
 // Helper to get intent from analyzeQuery
-function getIntent(query: string, options?: { time_range?: string }): SearchIntent {
+function getIntent(query: string, options?: { timeRange?: string }): SearchIntent {
   return analyzeQuery(query, options).intent;
 }
 
 // Helper to get language from analyzeQuery
 function getLang(query: string): QueryLanguage {
-  return analyzeQuery(query).language;
+  return analyzeQuery(query).lang;
 }
 
 // Helper to get engines from analyzeQuery
-function getEngines(query: string, options?: { time_range?: string }): string[] {
+function getEngines(query: string, options?: { timeRange?: string }): string {
   return analyzeQuery(query, options).engines;
 }
 
@@ -107,8 +107,12 @@ describe('queryRouter', () => {
       expect(getIntent('latest election results')).toBe('news');
     });
 
-    it('time_range=day → news', () => {
-      expect(getIntent('weather forecast', { time_range: 'day' })).toBe('news');
+    it('timeRange=day → news', () => {
+      expect(getIntent('weather forecast', { timeRange: 'day' })).toBe('news');
+    });
+
+    it('timeRange=week → news', () => {
+      expect(getIntent('weather forecast', { timeRange: 'week' })).toBe('news');
     });
 
     it('tech + time word → general (ambiguous, skip)', () => {
@@ -154,23 +158,21 @@ describe('queryRouter', () => {
       expect(engines).toContain('quark');
     });
 
-    it('news zh includes sogou and wechat', () => {
+    it('news zh includes sogou wechat as single engine name', () => {
       const engines = getEngines('今天股市行情');
-      expect(engines).toContain('sogou');
-      expect(engines).toContain('wechat');
+      expect(engines).toContain('sogou wechat');
     });
 
-    it('news en includes reuters but not sogou/wechat', () => {
+    it('news en includes reuters but not sogou wechat', () => {
       const engines = getEngines('latest election results');
       expect(engines).toContain('reuters');
-      expect(engines).not.toContain('sogou');
-      expect(engines).not.toContain('wechat');
+      expect(engines).not.toContain('sogou wechat');
     });
 
-    it('languageCode mapping: zh→zh-CN, en→en-US, other→en-US', () => {
+    it('languageCode mapping: zh→zh-CN, en→en, other→all', () => {
       expect(analyzeQuery('如何使用Docker').languageCode).toBe('zh-CN');
-      expect(analyzeQuery('how to use Docker').languageCode).toBe('en-US');
-      expect(analyzeQuery('café résumé über').languageCode).toBe('en-US');
+      expect(analyzeQuery('how to use Docker').languageCode).toBe('en');
+      expect(analyzeQuery('café résumé über').languageCode).toBe('all');
     });
   });
 });

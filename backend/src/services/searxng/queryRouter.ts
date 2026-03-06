@@ -5,9 +5,9 @@ export type QueryLanguage = 'zh' | 'en' | 'other';
 
 export interface QueryAnalysis {
   intent: SearchIntent;
-  language: QueryLanguage;
+  lang: QueryLanguage;
   languageCode: string;
-  engines: string[];
+  engines: string;
   matchedRule?: string;
 }
 
@@ -16,7 +16,7 @@ export interface QueryAnalysis {
 const CJK_RANGE = /[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/;
 const NON_ASCII = /[^\x00-\x7f]/;
 
-export function detectLanguage(query: string): QueryLanguage {
+function detectLanguage(query: string): QueryLanguage {
   if (CJK_RANGE.test(query)) return 'zh';
   if (!NON_ASCII.test(query)) return 'en';
   return 'other';
@@ -24,34 +24,22 @@ export function detectLanguage(query: string): QueryLanguage {
 
 // ── Engine Tables ───────────────────────────────────────────────────
 
-const GENERAL_BASE = ['google', 'duckduckgo', 'bing', 'brave'];
-const GENERAL_ZH = ['baidu', 'sogou', 'quark'];
+const GENERAL_BASE = 'google,duckduckgo,brave,startpage,wikipedia';
+const GENERAL_ZH   = 'google,duckduckgo,brave,startpage,wikipedia,baidu,sogou,quark';
 
-const CODE_ENGINES = ['github', 'stackoverflow', 'hackernews', 'npmjs'];
-const ACADEMIC_ENGINES = ['google scholar', 'arxiv', 'semantic scholar', 'crossref'];
-const SOCIAL_ENGINES = ['reddit', 'hacker news'];
+const CODE_ENGINES     = 'github,stackoverflow,mdn,npm,pypi,docker hub,pkg.go.dev,crates.io,codeberg,hackernews';
+const ACADEMIC_ENGINES = 'google scholar,arxiv,semantic scholar,pubmed,crossref,openalex';
+const SOCIAL_ENGINES   = 'reddit,hackernews,stackoverflow';
 
-const INTENT_ENGINE_MAP: Record<SearchIntent, { zh: string[]; en: string[] }> = {
-  general: {
-    zh: [...GENERAL_BASE, ...GENERAL_ZH],
-    en: [...GENERAL_BASE, 'wikipedia'],
+const INTENT_ENGINE_MAP: Record<SearchIntent, { zh: string; en: string }> = {
+  general:  { zh: GENERAL_ZH,                              en: GENERAL_BASE },
+  code:     { zh: GENERAL_ZH + ',' + CODE_ENGINES,         en: GENERAL_BASE + ',' + CODE_ENGINES },
+  academic: { zh: GENERAL_ZH + ',' + ACADEMIC_ENGINES,     en: ACADEMIC_ENGINES },
+  news:     {
+    zh: 'google news,bing news,yahoo news,duckduckgo news,wikinews,startpage news,brave.news,reuters,qwant news,sogou wechat',
+    en: 'google news,bing news,yahoo news,duckduckgo news,wikinews,startpage news,brave.news,reuters',
   },
-  code: {
-    zh: [...CODE_ENGINES, 'baidu', 'google', 'bing'],
-    en: [...CODE_ENGINES, 'google', 'bing'],
-  },
-  academic: {
-    zh: [...ACADEMIC_ENGINES, 'baidu', 'google'],
-    en: [...ACADEMIC_ENGINES, 'google'],
-  },
-  news: {
-    zh: ['sogou', 'wechat', 'baidu', 'google news', 'bing news'],
-    en: ['reuters', 'google news', 'bing news', 'duckduckgo'],
-  },
-  social: {
-    zh: [...SOCIAL_ENGINES, 'baidu', 'zhihu', 'google'],
-    en: [...SOCIAL_ENGINES, 'google'],
-  },
+  social:   { zh: GENERAL_ZH + ',' + SOCIAL_ENGINES,       en: GENERAL_BASE + ',' + SOCIAL_ENGINES },
 };
 
 // ── Tier 1: Structural Patterns ─────────────────────────────────────
@@ -125,7 +113,7 @@ const VS_PATTERN = /\b\w+\s+vs\.?\s+\w+/i;
 
 // ── Intent Detection ────────────────────────────────────────────────
 
-export function detectIntent(query: string, options?: { time_range?: string }): { intent: SearchIntent; matchedRule?: string } {
+function detectIntent(query: string, options?: { timeRange?: string }): { intent: SearchIntent; matchedRule?: string } {
   // Tier 1: Structural patterns
   for (const rule of STRUCTURE_RULES) {
     if (rule.pattern.test(query)) {
@@ -150,7 +138,7 @@ export function detectIntent(query: string, options?: { time_range?: string }): 
   }
 
   // Tier 4: News (skip if tech name present — ambiguous)
-  const hasNewsSignal = NEWS_KEYWORDS.test(query) || options?.time_range === 'day';
+  const hasNewsSignal = NEWS_KEYWORDS.test(query) || options?.timeRange === 'day' || options?.timeRange === 'week';
   if (hasNewsSignal) {
     if (TECH_PATTERN.test(query)) {
       // Ambiguous: tech + time → general
@@ -172,20 +160,20 @@ export function detectIntent(query: string, options?: { time_range?: string }): 
 
 const LANGUAGE_CODE_MAP: Record<QueryLanguage, string> = {
   zh: 'zh-CN',
-  en: 'en-US',
-  other: 'en-US',
+  en: 'en',
+  other: 'all',
 };
 
-export function analyzeQuery(query: string, options?: { time_range?: string }): QueryAnalysis {
-  const language = detectLanguage(query);
+export function analyzeQuery(query: string, options?: { timeRange?: string }): QueryAnalysis {
+  const lang = detectLanguage(query);
   const { intent, matchedRule } = detectIntent(query, options);
-  const langKey = language === 'other' ? 'en' : language;
+  const langKey = lang === 'other' ? 'en' : lang;
   const engines = INTENT_ENGINE_MAP[intent][langKey];
-  const languageCode = LANGUAGE_CODE_MAP[language];
+  const languageCode = LANGUAGE_CODE_MAP[lang];
 
   console.log(
-    `[queryRouter] query="${query}" → lang=${language} intent=${intent} rule=${matchedRule} engines=[${engines.join(',')}]`
+    `[queryRouter] query="${query}" → lang=${lang} intent=${intent} rule=${matchedRule} engines=${engines}`
   );
 
-  return { intent, language, languageCode, engines, matchedRule };
+  return { intent, lang, languageCode, engines, matchedRule };
 }
