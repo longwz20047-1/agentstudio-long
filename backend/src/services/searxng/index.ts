@@ -7,9 +7,6 @@ export { integrateVideosMcp, getVideosToolNames } from './videosMcp.js';
 export { getSearxngConfigFromEnv } from './types.js';
 export type { SearxngConfig } from './types.js';
 
-/** @deprecated 使用 integrateSearchMcp/integrateImagesMcp/integrateVideosMcp 替代 */
-export { integrateSearchMcpServer, getSearxngToolNames } from './searxngIntegration.js';
-
 /** 新工具名列表（3 个工具） */
 export function getAllSearxngToolNames(): string[] {
   return [
