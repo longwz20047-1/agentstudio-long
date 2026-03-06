@@ -1,7 +1,8 @@
 # SearXNG MCP 拆分重构设计方案
 
 > **日期**: 2026-03-05
-> **状态**: 设计方案
+> **状态**: ~~设计方案~~ **已废弃** — 被 `2026-03-06-searxng-mcp-split-design-v2.md` 取代
+> **废弃原因**: 3 个捏造引擎 (chinaso news, github code, bing)、加权投票算法有结构性缺陷、引擎路由表未经实测验证
 > **目标**: 将单一 `searxng_search` 工具拆分为 3 个专职 MCP，引入 **搜索+抓取** pipeline 提升文本搜索质量
 
 ---
