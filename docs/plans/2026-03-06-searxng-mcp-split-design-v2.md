@@ -190,6 +190,9 @@ Auto-detection examples:
 - "好吃的餐厅" -> general engines (Google, Baidu, DuckDuckGo)
 
 Returns structured results with page content excerpts.
+
+Tip: For technical or academic queries in Chinese, if results lack depth,
+search again with an English translation of the query for broader coverage.
 ```
 
 ---
