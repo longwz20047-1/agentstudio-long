@@ -13,20 +13,20 @@ describe('createGraphitiHooks', () => {
     user_id: 'test-user',
   };
 
-  it('should create SessionStart hook by default', () => {
+  it('should create UserPromptSubmit hook by default', () => {
     const hooks = createGraphitiHooks(mockContext);
 
-    expect(hooks.SessionStart).toBeDefined();
-    expect(hooks.SessionStart).toHaveLength(1);
-    expect(hooks.SessionStart![0].hooks).toHaveLength(1);
+    expect(hooks.UserPromptSubmit).toBeDefined();
+    expect(hooks.UserPromptSubmit).toHaveLength(1);
+    expect(hooks.UserPromptSubmit![0].hooks).toHaveLength(1);
   });
 
-  it('should not create SessionStart hook when disabled', () => {
+  it('should not create UserPromptSubmit hook when disabled', () => {
     const hooks = createGraphitiHooks(mockContext, {
       enableSessionStartHook: false,
     });
 
-    expect(hooks.SessionStart).toBeUndefined();
+    expect(hooks.UserPromptSubmit).toBeUndefined();
   });
 
   it('should return empty hooks object when all disabled', () => {

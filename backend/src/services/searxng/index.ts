@@ -10,11 +10,10 @@ export type { SearxngConfig } from './types.js';
 // 缓存管理（测试用）
 export { _resetExtractionCache } from './contentExtractor.js';
 
-/** 全部工具名列表（4 个工具） */
+/** 全部工具名列表（3 个工具） */
 export function getAllSearxngToolNames(): string[] {
   return [
     'mcp__searxng-search__web_search',
-    'mcp__searxng-search__web_fetch',
     'mcp__searxng-images__image_search',
     'mcp__searxng-videos__video_search',
   ];

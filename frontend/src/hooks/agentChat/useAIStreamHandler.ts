@@ -1215,10 +1215,13 @@ export const useAIStreamHandler = ({
 
             if (targetTool?.toolData && targetMessageId) {
               // Update the corresponding tool with results
+              // When content contains non-text blocks (images), preserve full JSON structure
               const toolResult = typeof block.content === 'string'
                 ? block.content
                 : Array.isArray(block.content)
-                  ? block.content.map((c: { text?: string }) => c.text || String(c)).join('')
+                  ? (block.content.some((c: { type?: string }) => c.type && c.type !== 'text')
+                    ? JSON.stringify(block.content)
+                    : block.content.map((c: { text?: string }) => c.text || String(c)).join(''))
                   : JSON.stringify(block.content);
 
               console.log('🔧 Updating tool with result, setting isExecuting: false');
@@ -1306,10 +1309,13 @@ export const useAIStreamHandler = ({
 
           if (targetTool?.toolData && targetMessageId) {
             // Update the corresponding tool with results
+            // When content contains non-text blocks (images), preserve full JSON structure
             const toolResult = typeof block.content === 'string'
               ? block.content
               : Array.isArray(block.content)
-                ? block.content.map((c: { text?: string }) => c.text || String(c)).join('')
+                ? (block.content.some((c: { type?: string }) => c.type && c.type !== 'text')
+                  ? JSON.stringify(block.content)
+                  : block.content.map((c: { text?: string }) => c.text || String(c)).join(''))
                 : JSON.stringify(block.content);
 
             console.log('🔧 Updating tool with result in assistant message, setting isExecuting: false');

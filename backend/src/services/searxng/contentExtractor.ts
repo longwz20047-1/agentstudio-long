@@ -2,6 +2,7 @@
 
 import { FirecrawlClient, validateUrl } from '../firecrawl/firecrawlClient.js';
 import { getFirecrawlConfigFromEnv } from '../firecrawl/types.js';
+import { firecrawlCircuitBreaker } from '../firecrawl/circuitBreaker.js';
 
 // --- Module-level Firecrawl setup ---
 
@@ -10,41 +11,11 @@ const firecrawlClient = firecrawlConfig
   ? new FirecrawlClient(firecrawlConfig.base_url, firecrawlConfig.api_key)
   : null;
 
-// --- Circuit Breaker State ---
-
-const CIRCUIT_BREAKER_THRESHOLD = 3;
-const CIRCUIT_BREAKER_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
-
-let consecutiveFailures = 0;
-let circuitOpenUntil = 0;
-
-function isCircuitOpen(): boolean {
-  if (consecutiveFailures < CIRCUIT_BREAKER_THRESHOLD) return false;
-  if (Date.now() >= circuitOpenUntil) {
-    // Cooldown expired, reset
-    consecutiveFailures = 0;
-    circuitOpenUntil = 0;
-    return false;
-  }
-  return true;
-}
-
-function recordFirecrawlSuccess(): void {
-  consecutiveFailures = 0;
-  circuitOpenUntil = 0;
-}
-
-function recordFirecrawlFailure(): void {
-  consecutiveFailures++;
-  if (consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
-    circuitOpenUntil = Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS;
-  }
-}
+// --- Circuit Breaker (shared) ---
 
 /** Exported for testing only */
 export function _resetCircuitBreaker(): void {
-  consecutiveFailures = 0;
-  circuitOpenUntil = 0;
+  firecrawlCircuitBreaker.reset();
 }
 
 // --- Constants ---
@@ -88,7 +59,7 @@ export async function fetchAndExtract(
 
   try {
     // Try Firecrawl first
-    if (firecrawlClient && !isCircuitOpen()) {
+    if (firecrawlClient && !firecrawlCircuitBreaker.isOpen()) {
       try {
         const scrapeResult = await Promise.race([
           firecrawlClient.scrape(url, {
@@ -101,13 +72,13 @@ export async function fetchAndExtract(
           ),
         ]);
 
-        recordFirecrawlSuccess();
+        firecrawlCircuitBreaker.recordSuccess();
         result = {
           title: scrapeResult.metadata?.title || '',
           content: scrapeResult.markdown.slice(0, maxLength),
         };
       } catch {
-        recordFirecrawlFailure();
+        firecrawlCircuitBreaker.recordFailure();
         // Fall through to fetch fallback
       }
     }

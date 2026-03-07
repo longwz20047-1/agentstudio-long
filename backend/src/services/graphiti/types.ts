@@ -16,4 +16,7 @@ export interface GraphitiContext {
 
   /** API authentication key (optional, Graphiti currently has no auth) */
   api_key?: string;
+
+  /** A2A session ID (stable across SDK session restarts, used for profile query dedup) */
+  a2aSessionId?: string;
 }

@@ -18,7 +18,14 @@ export function getFirecrawlConfigFromEnv(): FirecrawlConfig | null {
 export interface ScrapeResult {
   markdown: string;
   html?: string;
+  rawHtml?: string;
   links?: string[];
+  screenshot?: string; // base64 screenshot data (from formats: ["screenshot"])
+  actions?: {
+    screenshots: string[];  // from actions: [{ type: "screenshot" }]
+    scrapes?: Array<{ url: string; markdown?: string; html?: string }>;
+    javascriptReturns?: Array<{ type: string; value: unknown }>;
+  };
   metadata: {
     title?: string;
     description?: string;
@@ -35,7 +42,7 @@ export interface ScrapeResponse {
   data: ScrapeResult;
 }
 
-export interface MapResponse {
+export interface ExtractResponse {
   success: boolean;
-  links: string[];
+  data: Record<string, unknown>;
 }

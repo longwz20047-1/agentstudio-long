@@ -25,7 +25,7 @@ import {
   integrateVideosMcp,
   getSearxngConfigFromEnv,
 } from '../services/searxng/index.js';
-import { integrateFirecrawlMcpServer, getFirecrawlConfigFromEnv } from '../services/firecrawl/index.js';
+import { integrateFirecrawlMcpServer, getFirecrawlConfigFromEnv, getFirecrawlToolNames } from '../services/firecrawl/index.js';
 
 export type { SessionRef };
 import { MCP_SERVER_CONFIG_FILE } from '../config/paths.js';
@@ -553,14 +553,17 @@ export async function buildQueryOptions(
     await integrateSearchMcp(queryOptions, searxngConfig);
     await integrateImagesMcp(queryOptions, searxngConfig);
     await integrateVideosMcp(queryOptions, searxngConfig);
-    console.log(`✅ [SearXNG] 3 MCP Servers integrated: ${searxngConfig.base_url}`);
+    console.log(`✅ [SearXNG] 3 MCP Servers integrated (3 tools: web_search, image_search, video_search): ${searxngConfig.base_url}`);
   }
 
   // Integrate Firecrawl SDK MCP server (environment variable driven, auto-enabled)
   const firecrawlConfig = getFirecrawlConfigFromEnv();
   if (firecrawlConfig) {
-    await integrateFirecrawlMcpServer(queryOptions, firecrawlConfig);
-    console.log(`✅ [Firecrawl] MCP Server integrated: ${firecrawlConfig.base_url}`);
+    const firecrawlOk = await integrateFirecrawlMcpServer(queryOptions, firecrawlConfig);
+    if (firecrawlOk) {
+      const toolCount = getFirecrawlToolNames().length;
+      console.log(`✅ [Firecrawl] MCP Server v2 integrated (${toolCount} tools): ${firecrawlConfig.base_url}`);
+    }
   }
 
   // Integrate AskUserQuestion SDK MCP server

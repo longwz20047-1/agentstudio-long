@@ -32,23 +32,6 @@ export function _resetSearchCache(): void {
   searchCache.clear();
 }
 
-const WEB_FETCH_TOOL_NAME = 'web_fetch';
-
-const WEB_FETCH_DESCRIPTION = `Fetch and extract the main content of a web page.
-Use this tool when you need to read the content of a specific URL
-that appeared in search results or was provided by the user.
-
-This is a lightweight alternative to firecrawl_scrape.
-It tries Firecrawl first (if available), then falls back to
-plain HTTP fetch with HTML parsing.
-
-Parameters:
-- url: The full URL to fetch (must be http or https)
-- max_length: Maximum characters to return (default 8000)
-
-Returns the page title and main text content.
-Navigation, headers, footers, scripts, and styles are stripped.`;
-
 const TOOL_DESCRIPTION = `Search the web and fetch page content for comprehensive results.
 Use this tool when the user asks questions that require up-to-date
 information, factual lookup, or external knowledge beyond your training.
@@ -233,73 +216,24 @@ export async function integrateSearchMcp(
     }
   );
 
-  const webFetchTool = tool(
-    WEB_FETCH_TOOL_NAME,
-    WEB_FETCH_DESCRIPTION,
-    {
-      url: z.string().url().describe('URL to fetch'),
-      max_length: z.number().min(500).max(20000).optional().describe('Max content length (default 8000)'),
-    },
-    async (args) => {
-      const { url, max_length = 8000 } = args;
-
-      try {
-        const result = await fetchAndExtract(url, { maxLength: max_length });
-
-        if (!result) {
-          return {
-            content: [{ type: 'text' as const, text: JSON.stringify({
-              url,
-              error: 'Failed to extract content (non-HTML, timeout, or blocked)',
-            }) }],
-            isError: true,
-          };
-        }
-
-        const output = {
-          url,
-          title: result.title,
-          content: result.content,
-        };
-
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify(output) }],
-        };
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{ type: 'text' as const, text: `Web fetch error: ${msg}` }],
-          isError: true,
-        };
-      }
-    }
-  );
-
   const server = createSdkMcpServer({
     name: SERVER_NAME,
     version: '1.0.0',
-    tools: [webSearchTool, webFetchTool],
+    tools: [webSearchTool],
   });
 
   queryOptions.mcpServers = { ...queryOptions.mcpServers, [SERVER_NAME]: server };
 
   const searchToolName = `mcp__${SERVER_NAME}__${TOOL_NAME}`;
-  const fetchToolName = `mcp__${SERVER_NAME}__${WEB_FETCH_TOOL_NAME}`;
   if (!queryOptions.allowedTools) {
-    queryOptions.allowedTools = [searchToolName, fetchToolName];
+    queryOptions.allowedTools = [searchToolName];
   } else {
     if (!queryOptions.allowedTools.includes(searchToolName)) {
       queryOptions.allowedTools.push(searchToolName);
-    }
-    if (!queryOptions.allowedTools.includes(fetchToolName)) {
-      queryOptions.allowedTools.push(fetchToolName);
     }
   }
 }
 
 export function getSearchToolNames(): string[] {
-  return [
-    `mcp__${SERVER_NAME}__${TOOL_NAME}`,
-    `mcp__${SERVER_NAME}__${WEB_FETCH_TOOL_NAME}`,
-  ];
+  return [`mcp__${SERVER_NAME}__${TOOL_NAME}`];
 }

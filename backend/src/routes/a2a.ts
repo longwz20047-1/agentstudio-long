@@ -577,6 +577,12 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
     // Extract Graphiti Memory context if present
     const graphitiContext = context?.graphiti as import('../services/graphiti/types.js').GraphitiContext | undefined;
 
+    // Inject A2A sessionId into Graphiti context for stable session tracking
+    // SDK session_id changes on resume failure, but A2A sessionId stays constant
+    if (graphitiContext && sessionId) {
+      graphitiContext.a2aSessionId = sessionId;
+    }
+
     // Extract MCP tools from agent configuration
     // MCP tools are stored in allowedTools with format: mcp__serverName__toolName or serverName.toolName
     const mcpTools: string[] = [];

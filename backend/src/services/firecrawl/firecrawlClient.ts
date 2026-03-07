@@ -1,4 +1,4 @@
-import type { ScrapeResult, ScrapeResponse, MapResponse } from './types.js';
+import type { ScrapeResult, ScrapeResponse, ExtractResponse } from './types.js';
 
 // --- SSRF Protection ---
 
@@ -78,16 +78,23 @@ export class FirecrawlClient {
   }
 
   private async withRetry<T>(fn: () => Promise<T>): Promise<T> {
-    try {
-      return await fn();
-    } catch (error: any) {
-      const status = error?.status || 0;
-      if (status === 429 || status === 503) {
-        await new Promise(r => setTimeout(r, 2000));
-        return fn();
+    const MAX_RETRIES = 2;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        return await fn();
+      } catch (error: any) {
+        if (attempt === MAX_RETRIES) throw error;
+        const status = error?.status || 0;
+        if (status !== 429 && status !== 503) throw error;
+
+        const retryAfter = error?.retryAfter;
+        const delay = (retryAfter && !isNaN(retryAfter))
+          ? Math.min(retryAfter * 1000, 10000)
+          : Math.pow(2, attempt + 1) * 1000; // 2s, 4s
+        await new Promise(r => setTimeout(r, delay));
       }
-      throw error;
     }
+    throw new Error('Unreachable');
   }
 
   async scrape(url: string, options?: {
@@ -95,30 +102,51 @@ export class FirecrawlClient {
     timeout?: number;
     formats?: string[];
     waitFor?: number;
+    includeTags?: string[];
+    excludeTags?: string[];
+    actions?: Array<{
+      type: string;
+      selector?: string;
+      text?: string;
+      key?: string;
+      milliseconds?: number;
+      direction?: string;
+      fullPage?: boolean;
+      quality?: number;
+      all?: boolean;
+      script?: string;
+    }>;
   }): Promise<ScrapeResult> {
     validateUrl(url);
 
     return this.withConcurrencyLimit(() => this.withRetry(async () => {
+      const body: any = {
+        url,
+        formats: options?.formats ?? ['markdown'],
+        onlyMainContent: options?.onlyMainContent ?? true,
+        timeout: options?.timeout ?? 30000,
+      };
+      if (options?.waitFor !== undefined) body.waitFor = options.waitFor;
+      if (options?.includeTags) body.includeTags = options.includeTags;
+      if (options?.excludeTags) body.excludeTags = options.excludeTags;
+      if (options?.actions) body.actions = options.actions;
+
       const resp = await fetch(`${this.baseUrl}/v1/scrape`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${this.apiKey}`,
         },
-        body: JSON.stringify({
-          url,
-          formats: options?.formats ?? ['markdown'],
-          onlyMainContent: options?.onlyMainContent ?? true,
-          timeout: options?.timeout ?? 30000,
-          waitFor: options?.waitFor,
-        }),
-        signal: AbortSignal.timeout(60000),
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(options?.actions ? 90000 : 60000),
       });
 
       if (!resp.ok) {
         const errorText = await resp.text();
         const err: any = new Error(`Firecrawl scrape ${resp.status}: ${errorText}`);
         err.status = resp.status;
+        const retryAfterHeader = resp.headers.get('Retry-After');
+        if (retryAfterHeader) err.retryAfter = parseInt(retryAfterHeader, 10);
         throw err;
       }
 
@@ -128,38 +156,45 @@ export class FirecrawlClient {
     }));
   }
 
-  async mapSite(url: string, options?: {
-    search?: string;
-    limit?: number;
-  }): Promise<string[]> {
-    validateUrl(url);
+  async extract(urls: string[], options: {
+    prompt: string;
+    systemPrompt?: string;
+    schema?: Record<string, unknown>;
+  }): Promise<ExtractResponse> {
+    for (const url of urls) {
+      validateUrl(url);
+    }
 
-    return this.withRetry(async () => {
-      const resp = await fetch(`${this.baseUrl}/v1/map`, {
+    return this.withConcurrencyLimit(() => this.withRetry(async () => {
+      const body: any = {
+        urls,
+        prompt: options.prompt,
+      };
+      if (options.systemPrompt) body.systemPrompt = options.systemPrompt;
+      if (options.schema) body.schema = options.schema;
+
+      const resp = await fetch(`${this.baseUrl}/v1/extract`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${this.apiKey}`,
         },
-        body: JSON.stringify({
-          url,
-          search: options?.search,
-          limit: options?.limit ?? 50,
-          includeSubdomains: true,
-        }),
-        signal: AbortSignal.timeout(30000),
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(120000),
       });
 
       if (!resp.ok) {
         const errorText = await resp.text();
-        const err: any = new Error(`Firecrawl map ${resp.status}: ${errorText}`);
+        const err: any = new Error(`Firecrawl extract ${resp.status}: ${errorText}`);
         err.status = resp.status;
+        const retryAfterHeader = resp.headers.get('Retry-After');
+        if (retryAfterHeader) err.retryAfter = parseInt(retryAfterHeader, 10);
         throw err;
       }
 
-      const data: MapResponse = await resp.json();
-      if (!data.success) throw new Error('Firecrawl map returned success=false');
-      return data.links || [];
-    });
+      const data: ExtractResponse = await resp.json();
+      if (!data.success) throw new Error('Firecrawl extract returned success=false');
+      return data;
+    }));
   }
 }

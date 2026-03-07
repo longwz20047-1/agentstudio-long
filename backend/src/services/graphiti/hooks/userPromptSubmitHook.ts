@@ -98,22 +98,26 @@ export function createUserPromptSubmitHook(
   ): Promise<UserPromptSubmitHookOutput> => {
     const sessionId = input.session_id;
 
+    // 优先使用 A2A session ID（在 SDK session 重建时保持稳定）
+    // SDK 的 session_id 在 resume 失败重试时会变化，导致误判为"会话切换"
+    const effectiveSessionId = context.a2aSessionId || sessionId;
+
     console.log('📝 [Graphiti Hook] UserPromptSubmit triggered');
-    console.log(`   Session ID: ${sessionId}`);
+    console.log(`   Session ID: ${sessionId} (effective: ${effectiveSessionId})`);
     console.log(`   Current active: ${currentActiveSessionId}`);
     console.log(`   Prompt preview: ${input.prompt?.substring(0, 50)}...`);
 
     // 检查是否是同一会话的后续消息（非切换场景）
-    // 只有当 sessionId 与当前活跃会话相同时才跳过
-    if (sessionId && sessionId === currentActiveSessionId) {
+    // 只有当 effectiveSessionId 与当前活跃会话相同时才跳过
+    if (effectiveSessionId && effectiveSessionId === currentActiveSessionId) {
       console.log('⏭️ [Graphiti Hook] Same session continuing, skipping profile query');
       return { continue: true };
     }
 
     // 会话切换或新会话，更新活跃会话并查询用户画像
-    if (sessionId) {
-      console.log(`🔄 [Graphiti Hook] Session switch detected: ${currentActiveSessionId} -> ${sessionId}`);
-      currentActiveSessionId = sessionId;
+    if (effectiveSessionId) {
+      console.log(`🔄 [Graphiti Hook] Session switch detected: ${currentActiveSessionId} -> ${effectiveSessionId}`);
+      currentActiveSessionId = effectiveSessionId;
     }
 
     try {

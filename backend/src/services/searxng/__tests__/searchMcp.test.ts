@@ -85,7 +85,6 @@ describe('searchMcp', () => {
       expect(Array.isArray(queryOptions.allowedTools)).toBe(true);
       expect(queryOptions.allowedTools).toEqual([
         'mcp__searxng-search__web_search',
-        'mcp__searxng-search__web_fetch',
       ]);
     });
 
@@ -96,17 +95,15 @@ describe('searchMcp', () => {
       expect(queryOptions.allowedTools).toEqual([
         'existing_tool',
         'mcp__searxng-search__web_search',
-        'mcp__searxng-search__web_fetch',
       ]);
     });
 
     it('should not duplicate if tool already in allowedTools', async () => {
-      const queryOptions: any = { allowedTools: ['mcp__searxng-search__web_search', 'mcp__searxng-search__web_fetch'] };
+      const queryOptions: any = { allowedTools: ['mcp__searxng-search__web_search'] };
       await integrateSearchMcp(queryOptions, config);
 
       expect(queryOptions.allowedTools).toEqual([
         'mcp__searxng-search__web_search',
-        'mcp__searxng-search__web_fetch',
       ]);
     });
 
@@ -119,12 +116,12 @@ describe('searchMcp', () => {
       expect(queryOptions.mcpServers['searxng-search']).toBeDefined();
     });
 
-    it('should register both web_search and web_fetch tools', async () => {
+    it('should register only web_search tool', async () => {
       const queryOptions: any = {};
       await integrateSearchMcp(queryOptions, config);
 
       expect(queryOptions.allowedTools).toContain('mcp__searxng-search__web_search');
-      expect(queryOptions.allowedTools).toContain('mcp__searxng-search__web_fetch');
+      expect(queryOptions.allowedTools).not.toContain('mcp__searxng-search__web_fetch');
     });
   });
 
@@ -133,7 +130,6 @@ describe('searchMcp', () => {
       const names = getSearchToolNames();
       expect(names).toEqual([
         'mcp__searxng-search__web_search',
-        'mcp__searxng-search__web_fetch',
       ]);
     });
   });
