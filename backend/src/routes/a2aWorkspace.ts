@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import express, { Router, type Request, type Response } from 'express';
 import multer from 'multer';
 import { a2aAuth, type A2ARequest } from '../middleware/a2aAuth.js';
 import { a2aRateLimiter } from '../middleware/rateLimiting.js';
@@ -6,7 +6,7 @@ import { resolveUserWorkspacePath, isPathSafe } from '../utils/workspaceUtils.js
 import path from 'path';
 import fs from 'fs/promises';
 
-const router = Router({ mergeParams: true });
+const router: Router = express.Router({ mergeParams: true });
 
 router.use(a2aAuth);
 router.use(a2aRateLimiter);

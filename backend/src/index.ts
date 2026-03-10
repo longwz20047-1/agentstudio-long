@@ -22,6 +22,7 @@ import skillsRouter from './routes/skills';
 import pluginsRouter from './routes/plugins';
 import marketplaceSkillsRouter from './routes/marketplaceSkills';
 import a2aRouter from './routes/a2a';
+import a2aWorkspaceRouter from './routes/a2aWorkspace';
 import a2aManagementRouter from './routes/a2aManagement';
 import scheduledTasksRouter from './routes/scheduledTasks';
 import mcpAdminRouter from './routes/mcpAdmin';
@@ -482,6 +483,9 @@ const app: express.Express = express();
     }),
     slackRouter
   );
+
+  // A2A Workspace file routes - must be before a2aRouter to avoid double middleware execution
+  app.use('/a2a/:a2aAgentId/workspace', httpsOnly, a2aWorkspaceRouter);
 
   // A2A Protocol routes - Public but require API key authentication and HTTPS in production
   app.use('/a2a/:a2aAgentId', httpsOnly, a2aRouter);
