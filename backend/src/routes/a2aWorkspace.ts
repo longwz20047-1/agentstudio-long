@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express';
+import multer from 'multer';
 import { a2aAuth, type A2ARequest } from '../middleware/a2aAuth.js';
 import { a2aRateLimiter } from '../middleware/rateLimiting.js';
 import { resolveUserWorkspacePath, isPathSafe } from '../utils/workspaceUtils.js';
@@ -10,6 +11,7 @@ const router = Router({ mergeParams: true });
 router.use(a2aAuth);
 router.use(a2aRateLimiter);
 
+const upload = multer({ limits: { fileSize: 50 * 1024 * 1024 } }); // 50MB
 const MAX_READ_SIZE = 10 * 1024 * 1024; // 10MB
 
 async function resolveWorkspacePath(req: A2ARequest): Promise<string> {
@@ -165,6 +167,52 @@ router.delete('/delete', async (req: Request, res: Response) => {
   } catch (err: any) {
     if (err.code === 'ENOENT') return res.status(404).json({ error: 'Not found' });
     if (err.code === 'ENOTEMPTY') return res.status(400).json({ error: 'Directory not empty' });
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /upload?path=.  multipart/form-data
+router.post('/upload', upload.single('file'), async (req: Request, res: Response) => {
+  try {
+    const cwdPath = await resolveWorkspacePath(req as A2ARequest);
+    const dirPath = (req.query.path as string) || '.';
+
+    if (!isPathSafe(dirPath, cwdPath)) {
+      return res.status(403).json({ error: 'Path outside workspace' });
+    }
+
+    if (!req.file) return res.status(400).json({ error: 'No file provided' });
+
+    const targetDir = path.resolve(cwdPath, dirPath);
+    await fs.mkdir(targetDir, { recursive: true });
+    const targetPath = path.join(targetDir, req.file.originalname);
+    await fs.writeFile(targetPath, req.file.buffer);
+
+    const relativePath = path.relative(cwdPath, targetPath);
+    res.json({ success: true, path: relativePath, size: req.file.size });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /download?path=file.txt
+router.get('/download', async (req: Request, res: Response) => {
+  try {
+    const cwdPath = await resolveWorkspacePath(req as A2ARequest);
+    const filePath = req.query.path as string;
+    if (!filePath) return res.status(400).json({ error: 'path is required' });
+
+    if (!isPathSafe(filePath, cwdPath)) {
+      return res.status(403).json({ error: 'Path outside workspace' });
+    }
+
+    const fullPath = path.resolve(cwdPath, filePath);
+    await fs.access(fullPath);
+    const fileName = path.basename(fullPath);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+    res.sendFile(fullPath);
+  } catch (err: any) {
+    if (err.code === 'ENOENT') return res.status(404).json({ error: 'File not found' });
     res.status(500).json({ error: 'Internal server error' });
   }
 });

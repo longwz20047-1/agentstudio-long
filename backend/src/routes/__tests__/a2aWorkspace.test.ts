@@ -182,4 +182,43 @@ describe('a2aWorkspace routes', () => {
       expect(res.status).toBe(403);
     });
   });
+
+  describe('POST /upload', () => {
+    it('should upload file to workspace', async () => {
+      const res = await request(app)
+        .post(`${agentUrl}/upload?path=.`)
+        .set('x-test-workdir', testDir)
+        .attach('file', Buffer.from('uploaded content'), 'upload.txt');
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      const content = await fs.readFile(path.join(testDir, 'upload.txt'), 'utf-8');
+      expect(content).toBe('uploaded content');
+    });
+
+    it('should reject upload to path outside workspace', async () => {
+      const res = await request(app)
+        .post(`${agentUrl}/upload?path=../../etc`)
+        .set('x-test-workdir', testDir)
+        .attach('file', Buffer.from('evil'), 'evil.txt');
+      expect(res.status).toBe(403);
+    });
+  });
+
+  describe('GET /download', () => {
+    it('should download file', async () => {
+      const res = await request(app)
+        .get(`${agentUrl}/download?path=hello.txt`)
+        .set('x-test-workdir', testDir);
+      expect(res.status).toBe(200);
+      expect(res.headers['content-disposition']).toContain('hello.txt');
+      expect(res.text).toBe('Hello World');
+    });
+
+    it('should return 404 for missing file', async () => {
+      const res = await request(app)
+        .get(`${agentUrl}/download?path=noexist.bin`)
+        .set('x-test-workdir', testDir);
+      expect(res.status).toBe(404);
+    });
+  });
 });
