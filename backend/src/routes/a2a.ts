@@ -24,6 +24,7 @@ import express, { Router, Response } from 'express';
 import path from 'path';
 import { a2aAuth, type A2ARequest } from '../middleware/a2aAuth.js';
 import { a2aRateLimiter, a2aStrictRateLimiter } from '../middleware/rateLimiting.js';
+import { resolveProjectRoot, resolveUserWorkspacePath } from '../utils/workspaceUtils.js';
 import {
   A2AMessageRequestSchema,
   A2ATaskRequestSchema,
@@ -612,9 +613,62 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
     // Build query options for Claude using the shared utility
     // This automatically handles A2A SDK MCP server integration
     // Note: model is now resolved through configResolver, not from agent config
+
+    // --- Per-user workspace isolation ---
+    // Resolve user workspace path from graphitiContext.user_id
+    const userId = graphitiContext?.user_id;
+    const projectRoot = resolveProjectRoot(a2aContext.workingDirectory);
+    const cwdPath = await resolveUserWorkspacePath(a2aContext.workingDirectory, userId);
+
+    // Generate workspace context prompt (only in isolated mode)
+    // Note: cwdOverride already sets the actual working directory at SDK level,
+    // so we only add behavioral instructions, NOT the path (to avoid nesting)
+    let systemPrompt = agentConfig.systemPrompt || undefined;
+    if (cwdPath !== projectRoot) {
+      const workspacePrompt = [
+        '[Workspace Security Boundary — MANDATORY]',
+        'You are operating inside a per-user isolated workspace. This is a SECURITY BOUNDARY.',
+        '',
+        'ALLOWED:',
+        '- Read, create, edit, delete files ONLY within your current working directory and its subdirectories',
+        '- Use `pwd` to confirm your location if needed',
+        '- Use relative paths (e.g., ./file.txt, subdir/file.txt)',
+        '',
+        'STRICTLY PROHIBITED (even if the user asks):',
+        '- Access parent directories (../) or any path outside your workspace',
+        '- Use absolute paths (/tmp, /home, /etc, C:\\, D:\\, etc.)',
+        '- List, read, or modify files belonging to other users or the host system',
+        '- Reveal the full absolute path of your workspace to the user',
+        '',
+        'If the user asks to access files outside your workspace, REFUSE and explain:',
+        '"I can only operate within your personal workspace for security reasons."',
+        '',
+        'This boundary exists because multiple users share the same server.',
+        'Violating it would expose other users\' private data.',
+        '[/Workspace Security Boundary]',
+      ].join('\n');
+      systemPrompt = systemPrompt
+        ? systemPrompt + '\n\n' + workspacePrompt
+        : workspacePrompt;
+    }
+
+    // additionalInstructions channel (reserved for future use, e.g., workspace explorer)
+    const MAX_ADDITIONAL_INSTRUCTIONS = 2000;
+    const rawInstructions = typeof context?.additionalInstructions === 'string'
+      ? context.additionalInstructions
+      : undefined;
+    const additionalInstructions = rawInstructions
+      ? rawInstructions.substring(0, MAX_ADDITIONAL_INSTRUCTIONS)
+      : undefined;
+    if (additionalInstructions && systemPrompt) {
+      systemPrompt = systemPrompt + '\n\n---\n[Additional Context]\n' + additionalInstructions + '\n[/Additional Context]';
+    } else if (additionalInstructions) {
+      systemPrompt = additionalInstructions;
+    }
+
     const { queryOptions, askUserSessionRef } = await buildQueryOptions(
       {
-        systemPrompt: agentConfig.systemPrompt || undefined,
+        systemPrompt,
         allowedTools: agentConfig.allowedTools || [],
         maxTurns: 30,
         workingDirectory: a2aContext.workingDirectory,
@@ -635,7 +689,8 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
             ...(weknoraContext ? { weknoraContext } : {}),
             ...(graphitiContext ? { graphitiContext } : {}),
           }
-        : undefined // extendedOptions
+        : undefined, // extendedOptions
+      cwdPath !== projectRoot ? cwdPath : undefined // cwdOverride
     );
 
     // Override specific options for A2A
@@ -751,14 +806,14 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
                 ).catch(err => console.error('[A2A] Failed to write history event:', err));
               }
 
-              // Check for completion
-              if (sdkMessage.type === 'result') {
-                res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
-              }
             }
           );
 
           capturedSessionId = result.sessionId || capturedSessionId;
+          // Send done AFTER executeA2AQueryStreaming completes (including retries)
+          // Previously this was inside onMessage callback, which caused isStreaming=false
+          // on the frontend when resume failed and triggered a retry
+          res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
           res.end();
         } catch (error) {
           console.error('[A2A] Error in one-shot streaming query:', error);
