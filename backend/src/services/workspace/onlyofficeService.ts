@@ -2,13 +2,13 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import path from 'path';
 
-const JWT_SECRET = process.env.ONLYOFFICE_JWT_SECRET || '';
-const HMAC_SECRET = process.env.ONLYOFFICE_HMAC_SECRET || '';
-const DS_URL = process.env.ONLYOFFICE_DS_URL || '';
-const EXTERNAL_URL = process.env.ONLYOFFICE_EXTERNAL_URL || '';
+// Read env vars lazily (not at module init) because dotenv.config() runs after ES module imports
+function env(key: string): string {
+  return process.env[key] || '';
+}
 
 export function generateFileToken(filePath: string): string {
-  return crypto.createHmac('sha256', HMAC_SECRET).update(filePath).digest('hex');
+  return crypto.createHmac('sha256', env('ONLYOFFICE_HMAC_SECRET')).update(filePath).digest('hex');
 }
 
 export function verifyFileToken(filePath: string, token: string): boolean {
@@ -43,18 +43,20 @@ export function buildOnlyOfficeConfig(
     },
   };
 
-  if (JWT_SECRET) {
-    config.token = jwt.sign(config, JWT_SECRET);
+  const jwtSecret = env('ONLYOFFICE_JWT_SECRET');
+  if (jwtSecret) {
+    config.token = jwt.sign(config, jwtSecret);
   }
 
-  return { config, onlyofficeUrl: EXTERNAL_URL };
+  return { config, onlyofficeUrl: env('ONLYOFFICE_EXTERNAL_URL') };
 }
 
 export function rewriteCallbackUrl(downloadUrl: string): string {
-  if (!DS_URL) return downloadUrl;
+  const dsUrl = env('ONLYOFFICE_DS_URL');
+  if (!dsUrl) return downloadUrl;
   try {
     const parsed = new URL(downloadUrl);
-    const internal = new URL(DS_URL);
+    const internal = new URL(dsUrl);
     parsed.protocol = internal.protocol;
     parsed.host = internal.host;
     return parsed.toString();
