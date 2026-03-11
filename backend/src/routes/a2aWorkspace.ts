@@ -3,6 +3,7 @@ import multer from 'multer';
 import { a2aAuth, type A2ARequest } from '../middleware/a2aAuth.js';
 import { a2aRateLimiter } from '../middleware/rateLimiting.js';
 import { resolveUserWorkspacePath, isPathSafe } from '../utils/workspaceUtils.js';
+import { resolveA2AId } from '../services/a2a/agentMappingService.js';
 import path from 'path';
 import fs from 'fs/promises';
 import { createWriteStream } from 'fs';
@@ -12,6 +13,59 @@ import { buildOnlyOfficeConfig, verifyFileToken, rewriteCallbackUrl } from '../s
 
 const router: Router = express.Router({ mergeParams: true });
 
+// --- OnlyOffice file/callback: exempt from a2aAuth ---
+// Document Server calls these without API key; HMAC token provides authentication
+async function resolveWorkspacePathByAgentId(req: Request): Promise<string> {
+  const a2aAgentId = req.params.a2aAgentId;
+  const mapping = await resolveA2AId(a2aAgentId);
+  if (!mapping) throw new Error('Agent not found');
+  const userId = req.query.userId as string | undefined;
+  return resolveUserWorkspacePath(mapping.workingDirectory, userId);
+}
+
+router.get('/onlyoffice/file', async (req: Request, res: Response) => {
+  try {
+    const filePath = req.query.path as string;
+    const token = req.query.token as string;
+    if (!filePath || !token) return res.status(400).json({ error: 'path and token are required' });
+    if (!verifyFileToken(filePath, token)) return res.status(403).json({ error: 'Invalid token' });
+    const cwdPath = await resolveWorkspacePathByAgentId(req);
+    if (!isPathSafe(filePath, cwdPath)) return res.status(403).json({ error: 'Path outside workspace' });
+
+    const fullPath = path.resolve(cwdPath, filePath);
+    res.sendFile(fullPath);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/onlyoffice/callback', async (req: Request, res: Response) => {
+  try {
+    const filePath = req.query.path as string;
+    const token = req.query.token as string;
+    if (!filePath || !token) return res.status(400).json({ error: 'path and token are required' });
+    if (!verifyFileToken(filePath, token)) return res.status(403).json({ error: 'Invalid token' });
+    const cwdPath = await resolveWorkspacePathByAgentId(req);
+    if (!isPathSafe(filePath, cwdPath)) return res.status(403).json({ error: 'Path outside workspace' });
+
+    const { status, url } = req.body;
+
+    if (status === 2 && url) {
+      const downloadUrl = rewriteCallbackUrl(url);
+      const response = await fetch(downloadUrl);
+      if (!response.ok) throw new Error(`Failed to download: ${response.status}`);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const fullPath = path.resolve(cwdPath, filePath);
+      await fs.writeFile(fullPath, buffer);
+    }
+
+    res.json({ error: 0 }); // OnlyOffice expects { error: 0 } for success
+  } catch {
+    res.json({ error: 0 }); // Must still return success to prevent OnlyOffice retry loop
+  }
+});
+
+// --- Auth-protected routes below ---
 router.use(a2aAuth);
 router.use(a2aRateLimiter);
 
@@ -512,50 +566,6 @@ router.get('/onlyoffice/config', async (req: Request, res: Response) => {
     res.json(result);
   } catch {
     res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// GET /onlyoffice/file?path=file.docx&token=hmac
-router.get('/onlyoffice/file', async (req: Request, res: Response) => {
-  try {
-    const cwdPath = await resolveWorkspacePath(req as A2ARequest);
-    const filePath = req.query.path as string;
-    const token = req.query.token as string;
-    if (!filePath || !token) return res.status(400).json({ error: 'path and token are required' });
-    if (!verifyFileToken(filePath, token)) return res.status(403).json({ error: 'Invalid token' });
-    if (!isPathSafe(filePath, cwdPath)) return res.status(403).json({ error: 'Path outside workspace' });
-
-    const fullPath = path.resolve(cwdPath, filePath);
-    res.sendFile(fullPath);
-  } catch {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// POST /onlyoffice/callback?path=file.docx&token=hmac
-router.post('/onlyoffice/callback', async (req: Request, res: Response) => {
-  try {
-    const cwdPath = await resolveWorkspacePath(req as A2ARequest);
-    const filePath = req.query.path as string;
-    const token = req.query.token as string;
-    if (!filePath || !token) return res.status(400).json({ error: 'path and token are required' });
-    if (!verifyFileToken(filePath, token)) return res.status(403).json({ error: 'Invalid token' });
-    if (!isPathSafe(filePath, cwdPath)) return res.status(403).json({ error: 'Path outside workspace' });
-
-    const { status, url } = req.body;
-
-    if (status === 2 && url) {
-      const downloadUrl = rewriteCallbackUrl(url);
-      const response = await fetch(downloadUrl);
-      if (!response.ok) throw new Error(`Failed to download: ${response.status}`);
-      const buffer = Buffer.from(await response.arrayBuffer());
-      const fullPath = path.resolve(cwdPath, filePath);
-      await fs.writeFile(fullPath, buffer);
-    }
-
-    res.json({ error: 0 }); // OnlyOffice expects { error: 0 } for success
-  } catch {
-    res.json({ error: 0 }); // Must still return success to prevent OnlyOffice retry loop
   }
 });
 
