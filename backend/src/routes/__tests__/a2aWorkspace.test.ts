@@ -221,4 +221,38 @@ describe('a2aWorkspace routes', () => {
       expect(res.status).toBe(404);
     });
   });
+
+  describe('POST /rename', () => {
+    it('should rename a file', async () => {
+      await fs.writeFile(path.join(testDir, 'old.txt'), 'content');
+      const res = await request(app)
+        .post(`${agentUrl}/rename`)
+        .set('x-test-workdir', testDir)
+        .send({ oldPath: 'old.txt', newPath: 'new.txt' });
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      await expect(fs.access(path.join(testDir, 'new.txt'))).resolves.toBeUndefined();
+      await expect(fs.access(path.join(testDir, 'old.txt'))).rejects.toThrow();
+    });
+
+    it('should return 409 if target exists', async () => {
+      await fs.writeFile(path.join(testDir, 'a.txt'), '1');
+      await fs.writeFile(path.join(testDir, 'b.txt'), '2');
+      const res = await request(app)
+        .post(`${agentUrl}/rename`)
+        .set('x-test-workdir', testDir)
+        .send({ oldPath: 'a.txt', newPath: 'b.txt' });
+      expect(res.status).toBe(409);
+      expect(res.body.exists).toBe(true);
+    });
+
+    it('should reject path traversal', async () => {
+      await fs.writeFile(path.join(testDir, 'file.txt'), 'x');
+      const res = await request(app)
+        .post(`${agentUrl}/rename`)
+        .set('x-test-workdir', testDir)
+        .send({ oldPath: 'file.txt', newPath: '../../etc/evil' });
+      expect(res.status).toBe(403);
+    });
+  });
 });

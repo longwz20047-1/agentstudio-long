@@ -166,7 +166,6 @@ router.delete('/delete', async (req: Request, res: Response) => {
     res.json({ success: true, path: filePath });
   } catch (err: any) {
     if (err.code === 'ENOENT') return res.status(404).json({ error: 'Not found' });
-    if (err.code === 'ENOTEMPTY') return res.status(400).json({ error: 'Directory not empty' });
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -213,6 +212,35 @@ router.get('/download', async (req: Request, res: Response) => {
     res.sendFile(fullPath);
   } catch (err: any) {
     if (err.code === 'ENOENT') return res.status(404).json({ error: 'File not found' });
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /rename  body: { oldPath, newPath }
+router.post('/rename', async (req: Request, res: Response) => {
+  try {
+    const cwdPath = await resolveWorkspacePath(req as A2ARequest);
+    const { oldPath, newPath } = req.body;
+    if (!oldPath || !newPath) {
+      return res.status(400).json({ error: 'oldPath and newPath are required' });
+    }
+    if (!isPathSafe(oldPath, cwdPath) || !isPathSafe(newPath, cwdPath)) {
+      return res.status(403).json({ error: 'Path outside workspace' });
+    }
+    const fullOld = path.resolve(cwdPath, oldPath);
+    const fullNew = path.resolve(cwdPath, newPath);
+    try {
+      const stat = await fs.stat(fullNew);
+      return res.status(409).json({
+        error: `Destination already exists: ${newPath}`,
+        exists: true,
+        existingType: stat.isDirectory() ? 'directory' : 'file',
+      });
+    } catch { /* target doesn't exist — proceed */ }
+    await fs.rename(fullOld, fullNew);
+    res.json({ success: true, oldPath, newPath });
+  } catch (err: any) {
+    if (err.code === 'ENOENT') return res.status(404).json({ error: 'Source not found' });
     res.status(500).json({ error: 'Internal server error' });
   }
 });
