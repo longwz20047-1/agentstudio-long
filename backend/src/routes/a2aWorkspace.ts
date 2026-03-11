@@ -5,6 +5,9 @@ import { a2aRateLimiter } from '../middleware/rateLimiting.js';
 import { resolveUserWorkspacePath, isPathSafe } from '../utils/workspaceUtils.js';
 import path from 'path';
 import fs from 'fs/promises';
+import { createWriteStream } from 'fs';
+import archiver from 'archiver';
+import AdmZip from 'adm-zip';
 
 const router: Router = express.Router({ mergeParams: true });
 
@@ -403,6 +406,72 @@ router.get('/search', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Invalid type. Use: filename, content, filetype' });
   } catch (err: any) {
     if (err.code === 'ENOENT') return res.status(404).json({ error: 'Search directory not found' });
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+const MAX_ZIP_SIZE = 50 * 1024 * 1024; // 50MB
+
+// POST /compress  body: { paths[], outputName }
+router.post('/compress', async (req: Request, res: Response) => {
+  try {
+    const cwdPath = await resolveWorkspacePath(req as A2ARequest);
+    const { paths: inputPaths, outputName } = req.body;
+    if (!inputPaths?.length || !outputName) {
+      return res.status(400).json({ error: 'paths and outputName are required' });
+    }
+    for (const p of inputPaths) {
+      if (!isPathSafe(p, cwdPath)) return res.status(403).json({ error: 'Path outside workspace' });
+    }
+    if (!isPathSafe(outputName, cwdPath)) {
+      return res.status(403).json({ error: 'Output path outside workspace' });
+    }
+    const outputPath = path.resolve(cwdPath, outputName);
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await new Promise<void>((resolve, reject) => {
+      const output = createWriteStream(outputPath);
+      const archive = archiver('zip', { zlib: { level: 6 } });
+      output.on('close', resolve);
+      archive.on('error', reject);
+      archive.pipe(output);
+      for (const p of inputPaths) {
+        const fullPath = path.resolve(cwdPath, p);
+        archive.file(fullPath, { name: path.basename(p) });
+      }
+      archive.finalize();
+    });
+    res.json({ success: true, path: outputName });
+  } catch (err: any) {
+    if (err.code === 'ENOENT') return res.status(404).json({ error: 'Source not found' });
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /extract  body: { zipPath, targetDir? }
+router.post('/extract', async (req: Request, res: Response) => {
+  try {
+    const cwdPath = await resolveWorkspacePath(req as A2ARequest);
+    const { zipPath, targetDir } = req.body;
+    if (!zipPath) return res.status(400).json({ error: 'zipPath is required' });
+    if (!isPathSafe(zipPath, cwdPath)) {
+      return res.status(403).json({ error: 'Path outside workspace' });
+    }
+    const target = targetDir || path.dirname(zipPath);
+    if (!isPathSafe(target, cwdPath)) {
+      return res.status(403).json({ error: 'Target path outside workspace' });
+    }
+    const fullZipPath = path.resolve(cwdPath, zipPath);
+    const stat = await fs.stat(fullZipPath);
+    if (stat.size > MAX_ZIP_SIZE) {
+      return res.status(413).json({ error: `ZIP file too large (max ${MAX_ZIP_SIZE / 1024 / 1024}MB)` });
+    }
+    const fullTarget = path.resolve(cwdPath, target);
+    await fs.mkdir(fullTarget, { recursive: true });
+    const zip = new AdmZip(fullZipPath);
+    zip.extractAllTo(fullTarget, true);
+    res.json({ success: true, path: target });
+  } catch (err: any) {
+    if (err.code === 'ENOENT') return res.status(404).json({ error: 'ZIP file not found' });
     res.status(500).json({ error: 'Internal server error' });
   }
 });

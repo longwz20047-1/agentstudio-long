@@ -354,4 +354,35 @@ describe('a2aWorkspace routes', () => {
       expect(res.body.results.length).toBe(2);
     });
   });
+
+  describe('POST /compress', () => {
+    it('should create zip from files', async () => {
+      await fs.writeFile(path.join(testDir, 'a.txt'), 'aaa');
+      await fs.writeFile(path.join(testDir, 'b.txt'), 'bbb');
+      const res = await request(app)
+        .post(`${agentUrl}/compress`)
+        .set('x-test-workdir', testDir)
+        .send({ paths: ['a.txt', 'b.txt'], outputName: 'archive.zip' });
+      expect(res.status).toBe(200);
+      await expect(fs.access(path.join(testDir, 'archive.zip'))).resolves.toBeUndefined();
+    });
+  });
+
+  describe('POST /extract', () => {
+    it('should extract zip to target directory', async () => {
+      // Create a zip first
+      await fs.writeFile(path.join(testDir, 'c.txt'), 'ccc');
+      await request(app)
+        .post(`${agentUrl}/compress`)
+        .set('x-test-workdir', testDir)
+        .send({ paths: ['c.txt'], outputName: 'test.zip' });
+      // Extract it
+      const res = await request(app)
+        .post(`${agentUrl}/extract`)
+        .set('x-test-workdir', testDir)
+        .send({ zipPath: 'test.zip', targetDir: 'extracted' });
+      expect(res.status).toBe(200);
+      await expect(fs.access(path.join(testDir, 'extracted', 'c.txt'))).resolves.toBeUndefined();
+    });
+  });
 });
