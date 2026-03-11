@@ -196,7 +196,7 @@ export async function integrateFirecrawlMcpServer(
         } catch (error) {
           firecrawlCircuitBreaker.recordFailure();
           const msg = error instanceof Error ? error.message : String(error);
-          console.error('❌ [Firecrawl] Scrape error:', error);
+          console.warn('[Firecrawl] Scrape failed:', msg);
           return {
             content: [{ type: 'text', text: `Scrape failed: ${msg}` }],
             isError: true,
@@ -343,7 +343,7 @@ export async function integrateFirecrawlMcpServer(
         } catch (error) {
           firecrawlCircuitBreaker.recordFailure();
           const msg = error instanceof Error ? error.message : String(error);
-          console.error('❌ [Firecrawl] Interact error:', error);
+          console.warn('[Firecrawl] Interact failed:', msg);
           return {
             content: [{ type: 'text', text: `Interact failed: ${msg}` }],
             isError: true,
@@ -398,7 +398,7 @@ export async function integrateFirecrawlMcpServer(
           } catch (error) {
             firecrawlCircuitBreaker.recordFailure();
             const msg = error instanceof Error ? error.message : String(error);
-            console.error('❌ [Firecrawl] Extract error:', error);
+            console.warn('[Firecrawl] Extract failed:', msg);
             return {
               content: [{ type: 'text', text: `Extract failed: ${msg}` }],
               isError: true,

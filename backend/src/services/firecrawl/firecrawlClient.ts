@@ -143,7 +143,12 @@ export class FirecrawlClient {
 
       if (!resp.ok) {
         const errorText = await resp.text();
-        const err: any = new Error(`Firecrawl scrape ${resp.status}: ${errorText}`);
+        let errorMsg = `Firecrawl scrape failed (${resp.status})`;
+        try {
+          const parsed = JSON.parse(errorText);
+          if (parsed.error) errorMsg = parsed.error;
+        } catch { /* not JSON, use default */ }
+        const err: any = new Error(errorMsg);
         err.status = resp.status;
         const retryAfterHeader = resp.headers.get('Retry-After');
         if (retryAfterHeader) err.retryAfter = parseInt(retryAfterHeader, 10);
@@ -185,7 +190,12 @@ export class FirecrawlClient {
 
       if (!resp.ok) {
         const errorText = await resp.text();
-        const err: any = new Error(`Firecrawl extract ${resp.status}: ${errorText}`);
+        let errorMsg = `Firecrawl extract failed (${resp.status})`;
+        try {
+          const parsed = JSON.parse(errorText);
+          if (parsed.error) errorMsg = parsed.error;
+        } catch { /* not JSON, use default */ }
+        const err: any = new Error(errorMsg);
         err.status = resp.status;
         const retryAfterHeader = resp.headers.get('Retry-After');
         if (retryAfterHeader) err.retryAfter = parseInt(retryAfterHeader, 10);

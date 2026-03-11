@@ -252,11 +252,15 @@ export async function buildQueryOptions(
   sessionIdForAskUser?: string,
   agentIdForAskUser?: string,
   a2aStreamEnabled?: boolean,
-  extendedOptions?: BuildQueryExtendedOptions
+  extendedOptions?: BuildQueryExtendedOptions,
+  cwdOverride?: string
 ): Promise<BuildQueryOptionsResult> {
   // Determine working directory
+  // Priority: cwdOverride (per-user workspace) > projectPath > agent.workingDirectory > process.cwd()
   let cwd = process.cwd();
-  if (projectPath) {
+  if (cwdOverride) {
+    cwd = cwdOverride;
+  } else if (projectPath) {
     cwd = projectPath;
   } else if (agent.workingDirectory) {
     cwd = path.resolve(process.cwd(), agent.workingDirectory);

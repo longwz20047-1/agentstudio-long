@@ -159,7 +159,7 @@ router.delete('/delete', async (req: Request, res: Response) => {
     const fullPath = path.resolve(cwdPath, filePath);
     const stat = await fs.stat(fullPath);
     if (stat.isDirectory()) {
-      await fs.rmdir(fullPath);
+      await fs.rm(fullPath, { recursive: true });
     } else {
       await fs.unlink(fullPath);
     }

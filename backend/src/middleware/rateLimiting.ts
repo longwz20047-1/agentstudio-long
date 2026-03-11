@@ -1,7 +1,7 @@
 /**
  * Rate Limiting Middleware for A2A Endpoints
  *
- * Limits requests to 100 per hour per API key to prevent abuse.
+ * Limits requests per API key to prevent abuse.
  * Returns 429 Too Many Requests with retryAfter header when limit exceeded.
  *
  * Uses in-memory storage (resets on server restart).
@@ -15,16 +15,20 @@ import type { A2ARequest } from './a2aAuth.js';
  * Rate limiter configuration for A2A endpoints
  *
  * - Window: 1 hour (60 minutes)
- * - Max requests: 100 per window
+ * - Max requests: 500 per window
  * - Key generator: Uses API key from a2aContext (set by a2aAuth middleware)
  * - Response: 429 with retryAfter header
+ *
+ * Note: Frontend page navigation triggers multiple concurrent requests
+ * (agent-card, skills, workspace/browse, history), so 500/hour is
+ * needed for normal usage patterns.
  */
 export const a2aRateLimiter = rateLimit({
   // Rate limit window (1 hour)
   windowMs: 60 * 60 * 1000, // 60 minutes
 
   // Maximum requests per window
-  max: 100,
+  max: 500,
 
   // Use API key as identifier (from a2aContext set by auth middleware)
   keyGenerator: (req: Request): string => {
@@ -55,7 +59,7 @@ export const a2aRateLimiter = rateLimit({
     res.status(429).json({
       error: 'Rate limit exceeded',
       code: 'RATE_LIMIT_EXCEEDED',
-      message: 'Too many requests. Maximum 100 requests per hour per API key.',
+      message: 'Too many requests. Maximum 500 requests per hour per API key.',
       retryAfter: 3600, // 1 hour in seconds
     });
   },
