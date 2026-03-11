@@ -255,4 +255,65 @@ describe('a2aWorkspace routes', () => {
       expect(res.status).toBe(403);
     });
   });
+
+  describe('POST /move', () => {
+    it('should move file into directory', async () => {
+      await fs.writeFile(path.join(testDir, 'file.txt'), 'data');
+      await fs.mkdir(path.join(testDir, 'movedir'));
+      const res = await request(app)
+        .post(`${agentUrl}/move`)
+        .set('x-test-workdir', testDir)
+        .send({ source: 'file.txt', destination: 'movedir' });
+      expect(res.status).toBe(200);
+      await expect(fs.access(path.join(testDir, 'movedir', 'file.txt'))).resolves.toBeUndefined();
+    });
+
+    it('should return 409 if target exists without force', async () => {
+      await fs.writeFile(path.join(testDir, 'src.txt'), '1');
+      await fs.mkdir(path.join(testDir, 'dest'));
+      await fs.writeFile(path.join(testDir, 'dest', 'src.txt'), '2');
+      const res = await request(app)
+        .post(`${agentUrl}/move`)
+        .set('x-test-workdir', testDir)
+        .send({ source: 'src.txt', destination: 'dest' });
+      expect(res.status).toBe(409);
+    });
+
+    it('should prevent moving directory into itself', async () => {
+      await fs.mkdir(path.join(testDir, 'parent', 'child'), { recursive: true });
+      const res = await request(app)
+        .post(`${agentUrl}/move`)
+        .set('x-test-workdir', testDir)
+        .send({ source: 'parent', destination: 'parent/child' });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('POST /copy', () => {
+    it('should copy file into directory', async () => {
+      await fs.writeFile(path.join(testDir, 'orig.txt'), 'data');
+      await fs.mkdir(path.join(testDir, 'target'));
+      const res = await request(app)
+        .post(`${agentUrl}/copy`)
+        .set('x-test-workdir', testDir)
+        .send({ source: 'orig.txt', destination: 'target' });
+      expect(res.status).toBe(200);
+      // Original still exists
+      await expect(fs.access(path.join(testDir, 'orig.txt'))).resolves.toBeUndefined();
+      // Copy exists
+      await expect(fs.access(path.join(testDir, 'target', 'orig.txt'))).resolves.toBeUndefined();
+    });
+
+    it('should copy directory recursively', async () => {
+      await fs.mkdir(path.join(testDir, 'srcdir'));
+      await fs.writeFile(path.join(testDir, 'srcdir', 'a.txt'), 'aaa');
+      await fs.mkdir(path.join(testDir, 'destdir'));
+      const res = await request(app)
+        .post(`${agentUrl}/copy`)
+        .set('x-test-workdir', testDir)
+        .send({ source: 'srcdir', destination: 'destdir' });
+      expect(res.status).toBe(200);
+      await expect(fs.access(path.join(testDir, 'destdir', 'srcdir', 'a.txt'))).resolves.toBeUndefined();
+    });
+  });
 });

@@ -245,4 +245,80 @@ router.post('/rename', async (req: Request, res: Response) => {
   }
 });
 
+// POST /move  body: { source, destination, force? }
+router.post('/move', async (req: Request, res: Response) => {
+  try {
+    const cwdPath = await resolveWorkspacePath(req as A2ARequest);
+    const { source, destination, force } = req.body;
+    if (!source || !destination) {
+      return res.status(400).json({ error: 'source and destination are required' });
+    }
+    if (!isPathSafe(source, cwdPath) || !isPathSafe(destination, cwdPath)) {
+      return res.status(403).json({ error: 'Path outside workspace' });
+    }
+    const fullSource = path.resolve(cwdPath, source);
+    const fullDest = path.resolve(cwdPath, destination);
+    if (fullDest.startsWith(fullSource + path.sep) || fullDest === fullSource) {
+      return res.status(400).json({ error: 'Cannot move directory into itself' });
+    }
+    const sourceName = path.basename(fullSource);
+    await fs.mkdir(fullDest, { recursive: true });
+    const targetPath = path.join(fullDest, sourceName);
+    if (!force) {
+      try {
+        const stat = await fs.stat(targetPath);
+        return res.status(409).json({
+          error: `Destination already exists: ${path.relative(cwdPath, targetPath)}`,
+          exists: true,
+          existingType: stat.isDirectory() ? 'directory' : 'file',
+        });
+      } catch { /* OK */ }
+    }
+    await fs.rename(fullSource, targetPath);
+    res.json({ success: true, path: path.relative(cwdPath, targetPath) });
+  } catch (err: any) {
+    if (err.code === 'ENOENT') return res.status(404).json({ error: 'Source not found' });
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /copy  body: { source, destination, force? }
+router.post('/copy', async (req: Request, res: Response) => {
+  try {
+    const cwdPath = await resolveWorkspacePath(req as A2ARequest);
+    const { source, destination, force } = req.body;
+    if (!source || !destination) {
+      return res.status(400).json({ error: 'source and destination are required' });
+    }
+    if (!isPathSafe(source, cwdPath) || !isPathSafe(destination, cwdPath)) {
+      return res.status(403).json({ error: 'Path outside workspace' });
+    }
+    const fullSource = path.resolve(cwdPath, source);
+    const fullDest = path.resolve(cwdPath, destination);
+    const sourceName = path.basename(fullSource);
+    await fs.mkdir(fullDest, { recursive: true });
+    const targetPath = path.join(fullDest, sourceName);
+    if (!force) {
+      try {
+        const stat = await fs.stat(targetPath);
+        return res.status(409).json({
+          error: `Destination already exists: ${path.relative(cwdPath, targetPath)}`,
+          exists: true,
+          existingType: stat.isDirectory() ? 'directory' : 'file',
+        });
+      } catch { /* OK */ }
+    }
+    const stat = await fs.stat(fullSource);
+    if (stat.isDirectory()) {
+      await fs.cp(fullSource, targetPath, { recursive: true });
+    } else {
+      await fs.copyFile(fullSource, targetPath);
+    }
+    res.json({ success: true, path: path.relative(cwdPath, targetPath) });
+  } catch (err: any) {
+    if (err.code === 'ENOENT') return res.status(404).json({ error: 'Source not found' });
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 export default router;
