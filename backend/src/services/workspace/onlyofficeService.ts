@@ -23,22 +23,24 @@ export function buildOnlyOfficeConfig(
   mode: 'view' | 'edit',
   agentId: string,
   baseUrl: string,
+  userId?: string,
 ) {
   const fileName = path.basename(filePath);
   const ext = path.extname(fileName).slice(1).toLowerCase();
   const fileToken = generateFileToken(filePath);
   const docKey = crypto.createHash('md5').update(`${filePath}-${Date.now()}`).digest('hex');
+  const userParam = userId ? `&userId=${encodeURIComponent(userId)}` : '';
 
   const config: Record<string, any> = {
     document: {
       fileType: ext,
       key: docKey,
       title: fileName,
-      url: `${baseUrl}/a2a/${agentId}/workspace/onlyoffice/file?path=${encodeURIComponent(filePath)}&token=${fileToken}`,
+      url: `${baseUrl}/a2a/${agentId}/workspace/onlyoffice/file?path=${encodeURIComponent(filePath)}&token=${fileToken}${userParam}`,
     },
     editorConfig: {
       mode,
-      callbackUrl: `${baseUrl}/a2a/${agentId}/workspace/onlyoffice/callback?path=${encodeURIComponent(filePath)}&token=${fileToken}`,
+      callbackUrl: `${baseUrl}/a2a/${agentId}/workspace/onlyoffice/callback?path=${encodeURIComponent(filePath)}&token=${fileToken}${userParam}`,
       lang: 'zh',
     },
   };

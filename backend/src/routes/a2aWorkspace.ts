@@ -561,8 +561,9 @@ router.get('/onlyoffice/config', async (req: Request, res: Response) => {
     if (!isPathSafe(filePath, cwdPath)) return res.status(403).json({ error: 'Path outside workspace' });
 
     const agentId = (req as A2ARequest).a2aContext!.a2aAgentId;
+    const userId = req.query.userId as string | undefined;
     const internalUrl = process.env.ONLYOFFICE_INTERNAL_URL || `http://localhost:4936`;
-    const result = buildOnlyOfficeConfig(filePath, mode, agentId, internalUrl);
+    const result = buildOnlyOfficeConfig(filePath, mode, agentId, internalUrl, userId);
     res.json(result);
   } catch {
     res.status(500).json({ error: 'Internal server error' });
