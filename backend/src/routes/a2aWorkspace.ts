@@ -277,6 +277,8 @@ router.post('/move', async (req: Request, res: Response) => {
           existingType: stat.isDirectory() ? 'directory' : 'file',
         });
       } catch { /* OK */ }
+    } else {
+      await fs.rm(targetPath, { recursive: true, force: true }).catch(() => {});
     }
     await fs.rename(fullSource, targetPath);
     res.json({ success: true, path: path.relative(cwdPath, targetPath) });
@@ -311,6 +313,8 @@ router.post('/copy', async (req: Request, res: Response) => {
           existingType: stat.isDirectory() ? 'directory' : 'file',
         });
       } catch { /* OK */ }
+    } else {
+      await fs.rm(targetPath, { recursive: true, force: true }).catch(() => {});
     }
     const stat = await fs.stat(fullSource);
     if (stat.isDirectory()) {
@@ -429,15 +433,24 @@ router.post('/compress', async (req: Request, res: Response) => {
     }
     const outputPath = path.resolve(cwdPath, outputName);
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    const fileEntries: Array<{ fullPath: string; name: string; isDir: boolean }> = [];
+    for (const p of inputPaths) {
+      const fullPath = path.resolve(cwdPath, p);
+      const stat = await fs.stat(fullPath);
+      fileEntries.push({ fullPath, name: path.basename(p), isDir: stat.isDirectory() });
+    }
     await new Promise<void>((resolve, reject) => {
       const output = createWriteStream(outputPath);
       const archive = archiver('zip', { zlib: { level: 6 } });
       output.on('close', resolve);
       archive.on('error', reject);
       archive.pipe(output);
-      for (const p of inputPaths) {
-        const fullPath = path.resolve(cwdPath, p);
-        archive.file(fullPath, { name: path.basename(p) });
+      for (const entry of fileEntries) {
+        if (entry.isDir) {
+          archive.directory(entry.fullPath, entry.name);
+        } else {
+          archive.file(entry.fullPath, { name: entry.name });
+        }
       }
       archive.finalize();
     });
@@ -469,6 +482,13 @@ router.post('/extract', async (req: Request, res: Response) => {
     const fullTarget = path.resolve(cwdPath, target);
     await fs.mkdir(fullTarget, { recursive: true });
     const zip = new AdmZip(fullZipPath);
+    const entries = zip.getEntries();
+    for (const entry of entries) {
+      const entryTarget = path.resolve(fullTarget, entry.entryName);
+      if (!entryTarget.startsWith(fullTarget + path.sep) && entryTarget !== fullTarget) {
+        return res.status(400).json({ error: 'ZIP contains path traversal entries' });
+      }
+    }
     zip.extractAllTo(fullTarget, true);
     res.json({ success: true, path: target });
   } catch (err: any) {
@@ -520,6 +540,7 @@ router.post('/onlyoffice/callback', async (req: Request, res: Response) => {
     const token = req.query.token as string;
     if (!filePath || !token) return res.status(400).json({ error: 'path and token are required' });
     if (!verifyFileToken(filePath, token)) return res.status(403).json({ error: 'Invalid token' });
+    if (!isPathSafe(filePath, cwdPath)) return res.status(403).json({ error: 'Path outside workspace' });
 
     const { status, url } = req.body;
 

@@ -12,10 +12,10 @@ export function generateFileToken(filePath: string): string {
 }
 
 export function verifyFileToken(filePath: string, token: string): boolean {
-  return crypto.timingSafeEqual(
-    Buffer.from(generateFileToken(filePath)),
-    Buffer.from(token),
-  );
+  const expected = Buffer.from(generateFileToken(filePath));
+  const provided = Buffer.from(token);
+  if (expected.length !== provided.length) return false;
+  return crypto.timingSafeEqual(expected, provided);
 }
 
 export function buildOnlyOfficeConfig(
