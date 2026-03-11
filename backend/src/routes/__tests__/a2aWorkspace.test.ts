@@ -316,4 +316,42 @@ describe('a2aWorkspace routes', () => {
       await expect(fs.access(path.join(testDir, 'destdir', 'srcdir', 'a.txt'))).resolves.toBeUndefined();
     });
   });
+
+  describe('GET /search', () => {
+    beforeEach(async () => {
+      await fs.mkdir(path.join(testDir, 'src'), { recursive: true });
+      await fs.writeFile(path.join(testDir, 'src', 'index.ts'), 'export function hello() {}');
+      await fs.writeFile(path.join(testDir, 'src', 'utils.ts'), 'export const x = 1;');
+      await fs.writeFile(path.join(testDir, 'readme.md'), '# Hello');
+    });
+
+    it('should search by filename', async () => {
+      const res = await request(app)
+        .get(`${agentUrl}/search`)
+        .set('x-test-workdir', testDir)
+        .query({ type: 'filename', query: 'index' });
+      expect(res.status).toBe(200);
+      expect(res.body.results.length).toBeGreaterThan(0);
+      expect(res.body.results[0].name).toContain('index');
+    });
+
+    it('should search by content', async () => {
+      const res = await request(app)
+        .get(`${agentUrl}/search`)
+        .set('x-test-workdir', testDir)
+        .query({ type: 'content', query: 'hello' });
+      expect(res.status).toBe(200);
+      expect(res.body.results.length).toBeGreaterThan(0);
+      expect(res.body.results[0].matches.length).toBeGreaterThan(0);
+    });
+
+    it('should search by filetype', async () => {
+      const res = await request(app)
+        .get(`${agentUrl}/search`)
+        .set('x-test-workdir', testDir)
+        .query({ type: 'filetype', query: '.ts' });
+      expect(res.status).toBe(200);
+      expect(res.body.results.length).toBe(2);
+    });
+  });
 });

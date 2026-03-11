@@ -321,4 +321,90 @@ router.post('/copy', async (req: Request, res: Response) => {
   }
 });
 
+const SEARCH_EXCLUDE = new Set(['node_modules', '.git', 'dist', 'build', '__pycache__', '.next', '.nuxt', 'coverage', '.workspaces']);
+const MAX_CONTENT_FILE_SIZE = 1 * 1024 * 1024; // 1MB
+
+async function walkDir(dir: string, basePath: string, results: string[]): Promise<void> {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (SEARCH_EXCLUDE.has(entry.name) || entry.name.startsWith('.')) continue;
+    const fullPath = path.join(dir, entry.name);
+    const relPath = path.relative(basePath, fullPath);
+    if (entry.isDirectory()) {
+      await walkDir(fullPath, basePath, results);
+    } else {
+      results.push(relPath);
+    }
+  }
+}
+
+// GET /search?type=filename|content|filetype&query=...&path=.&limit=50
+router.get('/search', async (req: Request, res: Response) => {
+  try {
+    const cwdPath = await resolveWorkspacePath(req as A2ARequest);
+    const type = (req.query.type as string) || 'filename';
+    const query = req.query.query as string;
+    const searchBase = (req.query.path as string) || '.';
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+
+    if (!query) return res.status(400).json({ error: 'query is required' });
+    if (!isPathSafe(searchBase, cwdPath)) {
+      return res.status(403).json({ error: 'Path outside workspace' });
+    }
+
+    const searchDir = path.resolve(cwdPath, searchBase);
+    const allFiles: string[] = [];
+    await walkDir(searchDir, cwdPath, allFiles);
+
+    if (type === 'filename') {
+      const lowerQuery = query.toLowerCase();
+      const results = allFiles
+        .filter(f => path.basename(f).toLowerCase().includes(lowerQuery))
+        .slice(0, limit)
+        .map(f => ({ name: path.basename(f), path: f, isDirectory: false }));
+      return res.json({ results });
+    }
+
+    if (type === 'filetype') {
+      const exts = query.split(',').map(e => e.trim().toLowerCase()).map(e => e.startsWith('.') ? e : '.' + e);
+      const results = allFiles
+        .filter(f => exts.includes(path.extname(f).toLowerCase()))
+        .slice(0, limit)
+        .map(f => ({ name: path.basename(f), path: f, isDirectory: false }));
+      return res.json({ results });
+    }
+
+    if (type === 'content') {
+      const results: Array<{ path: string; matches: Array<{ line: string; lineNumber: number }> }> = [];
+      let truncated = false;
+      const startTime = Date.now();
+      for (const filePath of allFiles) {
+        if (Date.now() - startTime > 5000) { truncated = true; break; }
+        if (results.length >= limit) break;
+        const fullPath = path.resolve(cwdPath, filePath);
+        try {
+          const stat = await fs.stat(fullPath);
+          if (stat.size > MAX_CONTENT_FILE_SIZE) continue;
+          const content = await fs.readFile(fullPath, 'utf-8');
+          const lines = content.split('\n');
+          const matches: Array<{ line: string; lineNumber: number }> = [];
+          const lowerQuery = query.toLowerCase();
+          for (let i = 0; i < lines.length && matches.length < 5; i++) {
+            if (lines[i].toLowerCase().includes(lowerQuery)) {
+              matches.push({ line: lines[i].slice(0, 200), lineNumber: i + 1 });
+            }
+          }
+          if (matches.length > 0) results.push({ path: filePath, matches });
+        } catch { /* skip unreadable files */ }
+      }
+      return res.json({ results, truncated });
+    }
+
+    res.status(400).json({ error: 'Invalid type. Use: filename, content, filetype' });
+  } catch (err: any) {
+    if (err.code === 'ENOENT') return res.status(404).json({ error: 'Search directory not found' });
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 export default router;
