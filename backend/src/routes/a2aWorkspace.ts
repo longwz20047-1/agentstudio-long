@@ -8,6 +8,7 @@ import fs from 'fs/promises';
 import { createWriteStream } from 'fs';
 import archiver from 'archiver';
 import AdmZip from 'adm-zip';
+import { buildOnlyOfficeConfig, verifyFileToken, rewriteCallbackUrl } from '../services/workspace/onlyofficeService.js';
 
 const router: Router = express.Router({ mergeParams: true });
 
@@ -473,6 +474,67 @@ router.post('/extract', async (req: Request, res: Response) => {
   } catch (err: any) {
     if (err.code === 'ENOENT') return res.status(404).json({ error: 'ZIP file not found' });
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /onlyoffice/config?path=file.docx&mode=edit
+router.get('/onlyoffice/config', async (req: Request, res: Response) => {
+  try {
+    const cwdPath = await resolveWorkspacePath(req as A2ARequest);
+    const filePath = req.query.path as string;
+    const mode = (req.query.mode as string) === 'edit' ? 'edit' : 'view';
+    if (!filePath) return res.status(400).json({ error: 'path is required' });
+    if (!isPathSafe(filePath, cwdPath)) return res.status(403).json({ error: 'Path outside workspace' });
+
+    const agentId = (req as A2ARequest).a2aContext!.a2aAgentId;
+    const internalUrl = process.env.ONLYOFFICE_INTERNAL_URL || `http://localhost:4936`;
+    const result = buildOnlyOfficeConfig(filePath, mode, agentId, internalUrl);
+    res.json(result);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /onlyoffice/file?path=file.docx&token=hmac
+router.get('/onlyoffice/file', async (req: Request, res: Response) => {
+  try {
+    const cwdPath = await resolveWorkspacePath(req as A2ARequest);
+    const filePath = req.query.path as string;
+    const token = req.query.token as string;
+    if (!filePath || !token) return res.status(400).json({ error: 'path and token are required' });
+    if (!verifyFileToken(filePath, token)) return res.status(403).json({ error: 'Invalid token' });
+    if (!isPathSafe(filePath, cwdPath)) return res.status(403).json({ error: 'Path outside workspace' });
+
+    const fullPath = path.resolve(cwdPath, filePath);
+    res.sendFile(fullPath);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /onlyoffice/callback?path=file.docx&token=hmac
+router.post('/onlyoffice/callback', async (req: Request, res: Response) => {
+  try {
+    const cwdPath = await resolveWorkspacePath(req as A2ARequest);
+    const filePath = req.query.path as string;
+    const token = req.query.token as string;
+    if (!filePath || !token) return res.status(400).json({ error: 'path and token are required' });
+    if (!verifyFileToken(filePath, token)) return res.status(403).json({ error: 'Invalid token' });
+
+    const { status, url } = req.body;
+
+    if (status === 2 && url) {
+      const downloadUrl = rewriteCallbackUrl(url);
+      const response = await fetch(downloadUrl);
+      if (!response.ok) throw new Error(`Failed to download: ${response.status}`);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const fullPath = path.resolve(cwdPath, filePath);
+      await fs.writeFile(fullPath, buffer);
+    }
+
+    res.json({ error: 0 }); // OnlyOffice expects { error: 0 } for success
+  } catch {
+    res.json({ error: 0 }); // Must still return success to prevent OnlyOffice retry loop
   }
 });
 
