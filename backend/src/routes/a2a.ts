@@ -985,6 +985,9 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
           ...(detected.isCommand ? { skillId: detected.skillId } : {}),
         };
 
+        let capturedSessionId: string | null = actualSessionId;
+        let userMessageSaved = false;
+
         // Save user message to history first
         if (actualSessionId) {
           const userHistoryEvent = {
@@ -994,6 +997,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
           };
           try {
             await a2aHistoryService.appendEvent(a2aContext.workingDirectory, actualSessionId, userHistoryEvent);
+            userMessageSaved = true;
           } catch (err) {
             console.error('[A2A] Failed to write user message to history:', err);
           }
@@ -1001,32 +1005,119 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
 
         try {
           await claudeSession.sendMessage(sdkUserMessage, async (sdkMessage: SDKMessage) => {
+            // --- Session confirmation (adapted from agents.ts:943-973) ---
+            // Note: uses inline type check instead of isSDKSystemMessage() which is not imported in a2a.ts.
+            // This block runs synchronously before eventData construction below,
+            // so even the system.init event itself will carry the correct sessionId.
+            if (sdkMessage.type === 'system'
+                && (sdkMessage as any).subtype === 'init'
+                && sdkMessage.session_id) {
+              const sdkSessionId = sdkMessage.session_id;
+
+              if (!capturedSessionId) {
+                // New session: confirm in SessionManager
+                capturedSessionId = sdkSessionId;
+                claudeSession.setClaudeSessionId(sdkSessionId);
+                sessionManager.confirmSessionId(claudeSession, sdkSessionId, configSnapshot);
+                console.log(`[A2A reuse] Confirmed session ${sdkSessionId}`);
+
+                // Update AskUserQuestion MCP sessionId
+                if (askUserSessionRef) {
+                  const oldId = askUserSessionRef.current;
+                  askUserSessionRef.current = sdkSessionId;
+                  userInputRegistry.updateSessionId(oldId, sdkSessionId);
+                }
+              } else if (sdkSessionId !== capturedSessionId) {
+                // Resume returned different ID: update internal ID, keep public ID
+                claudeSession.setClaudeSessionId(sdkSessionId);
+                console.log(`[A2A reuse] Resume branched: SDK=${sdkSessionId}, public=${capturedSessionId}`);
+              }
+            }
+
+            // --- Deferred user message save (new session, now have sessionId) ---
+            if (capturedSessionId && !userMessageSaved) {
+              userMessageSaved = true;
+              try {
+                await a2aHistoryService.appendEvent(
+                  a2aContext.workingDirectory,
+                  capturedSessionId,
+                  {
+                    ...historyUserMessage,
+                    sessionId: capturedSessionId,
+                    timestamp: Date.now() - 1, // before SDK events for ordering
+                  }
+                );
+              } catch (err) {
+                console.error('[A2A] Failed to write deferred user message:', err);
+              }
+            }
+
+            // --- Build event with correct sessionId ---
             const eventData = {
               ...sdkMessage,
-              sessionId: actualSessionId,
+              sessionId: capturedSessionId || actualSessionId,
               timestamp: Date.now(),
             };
 
             res.write(`data: ${JSON.stringify(eventData)}\n\n`);
 
-            try {
-              if (actualSessionId) {
-                await a2aHistoryService.appendEvent(a2aContext.workingDirectory, actualSessionId, eventData);
+            // --- Save to A2A history ---
+            if (capturedSessionId) {
+              try {
+                await a2aHistoryService.appendEvent(
+                  a2aContext.workingDirectory,
+                  capturedSessionId,
+                  eventData
+                );
+              } catch (err) {
+                console.error('[A2A] Failed to write history event:', err);
               }
-            } catch (err) {
-              console.error('[A2A] Failed to write history event:', err);
             }
 
+            // --- Stream completion ---
             if (sdkMessage.type === 'result') {
               res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
               res.end();
             }
           });
         } catch (error) {
+          // --- Session not active: subprocess died (resume failure, crash, etc.) ---
+          // sendMessage() throws "Session is not active" when isActive=false (claudeSession.ts:193-194).
+          // File 3 (sessionUtils.ts) adds a proactive check, but this handles the race condition.
+          if (error instanceof Error && error.message.includes('not active')) {
+            console.warn(`[A2A] Session not active for agent ${a2aContext.agentType}, returning error`);
+            if (actualSessionId) {
+              await sessionManager.removeSession(actualSessionId).catch(() => {});
+            }
+            res.write(`data: ${JSON.stringify({
+              type: 'error',
+              error: 'Session expired or crashed. Please retry to start a fresh session.',
+              code: 'SESSION_INACTIVE',
+            })}\n\n`);
+            res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+            res.end();
+            return;
+          }
+
+          // --- Busy session handling ---
+          // claudeSession.sendMessage() throws "Session is busy processing another request..."
+          // when isProcessing is true (claudeSession.ts:198-199).
+          if (error instanceof Error && error.message.includes('busy processing')) {
+            console.warn(`[A2A] Session busy for agent ${a2aContext.agentType}`);
+            res.write(`data: ${JSON.stringify({
+              type: 'error',
+              error: 'Session is busy processing another request. Please wait.',
+              code: 'SESSION_BUSY',
+            })}\n\n`);
+            res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+            res.end();
+            return;
+          }
+
           console.error('[A2A] Error in streaming session:', error);
           const errorEvent = {
             type: 'error',
-            error: error instanceof Error ? error.message : String(error)
+            error: error instanceof Error ? error.message : String(error),
           };
           res.write(`data: ${JSON.stringify(errorEvent)}\n\n`);
           res.end();
