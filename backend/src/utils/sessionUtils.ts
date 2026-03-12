@@ -96,15 +96,23 @@ export async function handleSessionManagement(
     // Try to reuse existing session from SessionManager cache
     console.log(`🔍 Looking for existing session: ${sessionId} for agent: ${agentId}`);
     claudeSession = sessionManager.getSession(sessionId);
-    
+
     if (claudeSession) {
-      // 并发控制：检查会话是否正在处理其他请求
-      if (sessionManager.isSessionBusy(sessionId)) {
+      // Check if session subprocess is still alive (may have died from resume failure or crash)
+      if (!claudeSession.isSessionActive()) {
+        console.warn(`⚠️ Session ${sessionId} found but inactive (dead subprocess), removing and recreating`);
+        await sessionManager.removeSession(sessionId);
+        claudeSession = null;
+        // Falls through to the "not in memory" path below to recreate
+      } else if (sessionManager.isSessionBusy(sessionId)) {
         console.warn(`⚠️  Session ${sessionId} is currently busy processing another request`);
         throw new Error('SESSION_BUSY: This session is currently processing another request. Please wait for the current request to complete or create a new session.');
+      } else {
+        console.log(`♻️  Using existing persistent Claude session: ${sessionId} for agent: ${agentId}`);
       }
-      console.log(`♻️  Using existing persistent Claude session: ${sessionId} for agent: ${agentId}`);
-    } else {
+    }
+
+    if (!claudeSession) {
       console.log(`❌ Session ${sessionId} not found in memory for agent: ${agentId}`);
 
       // Check if session history exists in project directory
@@ -113,11 +121,9 @@ export async function handleSessionManagement(
       console.log(`📁 Session history exists: ${sessionExists} for sessionId: ${sessionId}`);
 
       if (sessionExists) {
-        // Session history exists, resume session
         console.log(`🔄 Found session history for ${sessionId}, resuming session for agent: ${agentId}`);
         claudeSession = sessionManager.createNewSession(agentId, queryOptions, sessionId, claudeVersionId, modelId, configSnapshot);
       } else {
-        // Session history not found, create new session but keep original sessionId for frontend
         console.log(`⚠️  Session ${sessionId} not found in memory or project history, creating new session for agent: ${agentId}`);
         claudeSession = sessionManager.createNewSession(agentId, queryOptions, undefined, claudeVersionId, modelId, configSnapshot);
       }
