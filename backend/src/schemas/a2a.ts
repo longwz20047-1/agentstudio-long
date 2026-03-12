@@ -34,7 +34,7 @@ export const A2AMessageRequestSchema = z.object({
   message: z.string().max(10000, 'Message too long (max 10000 characters)'),
   images: z.array(A2AImageSchema).optional(),
   sessionId: z.string().optional(),
-  sessionMode: SessionModeSchema.optional().default('new'),
+  sessionMode: SessionModeSchema.optional().default('reuse'),
   context: z.record(z.string(), z.unknown()).optional(),
 }).refine(
   (data) => data.message.trim().length > 0 || (data.images && data.images.length > 0),
