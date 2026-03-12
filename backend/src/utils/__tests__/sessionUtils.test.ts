@@ -18,7 +18,8 @@ vi.mock('../../services/sessionManager', () => ({
     getSession: vi.fn(),
     checkSessionExists: vi.fn(),
     createNewSession: vi.fn(),
-    isSessionBusy: vi.fn().mockReturnValue(false)
+    isSessionBusy: vi.fn().mockReturnValue(false),
+    removeSession: vi.fn().mockResolvedValue(true)
   }
 }));
 
@@ -45,7 +46,7 @@ describe('sessionUtils', () => {
     const mockQueryOptions = { cwd: '/test', model: 'sonnet' };
 
     it('should reuse existing session from memory', async () => {
-      const mockSession = { id: 'existing-session' };
+      const mockSession = { id: 'existing-session', isSessionActive: () => true };
       const { sessionManager } = await import('../../services/sessionManager');
       
       vi.mocked(sessionManager.getSession).mockReturnValue(mockSession as any);
@@ -85,7 +86,8 @@ describe('sessionUtils', () => {
         mockQueryOptions,
         'old-session',
         'version-1',
-        undefined  // modelId
+        undefined,  // modelId
+        undefined   // configSnapshot
       );
     });
 
@@ -110,7 +112,8 @@ describe('sessionUtils', () => {
         mockQueryOptions,
         undefined,
         undefined,
-        undefined  // modelId
+        undefined,  // modelId
+        undefined   // configSnapshot
       );
     });
 
@@ -134,8 +137,86 @@ describe('sessionUtils', () => {
         mockQueryOptions,
         undefined,
         undefined,
-        undefined  // modelId
+        undefined,  // modelId
+        undefined   // configSnapshot
       );
+    });
+
+    it('should remove dead session and recreate from disk history', async () => {
+      const deadSession = { id: 'dead-session', isSessionActive: () => false };
+      const freshSession = { id: 'fresh-session' };
+      const { sessionManager } = await import('../../services/sessionManager');
+
+      vi.mocked(sessionManager.getSession).mockReturnValue(deadSession as any);
+      vi.mocked(sessionManager.removeSession).mockResolvedValue(true);
+      vi.mocked(sessionManager.checkSessionExists).mockReturnValue(true);
+      vi.mocked(sessionManager.createNewSession).mockReturnValue(freshSession as any);
+
+      const result = await handleSessionManagement(
+        mockAgent,
+        'dead-session',
+        '/test/path',
+        mockQueryOptions
+      );
+
+      expect(sessionManager.removeSession).toHaveBeenCalledWith('dead-session');
+      expect(sessionManager.checkSessionExists).toHaveBeenCalledWith('dead-session', '/test/path');
+      expect(sessionManager.createNewSession).toHaveBeenCalledWith(
+        mockAgent,
+        mockQueryOptions,
+        'dead-session',
+        undefined,
+        undefined,
+        undefined   // configSnapshot
+      );
+      expect(result.claudeSession).toBe(freshSession);
+    });
+
+    it('should remove dead session and create fresh when no disk history', async () => {
+      const deadSession = { id: 'dead-session', isSessionActive: () => false };
+      const freshSession = { id: 'fresh-session' };
+      const { sessionManager } = await import('../../services/sessionManager');
+
+      vi.mocked(sessionManager.getSession).mockReturnValue(deadSession as any);
+      vi.mocked(sessionManager.removeSession).mockResolvedValue(true);
+      vi.mocked(sessionManager.checkSessionExists).mockReturnValue(false);
+      vi.mocked(sessionManager.createNewSession).mockReturnValue(freshSession as any);
+
+      const result = await handleSessionManagement(
+        mockAgent,
+        'dead-session',
+        '/test/path',
+        mockQueryOptions
+      );
+
+      expect(sessionManager.removeSession).toHaveBeenCalledWith('dead-session');
+      expect(sessionManager.createNewSession).toHaveBeenCalledWith(
+        mockAgent,
+        mockQueryOptions,
+        undefined,
+        undefined,
+        undefined,
+        undefined   // configSnapshot
+      );
+      expect(result.claudeSession).toBe(freshSession);
+    });
+
+    it('should reuse active session without removal', async () => {
+      const activeSession = { id: 'active-session', isSessionActive: () => true };
+      const { sessionManager } = await import('../../services/sessionManager');
+
+      vi.mocked(sessionManager.getSession).mockReturnValue(activeSession as any);
+
+      const result = await handleSessionManagement(
+        mockAgent,
+        'active-session',
+        '/test/path',
+        mockQueryOptions
+      );
+
+      expect(sessionManager.removeSession).not.toHaveBeenCalled();
+      expect(result.claudeSession).toBe(activeSession);
+      expect(result.actualSessionId).toBe('active-session');
     });
   });
 
