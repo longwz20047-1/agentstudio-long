@@ -31,17 +31,33 @@ export function buildOnlyOfficeConfig(
   const docKey = crypto.createHash('md5').update(`${filePath}-${Date.now()}`).digest('hex');
   const userParam = userId ? `&userId=${encodeURIComponent(userId)}` : '';
 
+  const isEdit = mode === 'edit';
+
   const config: Record<string, any> = {
     document: {
       fileType: ext,
       key: docKey,
       title: fileName,
       url: `${baseUrl}/a2a/${agentId}/workspace/onlyoffice/file?path=${encodeURIComponent(filePath)}&token=${fileToken}${userParam}`,
+      permissions: {
+        edit: isEdit,
+        download: true,
+        print: true,
+        comment: isEdit,
+        review: isEdit,
+        copy: true,
+        modifyContentControl: isEdit,
+        modifyFilter: isEdit,
+      },
     },
     editorConfig: {
       mode,
       callbackUrl: `${baseUrl}/a2a/${agentId}/workspace/onlyoffice/callback?path=${encodeURIComponent(filePath)}&token=${fileToken}${userParam}`,
       lang: 'zh',
+      user: {
+        id: userId || 'workspace-user',
+        name: userId || 'Workspace User',
+      },
     },
   };
 
@@ -51,6 +67,24 @@ export function buildOnlyOfficeConfig(
   }
 
   return { config, onlyofficeUrl: env('ONLYOFFICE_EXTERNAL_URL') };
+}
+
+export async function forceSave(docKey: string): Promise<{ error: number }> {
+  const dsUrl = env('ONLYOFFICE_DS_URL') || env('ONLYOFFICE_EXTERNAL_URL');
+  if (!dsUrl) return { error: -1 };
+
+  const payload: Record<string, any> = { c: 'forcesave', key: docKey };
+  const jwtSecret = env('ONLYOFFICE_JWT_SECRET');
+  if (jwtSecret) {
+    payload.token = jwt.sign(payload, jwtSecret);
+  }
+
+  const resp = await fetch(`${dsUrl}/coauthoring/CommandService.ashx`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return resp.json();
 }
 
 export function rewriteCallbackUrl(downloadUrl: string): string {

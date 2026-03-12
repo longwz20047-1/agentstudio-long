@@ -9,7 +9,7 @@ import fs from 'fs/promises';
 import { createWriteStream } from 'fs';
 import archiver from 'archiver';
 import AdmZip from 'adm-zip';
-import { buildOnlyOfficeConfig, verifyFileToken, rewriteCallbackUrl } from '../services/workspace/onlyofficeService.js';
+import { buildOnlyOfficeConfig, verifyFileToken, rewriteCallbackUrl, forceSave } from '../services/workspace/onlyofficeService.js';
 
 const router: Router = express.Router({ mergeParams: true });
 
@@ -386,21 +386,22 @@ router.post('/copy', async (req: Request, res: Response) => {
 const SEARCH_EXCLUDE = new Set(['node_modules', '.git', 'dist', 'build', '__pycache__', '.next', '.nuxt', 'coverage', '.workspaces']);
 const MAX_CONTENT_FILE_SIZE = 1 * 1024 * 1024; // 1MB
 
-async function walkDir(dir: string, basePath: string, results: string[]): Promise<void> {
+async function walkDir(dir: string, basePath: string, files: string[], dirs: string[]): Promise<void> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     if (SEARCH_EXCLUDE.has(entry.name) || entry.name.startsWith('.')) continue;
     const fullPath = path.join(dir, entry.name);
     const relPath = path.relative(basePath, fullPath);
     if (entry.isDirectory()) {
-      await walkDir(fullPath, basePath, results);
+      dirs.push(relPath);
+      await walkDir(fullPath, basePath, files, dirs);
     } else {
-      results.push(relPath);
+      files.push(relPath);
     }
   }
 }
 
-// GET /search?type=filename|content|filetype&query=...&path=.&limit=50
+// GET /search?type=filename|content|filetype|dirname&query=...&path=.&limit=50
 router.get('/search', async (req: Request, res: Response) => {
   try {
     const cwdPath = await resolveWorkspacePath(req as A2ARequest);
@@ -416,7 +417,17 @@ router.get('/search', async (req: Request, res: Response) => {
 
     const searchDir = path.resolve(cwdPath, searchBase);
     const allFiles: string[] = [];
-    await walkDir(searchDir, cwdPath, allFiles);
+    const allDirs: string[] = [];
+    await walkDir(searchDir, cwdPath, allFiles, allDirs);
+
+    if (type === 'dirname') {
+      const lowerQuery = query.toLowerCase();
+      const results = allDirs
+        .filter(d => path.basename(d).toLowerCase().includes(lowerQuery))
+        .slice(0, limit)
+        .map(d => ({ name: path.basename(d), path: d, isDirectory: true }));
+      return res.json({ results });
+    }
 
     if (type === 'filename') {
       const lowerQuery = query.toLowerCase();
@@ -567,6 +578,18 @@ router.get('/onlyoffice/config', async (req: Request, res: Response) => {
     res.json(result);
   } catch {
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /onlyoffice/forcesave — trigger force save without closing editor
+router.post('/onlyoffice/forcesave', async (req: Request, res: Response) => {
+  try {
+    const { key } = req.body;
+    if (!key) return res.status(400).json({ error: 'key is required' });
+    const result = await forceSave(key);
+    res.json(result);
+  } catch {
+    res.status(500).json({ error: 'Force save failed' });
   }
 });
 
