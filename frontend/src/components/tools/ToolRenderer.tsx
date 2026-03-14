@@ -7,6 +7,7 @@ import { TaskTool } from './TaskTool';
 import { BashTool } from './BashTool';
 import { BashOutputTool } from './BashOutputTool';
 import { KillBashTool } from './KillBashTool';
+import { TaskOutputTool } from './TaskOutputTool';
 import { GlobTool } from './GlobTool';
 import { GrepTool } from './GrepTool';
 import { LSTool } from './LSTool';
@@ -76,6 +77,9 @@ export const ToolRenderer: React.FC<ToolRendererProps> = ({ execution, onAskUser
 
     case 'BashOutput':
       return <BashOutputTool execution={execution} />;
+
+    case 'TaskOutput':
+      return <TaskOutputTool execution={execution} />;
 
     case 'KillBash':
     case 'TaskStop':  // SDK 0.2.19+ 新名称

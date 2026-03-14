@@ -42,7 +42,7 @@ import { ProjectMetadataStorage } from '../services/projectMetadataStorage.js';
 import { taskManager } from '../services/a2a/taskManager.js';
 import { a2aHistoryService } from '../services/a2a/a2aHistoryService.js';
 import { getTaskExecutor } from '../services/taskExecutor/index.js';
-import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { SDKMessage, SDKResultMessage, SDKCompactBoundaryMessage } from '@anthropic-ai/claude-agent-sdk';
 import { sessionManager } from '../services/sessionManager.js';
 import { handleSessionManagement } from '../utils/sessionUtils.js';
 import { buildQueryOptions } from '../utils/claudeUtils.js';
@@ -62,6 +62,92 @@ import { isCursorEngine } from '../config/engineConfig.js';
 import { skillStorage } from './skills.js';
 import { marketplaceSkillService } from '../services/marketplaceSkillService.js';
 import fsPromises from 'fs/promises';
+
+// 类型守卫函数（移植自 agents.ts）
+function isSDKResultMessage(message: any): message is SDKResultMessage {
+  return message && message.type === 'result';
+}
+
+function isSDKCompactBoundaryMessage(message: any): message is SDKCompactBoundaryMessage {
+  return message && message.type === 'system' && (message as any).subtype === 'compact_boundary';
+}
+
+/**
+ * A2A SSE 连接管理（移植自 agents.ts setupSSEConnectionManagement）
+ * 提供连接状态追踪、客户端断开检测、写入保护
+ */
+function setupA2ASSEConnectionManagement(
+  req: express.Request,
+  res: express.Response,
+  label: string
+) {
+  let isConnectionClosed = false;
+  let connectionTimeout: NodeJS.Timeout | null = null;
+  let claudeSession: any = null;
+  let currentRequestId: string | null = null;
+
+  const safeCloseConnection = (reason: string) => {
+    if (isConnectionClosed) return;
+    isConnectionClosed = true;
+    console.log(`🔚 [A2A] Closing SSE connection (${label}): ${reason}`);
+
+    if (connectionTimeout) {
+      clearTimeout(connectionTimeout);
+      connectionTimeout = null;
+    }
+
+    if (currentRequestId && claudeSession) {
+      claudeSession.cancelRequest(currentRequestId);
+      console.log(`🚫 [A2A] Cancelled request ${currentRequestId}: ${reason}`);
+    }
+
+    try {
+      if (!res.destroyed) {
+        res.end();
+      }
+    } catch (endError) {
+      console.error('[A2A] Failed to end response:', endError);
+    }
+  };
+
+  res.on('close', () => {
+    if (!isConnectionClosed) {
+      safeCloseConnection('client disconnected');
+    }
+  });
+
+  req.on('error', (error) => {
+    console.error('[A2A] SSE request error:', error);
+    safeCloseConnection(`request error: ${error.message}`);
+  });
+
+  res.on('error', (error) => {
+    console.error('[A2A] SSE response error:', error);
+    safeCloseConnection(`response error: ${error.message}`);
+  });
+
+  connectionTimeout = setTimeout(() => {
+    safeCloseConnection('connection timeout (30min)');
+  }, 30 * 60 * 1000);
+
+  return {
+    isConnectionClosed: () => isConnectionClosed,
+    safeCloseConnection,
+    setClaudeSession: (session: any) => { claudeSession = session; },
+    setCurrentRequestId: (id: string | null) => { currentRequestId = id; },
+    safeWrite: (data: string): boolean => {
+      if (isConnectionClosed || res.destroyed) return false;
+      try {
+        res.write(data);
+        return true;
+      } catch (writeError) {
+        console.error('[A2A] Write error:', writeError);
+        safeCloseConnection(`write error: ${writeError instanceof Error ? writeError.message : 'unknown'}`);
+        return false;
+      }
+    },
+  };
+}
 
 const router: Router = express.Router({ mergeParams: true });
 
@@ -717,6 +803,8 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
         res.setHeader('Connection', 'keep-alive');
         res.flushHeaders();
 
+        const connMgr = setupA2ASSEConnectionManagement(req, res, `new:${a2aContext.agentType}`);
+
         // 初始化为用户提供的 sessionId（和同步模式一致）
         let capturedSessionId: string | null = sessionId || null;
 
@@ -788,14 +876,36 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
 
               // 使用用户提供的 sessionId 或 SDK 返回的 session_id
               const effectiveSessionId = sessionId || capturedSessionId;
+              const msgAny = sdkMessage as any;
+              const isSidechain = !!msgAny.parent_tool_use_id;
+
               const eventData = {
                 ...sdkMessage,
                 sessionId: effectiveSessionId,
                 timestamp: Date.now(),
+                isSidechain,
+                parentToolUseId: msgAny.parent_tool_use_id,
               };
 
+              // Result 错误检测
+              if (isSDKResultMessage(sdkMessage)) {
+                const resultMsg = sdkMessage as any;
+                if (resultMsg.subtype !== 'success') {
+                  console.error(`❌ [A2A new] Error result (subtype: ${resultMsg.subtype}):`, resultMsg.errors);
+                  connMgr.safeWrite(`data: ${JSON.stringify({
+                    type: 'error',
+                    error: resultMsg.errors?.join('\n') || 'Unknown error',
+                    subtype: resultMsg.subtype,
+                    sessionId: effectiveSessionId,
+                    timestamp: Date.now(),
+                  })}\n\n`);
+                }
+              }
+
               // Write to SSE stream
-              res.write(`data: ${JSON.stringify(eventData)}\n\n`);
+              if (!connMgr.safeWrite(`data: ${JSON.stringify(eventData)}\n\n`)) {
+                return; // 连接已关闭
+              }
 
               // Persist to history (使用用户提供的 sessionId 优先)
               if (effectiveSessionId) {
@@ -813,16 +923,15 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
           // Send done AFTER executeA2AQueryStreaming completes (including retries)
           // Previously this was inside onMessage callback, which caused isStreaming=false
           // on the frontend when resume failed and triggered a retry
-          res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
-          res.end();
+          connMgr.safeWrite(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+          connMgr.safeCloseConnection('request completed');
         } catch (error) {
           console.error('[A2A] Error in one-shot streaming query:', error);
-          const errorEvent = {
+          connMgr.safeWrite(`data: ${JSON.stringify({
             type: 'error',
-            error: error instanceof Error ? error.message : String(error)
-          };
-          res.write(`data: ${JSON.stringify(errorEvent)}\n\n`);
-          res.end();
+            error: error instanceof Error ? error.message : String(error),
+          })}\n\n`);
+          connMgr.safeCloseConnection('query error');
         }
       } else {
         // Synchronous Mode with one-shot Query
@@ -943,7 +1052,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       const { claudeSession, actualSessionId } = await handleSessionManagement(
         a2aContext.agentType,
         sessionId || null,
-        a2aContext.workingDirectory,
+        cwdPath,  // 使用 SDK 实际 cwd（含 workspace 子目录），而非 projectRoot
         queryOptions,
         undefined,  // claudeVersionId
         undefined,  // modelId
@@ -951,12 +1060,36 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
         configSnapshot
       );
 
+      // 注册 orphan message handler（幂等，同一 session 只生效一次）
+      // 将 cron 触发的消息写入 A2A JSONL 历史
+      claudeSession.setOrphanMessageHandler(async (sdkMessage: SDKMessage) => {
+        const sid = claudeSession.getClaudeSessionId();
+        if (!sid) return;
+
+        const historyEvent = {
+          ...sdkMessage,
+          sessionId: sid,
+          timestamp: Date.now(),
+          source: 'cron',
+        };
+
+        try {
+          await a2aHistoryService.appendEvent(a2aContext.workingDirectory, sid, historyEvent);
+        } catch (err) {
+          console.error('[A2A] Failed to write orphan message to history:', err);
+        }
+      });
+
       if (stream) {
         // Streaming Mode (SSE) with ClaudeSession
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
         res.flushHeaders();
+
+        // 初始化连接管理器（移植自 agents.ts）
+        const connMgr = setupA2ASSEConnectionManagement(req, res, `reuse:${a2aContext.agentType}`);
+        connMgr.setClaudeSession(claudeSession);
 
         const messageContent: any[] = [];
         if (images && images.length > 0) {
@@ -1003,8 +1136,10 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
           }
         }
 
+        let compactMessageBuffer: any[] = [];
+
         try {
-          await claudeSession.sendMessage(sdkUserMessage, async (sdkMessage: SDKMessage) => {
+          const requestId = await claudeSession.sendMessage(sdkUserMessage, async (sdkMessage: SDKMessage) => {
             // --- Session confirmation (adapted from agents.ts:943-973) ---
             // Note: uses inline type check instead of isSDKSystemMessage() which is not imported in a2a.ts.
             // This block runs synchronously before eventData construction below,
@@ -1052,14 +1187,71 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
               }
             }
 
+            // --- Compact 上下文压缩处理（移植自 agents.ts）---
+            if (isSDKCompactBoundaryMessage(sdkMessage)) {
+              compactMessageBuffer.push(sdkMessage);
+              console.log('📦 [A2A] Detected compact_boundary, buffering...');
+              return;
+            }
+
+            if (compactMessageBuffer.length > 0) {
+              compactMessageBuffer.push(sdkMessage);
+
+              if (compactMessageBuffer.length >= 5) {
+                console.log('📦 [A2A] Processing complete compact sequence...');
+
+                const summaryMsg = compactMessageBuffer.find((msg: any) => msg.isCompactSummary);
+                let compactContent = '会话上下文已压缩';
+
+                if (summaryMsg?.message?.content) {
+                  if (Array.isArray(summaryMsg.message.content)) {
+                    const textBlock = summaryMsg.message.content.find((block: any) => block.type === 'text');
+                    compactContent = textBlock?.text || compactContent;
+                  } else if (typeof summaryMsg.message.content === 'string') {
+                    compactContent = summaryMsg.message.content;
+                  }
+                }
+
+                const compactSummaryEvent = {
+                  type: 'assistant',
+                  role: 'assistant',
+                  content: [{ type: 'compactSummary', text: compactContent }],
+                  sessionId: capturedSessionId || actualSessionId,
+                  timestamp: Date.now(),
+                  isCompactSummary: true
+                };
+
+                console.log('📦 [A2A] Sending compact summary:', compactContent.substring(0, 100));
+                connMgr.safeWrite(`data: ${JSON.stringify(compactSummaryEvent)}\n\n`);
+
+                if (capturedSessionId) {
+                  a2aHistoryService.appendEvent(
+                    a2aContext.workingDirectory, capturedSessionId, compactSummaryEvent
+                  ).catch(err => console.error('[A2A] Failed to write compact history:', err));
+                }
+
+                compactMessageBuffer = [];
+                return;
+              }
+
+              return; // 序列未完成，继续缓冲
+            }
+
             // --- Build event with correct sessionId ---
+            const msgAny = sdkMessage as any;
+            const isSidechain = !!msgAny.parent_tool_use_id;
+
             const eventData = {
               ...sdkMessage,
               sessionId: capturedSessionId || actualSessionId,
               timestamp: Date.now(),
+              isSidechain,
+              parentToolUseId: msgAny.parent_tool_use_id,
             };
 
-            res.write(`data: ${JSON.stringify(eventData)}\n\n`);
+            if (!connMgr.safeWrite(`data: ${JSON.stringify(eventData)}\n\n`)) {
+              return; // 连接已关闭，停止处理
+            }
 
             // --- Save to A2A history ---
             if (capturedSessionId) {
@@ -1074,12 +1266,25 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
               }
             }
 
-            // --- Stream completion ---
-            if (sdkMessage.type === 'result') {
-              res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
-              res.end();
+            // --- Stream completion + error detection ---
+            if (isSDKResultMessage(sdkMessage)) {
+              const resultMsg = sdkMessage as any;
+              if (resultMsg.subtype !== 'success') {
+                console.error(`❌ [A2A reuse] Error result (subtype: ${resultMsg.subtype}):`, resultMsg.errors);
+                connMgr.safeWrite(`data: ${JSON.stringify({
+                  type: 'error',
+                  error: resultMsg.errors?.join('\n') || 'Unknown error',
+                  subtype: resultMsg.subtype,
+                  sessionId: capturedSessionId || actualSessionId,
+                  timestamp: Date.now(),
+                })}\n\n`);
+              }
+              connMgr.safeWrite(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+              connMgr.setCurrentRequestId(null);
+              connMgr.safeCloseConnection('request completed');
             }
           });
+          connMgr.setCurrentRequestId(requestId);
         } catch (error) {
           // --- Session not active: subprocess died (resume failure, crash, etc.) ---
           // sendMessage() throws "Session is not active" when isActive=false (claudeSession.ts:193-194).
@@ -1089,13 +1294,13 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
             if (actualSessionId) {
               await sessionManager.removeSession(actualSessionId).catch(() => {});
             }
-            res.write(`data: ${JSON.stringify({
+            connMgr.safeWrite(`data: ${JSON.stringify({
               type: 'error',
               error: 'Session expired or crashed. Please retry to start a fresh session.',
               code: 'SESSION_INACTIVE',
             })}\n\n`);
-            res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
-            res.end();
+            connMgr.safeWrite(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+            connMgr.safeCloseConnection('session not active');
             return;
           }
 
@@ -1104,23 +1309,22 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
           // when isProcessing is true (claudeSession.ts:198-199).
           if (error instanceof Error && error.message.includes('busy processing')) {
             console.warn(`[A2A] Session busy for agent ${a2aContext.agentType}`);
-            res.write(`data: ${JSON.stringify({
+            connMgr.safeWrite(`data: ${JSON.stringify({
               type: 'error',
               error: 'Session is busy processing another request. Please wait.',
               code: 'SESSION_BUSY',
             })}\n\n`);
-            res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
-            res.end();
+            connMgr.safeWrite(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+            connMgr.safeCloseConnection('session busy');
             return;
           }
 
           console.error('[A2A] Error in streaming session:', error);
-          const errorEvent = {
+          connMgr.safeWrite(`data: ${JSON.stringify({
             type: 'error',
             error: error instanceof Error ? error.message : String(error),
-          };
-          res.write(`data: ${JSON.stringify(errorEvent)}\n\n`);
-          res.end();
+          })}\n\n`);
+          connMgr.safeCloseConnection('streaming error');
         }
       } else {
         // Synchronous Mode with ClaudeSession

@@ -23,7 +23,7 @@ export class ClaudeSession {
   private sessionTitle: string | null = null;
 
   // 响应分发器相关 - 简化版本（会话级别的并发控制在 SlackAIService 中处理）
-  private responseCallbacks: Map<string, (response: SDKMessage) => void> = new Map();
+  private responseCallbacks: Map<string, (response: SDKMessage) => void | Promise<void>> = new Map();
   private nextRequestId = 0;
   private isBackgroundRunning = false;
   private lastMessageSentAt = 0; // 用于计时
@@ -31,6 +31,9 @@ export class ClaudeSession {
 
   // 并发控制：标记会话是否正在处理请求
   private isProcessing = false;
+
+  // Orphan message handler: 处理没有 callback 的消息（如 cron 触发的消息）
+  private orphanMessageCallback: ((msg: SDKMessage) => void | Promise<void>) | null = null;
 
   constructor(agentId: string, options: Options, resumeSessionId?: string, claudeVersionId?: string, modelId?: string) {
     console.log(`🔧 [DEBUG] ClaudeSession constructor started for agent: ${agentId}, resumeSessionId: ${resumeSessionId}, claudeVersionId: ${claudeVersionId}, modelId: ${modelId}`);
@@ -185,7 +188,7 @@ export class ClaudeSession {
    * @param message 要发送的消息
    * @param responseCallback 响应回调函数
    */
-  async sendMessage(message: any, responseCallback: (response: SDKMessage) => void): Promise<string> {
+  async sendMessage(message: any, responseCallback: (response: SDKMessage) => void | Promise<void>): Promise<string> {
     const sendStartTime = Date.now();
     console.log(`🔧 [DEBUG] sendMessage called for agent: ${this.agentId}, isActive: ${this.isActive}, isProcessing: ${this.isProcessing}, isBackgroundRunning: ${this.isBackgroundRunning}`);
     console.log(`⏱️ [TIMING] sendMessage started at: ${new Date(sendStartTime).toISOString()}`);
@@ -245,7 +248,6 @@ export class ClaudeSession {
           this.firstResponseReceived = true;
         }
 
-        console.log(`🔧 [DEBUG] Received response in background handler for agent: ${this.agentId}, type: ${sdkMessage.type}`);
         this.lastActivity = Date.now();
 
         // 捕获 SDK 返回的 sessionId
@@ -255,16 +257,14 @@ export class ClaudeSession {
           console.log(`📝 Captured Claude sessionId: ${this.claudeSessionId} for agent: ${this.agentId}`);
         }
 
-        // 简单的响应分发：只使用第一个回调（因为我们现在保证了没有并发）
+        // 响应分发：有 callback 走用户路径，无 callback 走 orphan 路径（cron 消息）
         const requestIds = Array.from(this.responseCallbacks.keys());
         const currentRequestId = requestIds.length > 0 ? requestIds[0] : null;
 
-        console.log(`🔧 [DEBUG] Current pending requests: ${requestIds.length}, processing: ${currentRequestId}`);
-
-        // 分发响应给对应的请求
         if (currentRequestId && this.responseCallbacks.has(currentRequestId)) {
+          // 用户消息：分发给注册的 callback
           const callback = this.responseCallbacks.get(currentRequestId)!;
-          callback(sdkMessage);
+          await callback(sdkMessage);
 
           // 如果是 result 事件，该请求完成，从队列中移除
           if (sdkMessage.type === 'result') {
@@ -273,6 +273,13 @@ export class ClaudeSession {
             // 清除处理中标记，允许新的请求
             this.isProcessing = false;
             console.log(`🔓 Session unlocked for agent: ${this.agentId}, sessionId: ${this.claudeSessionId}`);
+          }
+        } else if (this.orphanMessageCallback) {
+          // Orphan 消息：没有 callback，由 cron 触发，写入 A2A 历史
+          try {
+            await this.orphanMessageCallback(sdkMessage);
+          } catch (err) {
+            console.error(`[ClaudeSession] Orphan message handler error:`, err);
           }
         }
       }
@@ -343,6 +350,19 @@ export class ClaudeSession {
       this.responseCallbacks.delete(requestId);
       console.log(`🧹 Cleaned up request callback: ${requestId}`);
     }
+  }
+
+  /**
+   * 注册 orphan message handler
+   * 处理没有 callback 的消息（如 SDK cron 触发的消息）
+   * 幂等：只有第一次注册生效
+   */
+  public setOrphanMessageHandler(
+    callback: (msg: SDKMessage) => void | Promise<void>
+  ): void {
+    if (this.orphanMessageCallback) return;
+    this.orphanMessageCallback = callback;
+    console.log(`📋 [Loop] Orphan message handler registered for agent: ${this.agentId}`);
   }
 
   /**

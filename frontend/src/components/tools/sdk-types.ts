@@ -249,6 +249,7 @@ export interface ToolTypeMap {
   Task: AgentInput;
   Bash: BashInput;
   BashOutput: TaskOutputInput;
+  TaskOutput: TaskOutputInput;
   KillBash: TaskStopInput;
   TaskStop: TaskStopInput;  // SDK 0.2.19+ 新名称
   Glob: GlobInput;
@@ -276,6 +277,7 @@ export function resolveToolType(toolName: string): keyof ToolTypeMap | null {
     'Task': 'Task',
     'Bash': 'Bash',
     'BashOutput': 'BashOutput',
+    'TaskOutput': 'TaskOutput',
     'KillBash': 'KillBash',
     'TaskStop': 'TaskStop',  // SDK 0.2.19+ 新名称
     'Glob': 'Glob',

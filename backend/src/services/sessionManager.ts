@@ -1,4 +1,5 @@
 import { Options } from '@anthropic-ai/claude-agent-sdk';
+import { EventEmitter } from 'events';
 import { ClaudeSession } from './claudeSession';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -22,6 +23,7 @@ export interface SessionConfigSnapshot {
  * 负责管理所有 Claude 会话的生命周期
  */
 export class SessionManager {
+  public readonly events = new EventEmitter();
   // 主索引：sessionId -> ClaudeSession
   private sessions: Map<string, ClaudeSession> = new Map();
   // 辅助索引：agentId -> Set<sessionId>，用于查找某个 agent 的所有会话
@@ -123,8 +125,10 @@ export class SessionManager {
    */
   private convertProjectPathToClaudeFormat(projectPath: string): string {
     // Convert path to Claude format
+    // The SDK replaces \, /, :, ., _ all with -
     // Unix: /Users/kongjie/project -> -Users-kongjie-project
     // Windows: D:\workspace\project -> D--workspace-project
+    // Windows: C:\path\testxm1\.workspaces\u_xxx -> C--path-testxm1--workspaces-u-xxx
 
     // First, normalize path separators (handle both / and \)
     let normalized = projectPath.replace(/\\/g, '/');
@@ -136,8 +140,9 @@ export class SessionManager {
     // Claude Code on Windows converts "D:\path" to "D--path" (colon becomes -)
     normalized = normalized.replace(/^([A-Za-z]):/, '$1-');
 
-    // Convert remaining slashes to dashes
-    return normalized.replace(/\//g, '-');
+    // Convert all special characters to dashes (matches SDK behavior)
+    // SDK replaces: / . _ all with -
+    return normalized.replace(/[/._]/g, '-');
   }
 
   /**
@@ -153,6 +158,8 @@ export class SessionManager {
     const session = new ClaudeSession(agentId, options, resumeSessionId, claudeVersionId, modelId);
     if (resumeSessionId) {
       this.sessions.set(resumeSessionId, session);
+      // 初始化心跳记录，防止被定时清理误杀
+      this.sessionHeartbeats.set(resumeSessionId, Date.now());
       const sessionForAgent = this.agentSessions.get(agentId);
       if (sessionForAgent) {
         sessionForAgent.add(resumeSessionId);
@@ -167,12 +174,14 @@ export class SessionManager {
       }
 
       console.log(`✅ Resumed persistent Claude session for agent: ${agentId} (sessionId: ${resumeSessionId}, claudeVersionId: ${claudeVersionId}, modelId: ${modelId})`);
+      process.nextTick(() => this.events.emit('session:changed'));
       return session;
     }
     // 生成临时键并存储
     const tempKey = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     this.tempSessions.set(tempKey, session);
     console.log(`🆕 Created new persistent Claude session for agent: ${agentId} (temp key: ${tempKey}, claudeVersionId: ${claudeVersionId}, modelId: ${modelId})`);
+    process.nextTick(() => this.events.emit('session:changed'));
     return session;
   }
 
@@ -301,10 +310,14 @@ export class SessionManager {
    */
   isHeartbeatTimedOut(sessionId: string): boolean {
     const lastHeartbeat = this.sessionHeartbeats.get(sessionId);
-    if (!lastHeartbeat) {
-      return true; // 没有心跳记录认为是超时
+    // 同时参考会话自身的 lastActivity（sendMessage 等操作会更新）
+    const session = this.sessions.get(sessionId);
+    const lastActivity = session?.getLastActivity() ?? 0;
+    const latestSignal = Math.max(lastHeartbeat ?? 0, lastActivity);
+    if (latestSignal === 0) {
+      return true; // 没有任何活动记录认为是超时
     }
-    return Date.now() - lastHeartbeat > this.heartbeatTimeoutMs;
+    return Date.now() - latestSignal > this.heartbeatTimeoutMs;
   }
 
   /**
@@ -362,6 +375,7 @@ export class SessionManager {
     }
     
     console.log(`🗑️  Removed Claude session: ${sessionId} for agent: ${agentId}`);
+    process.nextTick(() => this.events.emit('session:changed'));
     return true;
   }
 
@@ -428,9 +442,13 @@ export class SessionManager {
    */
   private async cleanupIdleSessions(): Promise<void> {
     // 只有在心跳超时不是无限期时才清理心跳超时的会话
+    const heartbeatTimedOutSessions: string[] = [];
     if (this.heartbeatTimeoutMs !== Infinity) {
-      const heartbeatTimedOutSessions: string[] = [];
       for (const [sessionId, session] of this.sessions.entries()) {
+        // 跳过正在处理请求的会话，防止误杀活跃对话
+        if (session.isCurrentlyProcessing()) {
+          continue;
+        }
         if (this.isHeartbeatTimedOut(sessionId)) {
           heartbeatTimedOutSessions.push(sessionId);
         }
@@ -438,12 +456,12 @@ export class SessionManager {
 
       if (heartbeatTimedOutSessions.length > 0) {
         console.log(`💔 Cleaning up ${heartbeatTimedOutSessions.length} heartbeat timed-out sessions (timeout: ${this.heartbeatTimeoutMs / 1000}s)`);
-        
+
         for (const sessionId of heartbeatTimedOutSessions) {
           await this.removeSession(sessionId);
           console.log(`🗑️  Removed heartbeat timed-out session: ${sessionId}`);
         }
-        
+
         console.log(`✅ Cleaned up ${heartbeatTimedOutSessions.length} heartbeat timed-out sessions`);
       }
     }
@@ -518,6 +536,11 @@ export class SessionManager {
     }
 
     console.log(`✅ Cleaned up ${idleSessionIds.length + idleActivityTempKeys.length} idle sessions`);
+
+    // Emit once at end if any cleanup happened
+    if (heartbeatTimedOutSessions.length > 0 || idleTempKeys.length > 0 || idleSessionIds.length > 0 || idleActivityTempKeys.length > 0) {
+      process.nextTick(() => this.events.emit('session:changed'));
+    }
   }
 
   /**

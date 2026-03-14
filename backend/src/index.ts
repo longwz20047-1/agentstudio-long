@@ -4,6 +4,8 @@ import helmet from 'helmet';
 import dotenv from 'dotenv';
 import { join } from 'path';
 import { readFileSync } from 'fs';
+import { createServer } from 'http';
+import { setupWebSocket, shutdownWebSocket } from './services/websocketService.js';
 
 import filesRouter from './routes/files';
 import agentsRouter from './routes/agents';
@@ -633,6 +635,14 @@ const app: express.Express = express();
       console.error('[Tunnel] Error shutting down tunnel service:', error);
     }
 
+    // Shutdown WebSocket service
+    try {
+      shutdownWebSocket();
+      console.info('[WebSocket] WebSocket service stopped');
+    } catch (error) {
+      console.error('[WebSocket] Error shutting down WebSocket service:', error);
+    }
+
     console.info('[System] Shutdown complete');
     // Exit process
     process.exit(0);
@@ -644,7 +654,9 @@ const app: express.Express = express();
 
   // Check if this file is being run directly (CommonJS way)
   if (require.main === module) {
-    app.listen(PORT, HOST, () => {
+    const server = createServer(app);
+    setupWebSocket(server);
+    server.listen(PORT, HOST, () => {
       console.log(`AI PPT Editor backend running on http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
       console.log(`Serving slides from: ${slidesDir}`);
     });

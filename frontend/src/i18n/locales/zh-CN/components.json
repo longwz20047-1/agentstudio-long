@@ -811,6 +811,18 @@
       "failed": "执行失败"
     }
   },
+  "taskOutputTool": {
+    "taskPrefix": "任务",
+    "taskId": "任务 ID",
+    "blocking": "阻塞等待",
+    "yes": "是",
+    "no": "否",
+    "timeout": "超时",
+    "output": "输出",
+    "stderr": "错误输出",
+    "exitCode": "退出码",
+    "waiting": "正在等待任务 {{taskId}} 的输出..."
+  },
   "killBashTool": {
     "subtitle": "终止 Shell {{shellId}}",
     "subtitleWithProcess": "终止 Shell {{shellId}} ({{processName}})",

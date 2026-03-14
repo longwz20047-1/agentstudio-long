@@ -811,6 +811,18 @@
       "failed": "Execution failed"
     }
   },
+  "taskOutputTool": {
+    "taskPrefix": "Task",
+    "taskId": "Task ID",
+    "blocking": "Blocking",
+    "yes": "Yes",
+    "no": "No",
+    "timeout": "Timeout",
+    "output": "Output",
+    "stderr": "Error output",
+    "exitCode": "Exit code",
+    "waiting": "Waiting for task {{taskId}} output..."
+  },
   "killBashTool": {
     "subtitle": "Kill Shell {{shellId}}",
     "subtitleWithProcess": "Kill Shell {{shellId}} ({{processName}})",

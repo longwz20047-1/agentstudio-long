@@ -19,6 +19,7 @@ import {
   ChevronDown,
   ChevronRight,
   Activity,  // 用于BashOutput，表示活动/输出监控
+  ClipboardList,  // 用于TaskOutput，表示任务输出
   Square,  // 用于KillBash，表示终止/停止操作
   Plug,  // 用于MCP工具
   AlertCircle,  // 用于中断状态
@@ -31,6 +32,7 @@ const TOOL_ICONS = {
   Task: Workflow,
   Bash: Terminal,
   BashOutput: Activity,
+  TaskOutput: ClipboardList,
   KillBash: Square,
   TaskStop: Square,  // SDK 0.2.19+ 新名称
   Glob: FileSearch,
@@ -67,6 +69,7 @@ const TOOL_COLORS = {
   Task: 'text-purple-600 dark:text-purple-400 bg-purple-100 dark:bg-purple-900/30',
   Bash: 'text-gray-800 dark:text-gray-300 bg-gray-100 dark:bg-gray-700',
   BashOutput: 'text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30',
+  TaskOutput: 'text-teal-700 dark:text-teal-400 bg-teal-50 dark:bg-teal-900/30',
   KillBash: 'text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/30',
   TaskStop: 'text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/30',  // SDK 0.2.19+ 新名称
   Glob: 'text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/30',

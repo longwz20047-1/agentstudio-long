@@ -94,19 +94,34 @@ function getApiKeysPath(projectPath: string): string {
 async function loadApiKeyRegistry(projectId: string): Promise<A2AApiKeyRegistry> {
   const filePath = getApiKeysPath(projectId);
 
-  try {
-    const data = await fs.readFile(filePath, 'utf-8');
-    return JSON.parse(data) as A2AApiKeyRegistry;
-  } catch (error) {
-    // If file doesn't exist, return empty registry
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return {
-        version: '1.0.0',
-        keys: [],
-      };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const data = await fs.readFile(filePath, 'utf-8');
+      return JSON.parse(data) as A2AApiKeyRegistry;
+    } catch (error) {
+      // If file doesn't exist, return empty registry
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return {
+          version: '1.0.0',
+          keys: [],
+        };
+      }
+      // If file is corrupted (e.g. concurrent write race), retry after brief delay
+      if (error instanceof SyntaxError) {
+        if (attempt < 2) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+          continue;
+        }
+        console.warn(`[apiKeyService] Registry file ${filePath} corrupted after retries`);
+        return {
+          version: '1.0.0',
+          keys: [],
+        };
+      }
+      throw error;
     }
-    throw error;
   }
+  return { version: '1.0.0', keys: [] };
 }
 
 /**
@@ -211,9 +226,11 @@ export async function hashApiKey(key: string): Promise<string> {
  */
 export async function validateApiKey(
   projectId: string,
-  key: string
+  key: string,
+  options?: { updateLastUsed?: boolean }
 ): Promise<{ valid: boolean; keyId?: string; keyData?: A2AApiKey }> {
   const registry = await loadApiKeyRegistry(projectId);
+  const shouldUpdate = options?.updateLastUsed !== false;
 
   // Try to match key against each stored hash
   for (const keyData of registry.keys) {
@@ -226,9 +243,11 @@ export async function validateApiKey(
     const isMatch = await compareKey(key, keyData.keyHash);
 
     if (isMatch) {
-      // Update last used timestamp
-      keyData.lastUsedAt = new Date().toISOString();
-      await saveApiKeyRegistry(projectId, registry);
+      if (shouldUpdate) {
+        // Update last used timestamp
+        keyData.lastUsedAt = new Date().toISOString();
+        await saveApiKeyRegistry(projectId, registry);
+      }
 
       return {
         valid: true,
