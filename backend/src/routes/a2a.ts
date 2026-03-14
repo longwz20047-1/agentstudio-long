@@ -83,6 +83,7 @@ function setupA2ASSEConnectionManagement(
 ) {
   let isConnectionClosed = false;
   let connectionTimeout: NodeJS.Timeout | null = null;
+  let heartbeatInterval: NodeJS.Timeout | null = null;
   let claudeSession: any = null;
   let currentRequestId: string | null = null;
 
@@ -94,6 +95,11 @@ function setupA2ASSEConnectionManagement(
     if (connectionTimeout) {
       clearTimeout(connectionTimeout);
       connectionTimeout = null;
+    }
+
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = null;
     }
 
     if (currentRequestId && claudeSession) {
@@ -129,6 +135,21 @@ function setupA2ASSEConnectionManagement(
   connectionTimeout = setTimeout(() => {
     safeCloseConnection('connection timeout (30min)');
   }, 30 * 60 * 1000);
+
+  // Heartbeat 保活（防止代理/负载均衡器超时断连）
+  heartbeatInterval = setInterval(() => {
+    if (!isConnectionClosed && !res.destroyed) {
+      try {
+        res.write(': heartbeat\n\n');
+      } catch {
+        clearInterval(heartbeatInterval!);
+        heartbeatInterval = null;
+      }
+    } else {
+      clearInterval(heartbeatInterval!);
+      heartbeatInterval = null;
+    }
+  }, 15000); // 15 秒间隔（与 Cursor 引擎一致）
 
   return {
     isConnectionClosed: () => isConnectionClosed,
@@ -876,6 +897,17 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
 
               // 使用用户提供的 sessionId 或 SDK 返回的 session_id
               const effectiveSessionId = sessionId || capturedSessionId;
+
+              // system.init 日志（不拦截，仅记录）
+              if (sdkMessage.type === 'system' && (sdkMessage as any).subtype === 'init') {
+                const initMsg = sdkMessage as any;
+                console.log(`🔧 [A2A new] system.init received:`, {
+                  model: initMsg.model,
+                  tools: initMsg.tools?.length || 0,
+                  mcpServers: initMsg.mcp_servers?.length || 0,
+                });
+              }
+
               const msgAny = sdkMessage as any;
               const isSidechain = !!msgAny.parent_tool_use_id;
 
@@ -1214,11 +1246,13 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
 
                 const compactSummaryEvent = {
                   type: 'assistant',
-                  role: 'assistant',
-                  content: [{ type: 'compactSummary', text: compactContent }],
+                  message: {
+                    role: 'assistant',
+                    content: [{ type: 'text', text: `Conversation compacted: ${compactContent}` }],
+                  },
                   sessionId: capturedSessionId || actualSessionId,
                   timestamp: Date.now(),
-                  isCompactSummary: true
+                  isCompactSummary: true,
                 };
 
                 console.log('📦 [A2A] Sending compact summary:', compactContent.substring(0, 100));
