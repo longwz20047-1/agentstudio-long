@@ -131,8 +131,10 @@ export async function integrateFirecrawlMcpServer(
         url: z.string().url().describe('The URL to fetch (must be public internet)'),
         max_length: z.number().min(500).max(50000).optional().default(20000)
           .describe('Max characters to return (default: 20000)'),
-        formats: z.array(z.enum(['markdown', 'html', 'rawHtml', 'links', 'screenshot', 'screenshot@fullPage']))
-          .optional().default(['markdown'])
+        formats: z.union([
+          z.array(z.enum(['markdown', 'html', 'rawHtml', 'links', 'screenshot', 'screenshot@fullPage'])),
+          z.enum(['markdown', 'html', 'rawHtml', 'links', 'screenshot', 'screenshot@fullPage']).transform(s => [s]),
+        ]).optional().default(['markdown'])
           .describe('Output formats. Use "screenshot" for viewport capture, "screenshot@fullPage" for full page'),
         only_main_content: z.boolean().optional().default(true)
           .describe('Extract main content only, removing nav/footer/sidebar'),
