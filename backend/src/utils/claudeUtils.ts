@@ -238,6 +238,7 @@ export interface BuildQueryOptionsResult {
 export interface BuildQueryExtendedOptions {
   weknoraContext?: WeknoraContext;
   graphitiContext?: GraphitiContext;
+  effort?: 'low' | 'medium' | 'high' | 'max';
 }
 
 export async function buildQueryOptions(
@@ -391,6 +392,10 @@ export async function buildQueryOptions(
     settingSources: ["user", "project"],
     // SDK 要求：使用 bypassPermissions 模式时必须显式设置此参数
     ...(finalPermissionMode === 'bypassPermissions' && { allowDangerouslySkipPermissions: true }),
+    // Effort 参数：控制 Claude 的推理深度
+    ...(extendedOptions?.effort && { effort: extendedOptions.effort }),
+    // 启用子代理进度摘要，生成 system.task_* 事件
+    agentProgressSummaries: true,
   };
 
   // Only add pathToClaudeCodeExecutable if we have a valid path

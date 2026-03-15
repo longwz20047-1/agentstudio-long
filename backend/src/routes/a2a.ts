@@ -61,6 +61,7 @@ import { CursorA2AAdapter } from '../engines/cursor/a2aAdapter.js';
 import { isCursorEngine } from '../config/engineConfig.js';
 import { skillStorage } from './skills.js';
 import { marketplaceSkillService } from '../services/marketplaceSkillService.js';
+import { loopStorageService } from '../services/a2a/loopStorageService.js';
 import fsPromises from 'fs/promises';
 
 // 类型守卫函数（移植自 agents.ts）
@@ -515,7 +516,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       });
     }
 
-    const { message: rawMessage, sessionId, sessionMode = 'new', context, images } = validation.data;
+    const { message: rawMessage, sessionId, sessionMode = 'new', context, images, effort } = validation.data;
     const stream = req.query.stream === 'true' || req.headers.accept === 'text/event-stream';
 
     // Detect and format /skill command
@@ -791,10 +792,11 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       askUserSessionId, // sessionIdForAskUser - 用于 AskUserQuestion MCP 集成
       a2aContext.a2aAgentId, // agentIdForAskUser - 用于 AskUserQuestion MCP 集成
       undefined, // a2aStreamEnabled
-      (weknoraContext || graphitiContext)
+      (weknoraContext || graphitiContext || effort)
         ? {
             ...(weknoraContext ? { weknoraContext } : {}),
             ...(graphitiContext ? { graphitiContext } : {}),
+            ...(effort ? { effort } : {}),
           }
         : undefined, // extendedOptions
       cwdPath !== projectRoot ? cwdPath : undefined // cwdOverride
@@ -1093,22 +1095,51 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       );
 
       // 注册 orphan message handler（幂等，同一 session 只生效一次）
-      // 将 cron 触发的消息写入 A2A JSONL 历史
+      // cron 触发的执行结果写入 loops 存储（不污染 A2A 对话历史）
+      // 缓冲 cron turn 中的消息，result 到达时提取 prompt + content 一并写入
+      const cronTurnBuffer: any[] = [];
       claudeSession.setOrphanMessageHandler(async (sdkMessage: SDKMessage) => {
         const sid = claudeSession.getClaudeSessionId();
         if (!sid) return;
 
-        const historyEvent = {
-          ...sdkMessage,
-          sessionId: sid,
-          timestamp: Date.now(),
-          source: 'cron',
-        };
+        cronTurnBuffer.push(sdkMessage);
 
-        try {
-          await a2aHistoryService.appendEvent(a2aContext.workingDirectory, sid, historyEvent);
-        } catch (err) {
-          console.error('[A2A] Failed to write orphan message to history:', err);
+        if (sdkMessage.type === 'result') {
+          // 从缓冲中提取 prompt（user 消息）和 content（assistant 消息）
+          const promptParts: string[] = [];
+          const contentParts: string[] = [];
+          for (const msg of cronTurnBuffer) {
+            const msgContent = (msg as any).message?.content;
+            if (msg.type === 'user' && msgContent) {
+              if (typeof msgContent === 'string') {
+                promptParts.push(msgContent);
+              } else if (Array.isArray(msgContent)) {
+                for (const block of msgContent) {
+                  if (block.type === 'text' && block.text) promptParts.push(block.text);
+                }
+              }
+            }
+            if (msg.type === 'assistant' && Array.isArray(msgContent)) {
+              for (const block of msgContent) {
+                if (block.type === 'text' && block.text) contentParts.push(block.text);
+              }
+            }
+          }
+
+          const resultMsg = sdkMessage as any;
+          const prompt = promptParts.join('\n').slice(0, 1000) || undefined;
+          const content = contentParts.join('\n').slice(0, 2000) || undefined;
+
+          loopStorageService.appendEvent(a2aContext.workingDirectory, sid, {
+            type: 'loop_execution',
+            status: resultMsg.subtype || 'unknown',
+            timestamp: Date.now(),
+            prompt,
+            content,
+          }).catch(err => console.error('[A2A] Failed to write loop execution:', err));
+
+          // 清空缓冲，准备下一次 cron turn
+          cronTurnBuffer.length = 0;
         }
       });
 
@@ -1169,6 +1200,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
         }
 
         let compactMessageBuffer: any[] = [];
+        const pendingCronCreates = new Map<string, { cron: string; prompt: string; recurring: boolean }>();
 
         try {
           const requestId = await claudeSession.sendMessage(sdkUserMessage, async (sdkMessage: SDKMessage) => {
@@ -1297,6 +1329,61 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
                 );
               } catch (err) {
                 console.error('[A2A] Failed to write history event:', err);
+              }
+            }
+
+            // --- CRD event extraction for loops storage ---
+            if (capturedSessionId && sdkMessage.type === 'assistant') {
+              const content = (sdkMessage as any).message?.content;
+              if (Array.isArray(content)) {
+                for (const block of content) {
+                  if (block.type === 'tool_use' && block.name === 'CronCreate') {
+                    pendingCronCreates.set(block.id, {
+                      cron: block.input?.cron,
+                      prompt: block.input?.prompt,
+                      recurring: block.input?.recurring ?? true,
+                    });
+                  }
+                  if (block.type === 'tool_use' && block.name === 'CronDelete') {
+                    loopStorageService.appendEvent(
+                      a2aContext.workingDirectory, capturedSessionId, {
+                        type: 'loop_deleted',
+                        jobId: block.input?.id,
+                        timestamp: Date.now(),
+                      }
+                    ).catch(err => console.error('[A2A] Failed to write loop_deleted:', err));
+                  }
+                }
+              }
+            }
+
+            if (capturedSessionId && sdkMessage.type === 'user') {
+              const content = (sdkMessage as any).message?.content;
+              if (Array.isArray(content)) {
+                for (const block of content) {
+                  if (block.type === 'tool_result' && pendingCronCreates.has(block.tool_use_id)) {
+                    const params = pendingCronCreates.get(block.tool_use_id)!;
+                    pendingCronCreates.delete(block.tool_use_id);
+                    const resultText = typeof block.content === 'string'
+                      ? block.content
+                      : Array.isArray(block.content)
+                        ? block.content.map((b: any) => b.text || '').join('')
+                        : '';
+                    const match = resultText.match(/job\s+([a-f0-9]+)/i);
+                    if (match) {
+                      loopStorageService.appendEvent(
+                        a2aContext.workingDirectory, capturedSessionId, {
+                          type: 'loop_created',
+                          jobId: match[1],
+                          cron: params.cron,
+                          prompt: params.prompt,
+                          recurring: params.recurring,
+                          timestamp: Date.now(),
+                        }
+                      ).catch(err => console.error('[A2A] Failed to write loop_created:', err));
+                    }
+                  }
+                }
               }
             }
 
