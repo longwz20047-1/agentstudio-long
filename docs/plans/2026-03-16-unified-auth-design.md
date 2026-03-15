@@ -76,20 +76,30 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
 
 **修复后**:
 ```typescript
-export async function authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
+export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
   if (process.env.NO_AUTH === 'true') { next(); return; }
 
-  const token = /* 从 header 或 query 提取 */;
+  const authHeader = req.headers.authorization;
+  const queryToken = req.query.token as string | undefined;
+  let token: string | undefined;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.substring(7);
+  } else if (queryToken) {
+    token = queryToken;
+  }
+
   if (!token) { res.status(401).json({ error: 'No token provided' }); return; }
 
-  const payload = await verifyToken(token);
-  if (!payload) { res.status(401).json({ error: 'Invalid or expired token' }); return; }
-
-  next();
+  // Express 4 不原生支持 async middleware，用 IIFE + .catch(next) 防止未捕获 rejection
+  (async () => {
+    const payload = await verifyToken(token!);
+    if (!payload) { res.status(401).json({ error: 'Invalid or expired token' }); return; }
+    next();
+  })().catch(next);
 }
 ```
 
-变化: `function` → `async function`, 返回值 `void` → `Promise<void>`, 加 `await`。
+变化: 保持同步函数签名（Express 4 兼容），内部用 async IIFE + `.catch(next)` 包裹 await 调用。保留 query parameter 支持（SSE 需要）。
 
 ### 2. 后端: `services/websocketService.ts` — JWT 验证
 
@@ -111,17 +121,31 @@ async function authenticateToken(token: string): Promise<boolean> {
 }
 ```
 
-upgrade handler 对应改为 async:
+upgrade handler 对应改为 async（保持 try/catch 防止未处理 rejection）:
 ```typescript
 server.on('upgrade', async (request, socket, head) => {
-  const url = new URL(request.url!, `http://${request.headers.host}`);
-  if (url.pathname !== '/ws') { socket.destroy(); return; }
+  try {
+    const url = new URL(request.url!, `http://${request.headers.host}`);
+    if (url.pathname !== '/ws') { socket.destroy(); return; }
 
-  const token = url.searchParams.get('token');
-  if (!token || !(await authenticateToken(token))) { socket.destroy(); return; }
+    const token = url.searchParams.get('token');
+    if (!token || !(await authenticateToken(token))) { socket.destroy(); return; }
 
-  wss!.handleUpgrade(request, socket, head, (ws) => { ... });
+    wss!.handleUpgrade(request, socket, head, (ws) => { ... });
+  } catch {
+    socket.destroy();
+  }
 });
+```
+
+WebSocket 也应尊重 `NO_AUTH` 模式:
+```typescript
+async function authenticateToken(token: string): Promise<boolean> {
+  if (process.env.NO_AUTH === 'true') return true;
+  if (typeof token !== 'string' || token.length === 0) return false;
+  const payload = await verifyToken(token);
+  return payload !== null;
+}
 ```
 
 ### 3. 前端: 新建 `composables/useAgentStudioAuth.ts` — JWT Token 管理器
@@ -207,7 +231,11 @@ export async function fetchA2AProjects(serverUrl: string, apiKey: string) {
 }
 ```
 
-受影响函数: `fetchA2AProjects`, `fetchProjectA2AConfig`, `fetchA2AMapping`, `fetchA2AApiKeys`, `fetchActiveSessions`, `closeActiveSession`
+受影响函数: `fetchA2AProjects`, `fetchProjectA2AConfig`, `fetchA2AMapping`, `fetchA2AApiKeys`, `fetchActiveSessions`, `closeActiveSession`, `getA2AHistory`
+
+> **注意**: `getA2AHistory` 当前用 `config.apiKey`（agt_proj_*）调用 `/api/a2a/history/...`，该路由挂载在 `a2aManagementRouter` 下，受 `authMiddleware` 保护。修复后 agt_proj_* token 无法通过 JWT 验证，因此必须改用 JWT。调用方 (`a2a-chat/index.vue`) 需要同时传入 `serverUrl` + `adminPassword` 以便 `getA2AHistory` 内部获取 JWT。
+>
+> `testA2AConnection` 内部调用 `fetchA2AProjects`，无需单独修改。
 
 ### 5. 前端: `composables/useAgentStudioWS.ts` — WebSocket 用 JWT
 
@@ -228,7 +256,10 @@ async function connectOne(conn: WSConnection) {
 }
 ```
 
-调用方 `connectAll`、`addConnection` 中的 `connectOne(conn)` 无需 await（fire-and-forget，连接结果通过 onopen/onclose 回调处理）。
+调用方 `connectAll`、`addConnection` 中的 `connectOne(conn)` 无需 await（fire-and-forget，连接结果通过 onopen/onclose 回调处理），但需加 `.catch()` 防止未处理 rejection:
+```typescript
+connectOne(conn).catch(() => { /* getToken 失败，scheduleReconnect 会处理 */ })
+```
 
 ## 不改动的文件
 
@@ -258,6 +289,15 @@ reconnect 时 `connectOne` 会重新 `getToken` → 如果 JWT 过期会自动 r
 ### 多服务器并发 login
 `getToken` 中没有加锁，多个并发调用可能对同一服务器 login 多次。结果是多获取了几个 JWT，功能不受影响，只是多了几次 HTTP 请求。如果需要优化，可以加 Promise 锁（当前不必要）。
 
+## 部署顺序
+
+**必须前端先、后端后**:
+
+1. **先部署 weknora-ui** — 新前端会调 `/api/auth/login` 获取 JWT，用 JWT 调管理 API。旧后端的 authMiddleware 仍然是 bug 状态（接受任何 token），JWT 作为"任何 token"之一可以通过 → 向前兼容
+2. **再部署 agentstudio 后端** — 新后端严格验证 JWT。新前端已经在发 JWT → 正常工作
+
+**反过来会出问题**: 如果先部署后端（严格 JWT 验证），而前端还在发 ADMIN_PASSWORD → 所有管理 API 返回 401。
+
 ## 改动文件清单
 
 | 项目 | 文件 | 改动 |
@@ -265,5 +305,5 @@ reconnect 时 `connectOne` 会重新 `getToken` → 如果 JWT 过期会自动 r
 | agentstudio | `backend/src/middleware/auth.ts` | async + await verifyToken |
 | agentstudio | `backend/src/services/websocketService.ts` | authenticateToken 改为 JWT 验证 |
 | weknora-ui | `src/composables/useAgentStudioAuth.ts` | **新建** JWT token 管理器 |
-| weknora-ui | `src/api/a2a/index.ts` | 6 个管理 API 函数改用 JWT |
+| weknora-ui | `src/api/a2a/index.ts` | 7 个管理 API 函数改用 JWT（含 getA2AHistory） |
 | weknora-ui | `src/composables/useAgentStudioWS.ts` | connectOne 改 async + 用 JWT |
