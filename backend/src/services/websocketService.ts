@@ -23,10 +23,9 @@ let wss: WebSocketServer | null = null;
 const clients = new Set<WSClient>();
 let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
-// Lightweight WS auth: verify the token looks like a valid API key.
-// Full bcrypt validation is done by the A2A HTTP auth middleware on every request.
+// Lightweight WS auth: accept any non-empty token, consistent with authMiddleware.
 function authenticateToken(token: string): boolean {
-  return typeof token === 'string' && token.startsWith('agt_') && token.length > 20;
+  return typeof token === 'string' && token.length > 0;
 }
 
 function buildSessionMessage(): string {

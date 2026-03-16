@@ -350,6 +350,12 @@ export class ClaudeSession {
       this.responseCallbacks.delete(requestId);
       console.log(`🧹 Cleaned up request callback: ${requestId}`);
     }
+    // Client disconnected — unlock session so future requests can proceed.
+    // The SDK may still finish processing; any remaining responses go to the orphan handler.
+    if (this.isProcessing) {
+      this.isProcessing = false;
+      console.log(`🔓 Session unlocked after cancel for agent: ${this.agentId}`);
+    }
   }
 
   /**
