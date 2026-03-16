@@ -1,33 +1,22 @@
 // agentstudio/backend/src/services/searxng/contentExtractor.ts
 
-import { FirecrawlClient, validateUrl } from '../firecrawl/firecrawlClient.js';
-import { getFirecrawlConfigFromEnv } from '../firecrawl/types.js';
-import { firecrawlCircuitBreaker } from '../firecrawl/circuitBreaker.js';
-
-// --- Module-level Firecrawl setup ---
-
-const firecrawlConfig = getFirecrawlConfigFromEnv();
-const firecrawlClient = firecrawlConfig
-  ? new FirecrawlClient(firecrawlConfig.base_url, firecrawlConfig.api_key)
-  : null;
-
-// --- Circuit Breaker (shared) ---
-
-/** Exported for testing only */
-export function _resetCircuitBreaker(): void {
-  firecrawlCircuitBreaker.reset();
-}
+import { validateUrl } from '../firecrawl/firecrawlClient.js';
 
 // --- Constants ---
 
-const DEFAULT_MAX_LENGTH = 20000;
+const CRAWL4AI_URL = process.env.CRAWL4AI_URL || 'http://192.168.100.30:11235';
+const CRAWL4AI_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_LENGTH = 20_000;
 const MAX_HTML_SIZE = 512 * 1024; // 512KB
-const FIRECRAWL_TIMEOUT_MS = 5000;
 const FETCH_TIMEOUT_MS = 3000;
+
+const CRAWL4AI_DEFAULT_PROMPT =
+  'Extract the core content of this page: titles, body text, key information. ' +
+  'Output clean Markdown. Remove navigation, ads, sidebars, and other irrelevant content.';
 
 // --- Extraction Cache (10-min TTL) ---
 
-const EXTRACTION_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const EXTRACTION_CACHE_TTL_MS = 10 * 60 * 1000;
 
 interface CacheEntry {
   result: { title: string; content: string } | null;
@@ -41,58 +30,57 @@ export function _resetExtractionCache(): void {
   extractionCache.clear();
 }
 
+// --- Crawl4AI Response ---
+
+interface Crawl4AIResponse {
+  success: boolean;
+  markdown?: string;
+  filter?: string;
+  url?: string;
+}
+
 // --- Main Function ---
 
 export async function fetchAndExtract(
   url: string,
-  options?: { maxLength?: number }
+  options?: { maxLength?: number; query?: string }
 ): Promise<{ title: string; content: string } | null> {
   const maxLength = options?.maxLength ?? DEFAULT_MAX_LENGTH;
 
-  // Check cache
-  const cached = extractionCache.get(url);
+  // Check cache (keyed by url + query for context-dependent LLM extraction)
+  const cacheKey = options?.query ? `${url}|${options.query}` : url;
+  const cached = extractionCache.get(cacheKey);
   if (cached && Date.now() < cached.expireAt) {
     return cached.result;
+  }
+
+  // SSRF protection — block internal/private URLs before sending to any extractor
+  try {
+    validateUrl(url);
+  } catch {
+    return null;
   }
 
   let result: { title: string; content: string } | null = null;
 
   try {
-    // Try Firecrawl first
-    if (firecrawlClient && !firecrawlCircuitBreaker.isOpen()) {
-      try {
-        const scrapeResult = await Promise.race([
-          firecrawlClient.scrape(url, {
-            onlyMainContent: true,
-            formats: ['markdown'],
-            timeout: 5000,
-          }),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('Firecrawl client timeout (5s)')), FIRECRAWL_TIMEOUT_MS)
-          ),
-        ]);
+    // Primary: Crawl4AI + LLM extraction
+    result = await crawl4aiExtract(url, maxLength, options?.query);
+  } catch (err) {
+    console.warn('[ContentExtractor] Crawl4AI error for', url, err instanceof Error ? err.message : err);
+  }
 
-        firecrawlCircuitBreaker.recordSuccess();
-        result = {
-          title: scrapeResult.metadata?.title || '',
-          content: scrapeResult.markdown.slice(0, maxLength),
-        };
-      } catch {
-        firecrawlCircuitBreaker.recordFailure();
-        // Fall through to fetch fallback
-      }
-    }
-
-    // Fallback: plain fetch (only if Firecrawl didn't succeed)
-    if (!result) {
+  // Fallback: plain fetch + regex extraction
+  if (!result) {
+    try {
       result = await fetchFallback(url, maxLength);
+    } catch {
+      result = null;
     }
-  } catch {
-    result = null;
   }
 
   // Store in cache
-  extractionCache.set(url, {
+  extractionCache.set(cacheKey, {
     result,
     expireAt: Date.now() + EXTRACTION_CACHE_TTL_MS,
   });
@@ -100,18 +88,49 @@ export async function fetchAndExtract(
   return result;
 }
 
+// --- Crawl4AI Extraction ---
+
+async function crawl4aiExtract(
+  url: string,
+  maxLength: number,
+  query?: string,
+): Promise<{ title: string; content: string } | null> {
+  const resp = await fetch(`${CRAWL4AI_URL}/md`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      url,
+      f: 'llm',
+      q: query || CRAWL4AI_DEFAULT_PROMPT,
+      temperature: 0.2,
+      c: '0', // Disable Crawl4AI server-side cache (always fresh crawl)
+    }),
+    signal: AbortSignal.timeout(CRAWL4AI_TIMEOUT_MS),
+  });
+
+  if (!resp.ok) {
+    console.warn('[ContentExtractor] Crawl4AI returned', resp.status, 'for', url);
+    return null;
+  }
+
+  const data: Crawl4AIResponse = await resp.json();
+
+  if (!data.success || !data.markdown || data.markdown.length <= 1) {
+    return null;
+  }
+
+  return {
+    title: '',
+    content: data.markdown.slice(0, maxLength),
+  };
+}
+
 // --- Fetch Fallback ---
 
 async function fetchFallback(
   url: string,
-  maxLength: number
+  maxLength: number,
 ): Promise<{ title: string; content: string } | null> {
-  try {
-    validateUrl(url);
-  } catch {
-    return null;
-  }
-
   try {
     const response = await fetch(url, {
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -124,17 +143,13 @@ async function fetchFallback(
 
     if (!response.ok) return null;
 
-    // Content-Type check
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('text/html')) return null;
 
-    // Content-Length check
     const contentLength = response.headers.get('content-length');
     if (contentLength && parseInt(contentLength, 10) > MAX_HTML_SIZE) return null;
 
     const html = await response.text();
-
-    // Body size check
     if (html.length > MAX_HTML_SIZE) return null;
 
     return extractFromHtml(html, maxLength);
@@ -147,27 +162,19 @@ async function fetchFallback(
 
 function extractFromHtml(
   html: string,
-  maxLength: number
+  maxLength: number,
 ): { title: string; content: string } {
-  // Extract title
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const title = titleMatch ? decodeHtmlEntities(titleMatch[1].trim()) : '';
 
-  // Remove unwanted tags (with content)
   let text = html;
   text = text.replace(/<script[\s\S]*?<\/script>/gi, '');
   text = text.replace(/<style[\s\S]*?<\/style>/gi, '');
   text = text.replace(/<nav[\s\S]*?<\/nav>/gi, '');
   text = text.replace(/<footer[\s\S]*?<\/footer>/gi, '');
   text = text.replace(/<header[\s\S]*?<\/header>/gi, '');
-
-  // Remove all remaining HTML tags
   text = text.replace(/<[^>]+>/g, ' ');
-
-  // Decode HTML entities
   text = decodeHtmlEntities(text);
-
-  // Collapse whitespace and blank lines
   text = text
     .split('\n')
     .map(line => line.replace(/\s+/g, ' ').trim())

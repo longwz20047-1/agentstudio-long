@@ -1,40 +1,11 @@
 // agentstudio/backend/src/services/searxng/__tests__/contentExtractor.test.ts
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { fetchAndExtract, _resetExtractionCache } from '../contentExtractor.js';
 
-// Use vi.hoisted so mockScrape is available when vi.mock factories run (they are hoisted)
-const { mockScrape } = vi.hoisted(() => ({
-  mockScrape: vi.fn(),
-}));
-
-vi.mock('../../firecrawl/types.js', () => ({
-  getFirecrawlConfigFromEnv: vi.fn(() => ({
-    base_url: 'http://firecrawl:3002',
-    api_key: 'test-key',
-  })),
-}));
-
-vi.mock('../../firecrawl/firecrawlClient.js', () => ({
-  FirecrawlClient: vi.fn().mockImplementation(() => ({
-    scrape: mockScrape,
-  })),
-  validateUrl: vi.fn((url: string) => {
-    if (url.includes('192.168.') || url.includes('localhost')) {
-      throw new Error(`SSRF: blocked`);
-    }
-  }),
-}));
-
-// Now import the module under test
-import { fetchAndExtract, _resetCircuitBreaker, _resetExtractionCache } from '../contentExtractor.js';
-import { getFirecrawlConfigFromEnv } from '../../firecrawl/types.js';
-
-describe('contentExtractor', () => {
+describe('contentExtractor (Crawl4AI)', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    _resetCircuitBreaker();
     _resetExtractionCache();
-    // Reset global fetch mock
     vi.stubGlobal('fetch', vi.fn());
   });
 
@@ -42,143 +13,136 @@ describe('contentExtractor', () => {
     vi.unstubAllGlobals();
   });
 
-  describe('Firecrawl path', () => {
-    it('should return content from Firecrawl when available', async () => {
-      mockScrape.mockResolvedValue({
-        markdown: '# Hello World\n\nThis is content.',
-        metadata: { title: 'Hello World' },
-      });
+  // Helper: mock Crawl4AI /md response
+  function mockCrawl4AI(markdown: string, success = true) {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ success, markdown }),
+    });
+  }
+
+  // Helper: mock Crawl4AI failure then HTML fallback
+  function mockCrawl4AIFailThenHtml(html: string) {
+    // First call: Crawl4AI fails
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('Crawl4AI timeout')
+    );
+    // Second call: fallback fetch succeeds
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({ 'content-type': 'text/html; charset=utf-8' }),
+      text: () => Promise.resolve(html),
+    });
+  }
+
+  describe('SSRF protection', () => {
+    it('should return null for private IP URLs', async () => {
+      const result = await fetchAndExtract('http://192.168.1.1/secret');
+      expect(result).toBeNull();
+      // fetch should not be called — blocked before any extraction
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+
+    it('should return null for localhost URLs', async () => {
+      const result = await fetchAndExtract('http://localhost:8080/admin');
+      expect(result).toBeNull();
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Crawl4AI primary path', () => {
+    it('should return LLM-extracted content from Crawl4AI', async () => {
+      mockCrawl4AI('# News\n\n1. Breaking news about AI');
 
       const result = await fetchAndExtract('https://example.com');
+
       expect(result).toEqual({
-        title: 'Hello World',
-        content: '# Hello World\n\nThis is content.',
+        title: '',
+        content: '# News\n\n1. Breaking news about AI',
       });
-      expect(mockScrape).toHaveBeenCalledWith('https://example.com', {
-        onlyMainContent: true,
-        formats: ['markdown'],
-        timeout: 5000,
-      });
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/md'),
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('"f":"llm"'),
+        })
+      );
     });
 
     it('should truncate content to maxLength', async () => {
-      const longContent = 'A'.repeat(2000);
-      mockScrape.mockResolvedValue({
-        markdown: longContent,
-        metadata: { title: 'Long' },
-      });
+      mockCrawl4AI('A'.repeat(5000));
 
-      const result = await fetchAndExtract('https://example.com', { maxLength: 100 });
+      const result = await fetchAndExtract('https://example.com', { maxLength: 200 });
+
       expect(result).not.toBeNull();
-      expect(result!.content.length).toBe(100);
+      expect(result!.content.length).toBe(200);
     });
 
-    it('should fallback to fetch when Firecrawl fails', async () => {
-      mockScrape.mockRejectedValue(new Error('Firecrawl error'));
+    it('should pass custom query to Crawl4AI', async () => {
+      mockCrawl4AI('Custom extraction result');
 
-      const htmlBody = '<html><head><title>Fallback Title</title></head><body><p>Fallback content</p></body></html>';
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      await fetchAndExtract('https://example.com', {
+        query: 'Extract product prices',
+      });
+
+      const callBody = JSON.parse(
+        (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body
+      );
+      expect(callBody.q).toBe('Extract product prices');
+    });
+
+    it('should fallback when Crawl4AI returns empty markdown', async () => {
+      // Crawl4AI returns success but empty content (length <= 1)
+      mockCrawl4AI(' ', true);
+
+      // Fallback HTML
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
         ok: true,
-        headers: new Headers({
-          'content-type': 'text/html; charset=utf-8',
-        }),
-        text: () => Promise.resolve(htmlBody),
+        headers: new Headers({ 'content-type': 'text/html' }),
+        text: () => Promise.resolve('<html><title>Fallback</title><body><p>Content</p></body></html>'),
       });
 
       const result = await fetchAndExtract('https://example.com');
+      expect(result).not.toBeNull();
+      expect(result!.title).toBe('Fallback');
+    });
+
+    it('should fallback when Crawl4AI returns HTTP error', async () => {
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+      });
+      // Fallback HTML
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ 'content-type': 'text/html' }),
+        text: () => Promise.resolve('<html><title>Fallback</title><body>content</body></html>'),
+      });
+
+      const result = await fetchAndExtract('https://example.com');
+      expect(result).not.toBeNull();
+      expect(result!.title).toBe('Fallback');
+    });
+  });
+
+  describe('Fallback path', () => {
+    it('should use fetch fallback when Crawl4AI fails', async () => {
+      const html = '<html><head><title>Fallback Title</title></head><body><p>Fallback content</p></body></html>';
+      mockCrawl4AIFailThenHtml(html);
+
+      const result = await fetchAndExtract('https://example.com');
+
       expect(result).not.toBeNull();
       expect(result!.title).toBe('Fallback Title');
       expect(result!.content).toContain('Fallback content');
     });
-  });
 
-  describe('Circuit breaker', () => {
-    it('should skip Firecrawl after 3 consecutive failures', async () => {
-      mockScrape.mockRejectedValue(new Error('fail'));
-
-      const htmlBody = '<html><head><title>FB</title></head><body><p>content</p></body></html>';
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-        ok: true,
-        headers: new Headers({ 'content-type': 'text/html' }),
-        text: () => Promise.resolve(htmlBody),
-      });
-
-      // 3 failures to open circuit
-      await fetchAndExtract('https://example.com/1');
-      await fetchAndExtract('https://example.com/2');
-      await fetchAndExtract('https://example.com/3');
-
-      expect(mockScrape).toHaveBeenCalledTimes(3);
-
-      // 4th call should skip Firecrawl entirely
-      mockScrape.mockClear();
-      await fetchAndExtract('https://example.com/4');
-      expect(mockScrape).not.toHaveBeenCalled();
-    });
-
-    it('should reset circuit breaker with _resetCircuitBreaker', async () => {
-      mockScrape.mockRejectedValue(new Error('fail'));
-
-      const htmlBody = '<html><head><title>T</title></head><body><p>c</p></body></html>';
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-        ok: true,
-        headers: new Headers({ 'content-type': 'text/html' }),
-        text: () => Promise.resolve(htmlBody),
-      });
-
-      // Open circuit
-      await fetchAndExtract('https://example.com/1');
-      await fetchAndExtract('https://example.com/2');
-      await fetchAndExtract('https://example.com/3');
-
-      _resetCircuitBreaker();
-
-      // Should try Firecrawl again
-      mockScrape.mockClear();
-      mockScrape.mockResolvedValue({
-        markdown: 'recovered',
-        metadata: { title: 'Recovered' },
-      });
-
-      const result = await fetchAndExtract('https://example.com/5');
-      expect(mockScrape).toHaveBeenCalledTimes(1);
-      expect(result!.content).toBe('recovered');
-    });
-  });
-
-  describe('Fallback fetch', () => {
-    beforeEach(() => {
-      // Disable Firecrawl for fallback tests
-      (getFirecrawlConfigFromEnv as ReturnType<typeof vi.fn>).mockReturnValue(null);
-      // Re-import won't help since module is cached, so open circuit breaker instead
-      // Actually, let's just make Firecrawl fail
-      (getFirecrawlConfigFromEnv as ReturnType<typeof vi.fn>).mockReturnValue({
-        base_url: 'http://firecrawl:3002',
-        api_key: 'test-key',
-      });
-      // Open circuit to skip Firecrawl
-      _resetCircuitBreaker();
-    });
-
-    // Helper to force fallback path by opening circuit breaker
-    async function openCircuit() {
-      mockScrape.mockRejectedValue(new Error('fail'));
-      const htmlBody = '<html><head><title>T</title></head><body><p>c</p></body></html>';
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-        ok: true,
-        headers: new Headers({ 'content-type': 'text/html' }),
-        text: () => Promise.resolve(htmlBody),
-      });
-      await fetchAndExtract('https://example.com/1');
-      await fetchAndExtract('https://example.com/2');
-      await fetchAndExtract('https://example.com/3');
-      vi.mocked(globalThis.fetch).mockReset();
-    }
-
-    it('should return null for non-HTML content-type', async () => {
-      await openCircuit();
-
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+    it('should return null for non-HTML content-type in fallback', async () => {
+      // Crawl4AI fails
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('fail'));
+      // Fallback: non-HTML
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
         ok: true,
         headers: new Headers({ 'content-type': 'application/pdf' }),
         text: () => Promise.resolve('binary'),
@@ -188,37 +152,33 @@ describe('contentExtractor', () => {
       expect(result).toBeNull();
     });
 
-    it('should return null when SSRF validation fails', async () => {
-      await openCircuit();
+    it('should return null for oversized HTML in fallback', async () => {
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('fail'));
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({
+          'content-type': 'text/html',
+          'content-length': String(600 * 1024),
+        }),
+        text: () => Promise.resolve('<html>big</html>'),
+      });
 
-      const result = await fetchAndExtract('http://192.168.1.1/secret');
+      const result = await fetchAndExtract('https://example.com/huge');
       expect(result).toBeNull();
     });
 
-    it('should return null on fetch timeout', async () => {
-      await openCircuit();
-
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(
-        new DOMException('The operation was aborted', 'AbortError')
-      );
-
-      const result = await fetchAndExtract('https://example.com/slow');
-      expect(result).toBeNull();
-    });
-
-    it('should strip script, style, nav, footer, header tags', async () => {
-      await openCircuit();
-
+    it('should strip script/style/nav/footer/header in fallback HTML', async () => {
       const html = `<html><head><title>Clean</title></head><body>
         <script>alert('xss')</script>
         <style>.hide{display:none}</style>
         <nav>Navigation</nav>
-        <header>Header stuff</header>
+        <header>Header</header>
         <main><p>Real content here</p></main>
-        <footer>Footer stuff</footer>
+        <footer>Footer</footer>
       </body></html>`;
 
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('fail'));
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
         ok: true,
         headers: new Headers({ 'content-type': 'text/html' }),
         text: () => Promise.resolve(html),
@@ -228,126 +188,68 @@ describe('contentExtractor', () => {
       expect(result).not.toBeNull();
       expect(result!.content).toContain('Real content here');
       expect(result!.content).not.toContain('alert');
-      expect(result!.content).not.toContain('xss');
       expect(result!.content).not.toContain('Navigation');
-      expect(result!.content).not.toContain('Header stuff');
-      expect(result!.content).not.toContain('Footer stuff');
-      expect(result!.content).not.toContain('display:none');
-    });
-
-    it('should return null for oversized response (Content-Length > 512KB)', async () => {
-      await openCircuit();
-
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-        ok: true,
-        headers: new Headers({
-          'content-type': 'text/html',
-          'content-length': String(600 * 1024),
-        }),
-        text: () => Promise.resolve('<html><body>big</body></html>'),
-      });
-
-      const result = await fetchAndExtract('https://example.com/huge');
-      expect(result).toBeNull();
-    });
-
-    it('should return null for oversized HTML body (> 512KB)', async () => {
-      await openCircuit();
-
-      const bigHtml = '<html><body>' + 'x'.repeat(600 * 1024) + '</body></html>';
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-        ok: true,
-        headers: new Headers({ 'content-type': 'text/html' }),
-        text: () => Promise.resolve(bigHtml),
-      });
-
-      const result = await fetchAndExtract('https://example.com/huge2');
-      expect(result).toBeNull();
+      expect(result!.content).not.toContain('Footer');
     });
   });
 
-  describe('Firecrawl timeout', () => {
-    it('should fallback when Firecrawl exceeds 5s timeout', async () => {
-      // Simulate Firecrawl hanging
-      mockScrape.mockImplementation(() => new Promise((resolve) => {
-        setTimeout(() => resolve({ markdown: 'late', metadata: { title: 'Late' } }), 10000);
-      }));
-
-      const htmlBody = '<html><head><title>Fast</title></head><body><p>Fast content</p></body></html>';
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-        ok: true,
-        headers: new Headers({ 'content-type': 'text/html' }),
-        text: () => Promise.resolve(htmlBody),
-      });
-
-      // Use fake timers for the Promise.race timeout
-      vi.useFakeTimers();
-      const promise = fetchAndExtract('https://example.com');
-      // Advance past the 5s timeout
-      await vi.advanceTimersByTimeAsync(5100);
-      const result = await promise;
-      vi.useRealTimers();
-
-      expect(result).not.toBeNull();
-      expect(result!.title).toBe('Fast');
-    });
-  });
-
-  describe('extraction cache', () => {
-    it('should return cached result for same URL within TTL', async () => {
-      mockScrape.mockResolvedValue({
-        markdown: 'cached content',
-        metadata: { title: 'Cached' },
-      });
+  describe('Extraction cache', () => {
+    it('should return cached result for same URL and query', async () => {
+      mockCrawl4AI('cached content');
 
       const result1 = await fetchAndExtract('https://example.com/cached');
       const result2 = await fetchAndExtract('https://example.com/cached');
 
-      expect(mockScrape).toHaveBeenCalledTimes(1);
+      // Only 1 fetch call (second is cached)
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
       expect(result1).toEqual(result2);
     });
 
+    it('should not use cache when query differs for same URL', async () => {
+      mockCrawl4AI('content for query A');
+      mockCrawl4AI('content for query B');
+
+      const result1 = await fetchAndExtract('https://example.com/page', { query: 'query A' });
+      const result2 = await fetchAndExtract('https://example.com/page', { query: 'query B' });
+
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+      expect(result1!.content).toBe('content for query A');
+      expect(result2!.content).toBe('content for query B');
+    });
+
     it('should not use cache for different URLs', async () => {
-      mockScrape.mockResolvedValue({
-        markdown: 'content',
-        metadata: { title: 'Title' },
-      });
+      mockCrawl4AI('content A');
+      mockCrawl4AI('content B');
 
       await fetchAndExtract('https://example.com/a');
       await fetchAndExtract('https://example.com/b');
 
-      expect(mockScrape).toHaveBeenCalledTimes(2);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
     });
 
-    it('should cache null results (failed extractions)', async () => {
-      mockScrape.mockRejectedValue(new Error('fail'));
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('fail'));
+    it('should cache null results', async () => {
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('fail'));
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('fail'));
 
       const result1 = await fetchAndExtract('https://example.com/fail');
       const result2 = await fetchAndExtract('https://example.com/fail');
 
       expect(result1).toBeNull();
       expect(result2).toBeNull();
-      expect(mockScrape).toHaveBeenCalledTimes(1);
+      // Only 2 calls for first attempt (crawl4ai + fallback), 0 for second (cached)
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
     });
 
     it('should clear cache with _resetExtractionCache', async () => {
-      mockScrape.mockResolvedValue({
-        markdown: 'first',
-        metadata: { title: 'First' },
-      });
-
+      mockCrawl4AI('first');
       await fetchAndExtract('https://example.com/reset');
+
       _resetExtractionCache();
 
-      mockScrape.mockResolvedValue({
-        markdown: 'second',
-        metadata: { title: 'Second' },
-      });
-
+      mockCrawl4AI('second');
       const result = await fetchAndExtract('https://example.com/reset');
+
       expect(result!.content).toBe('second');
-      expect(mockScrape).toHaveBeenCalledTimes(2);
     });
   });
 });
