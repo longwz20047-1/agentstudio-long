@@ -513,6 +513,91 @@ reconnect 时 `connectOne` 会重新 `getToken` → 如果 JWT 过期会自动 r
 - 生产环境中 weknora-ui → AgentStudio 的调用必须经过 HTTPS 或本地代理（Nginx/Vite proxy），确保密码不被窃听
 - 开发环境中 Vite proxy 为同源调用，无安全风险
 
+## AgentStudio 前端认证参考
+
+AgentStudio 自己的 React 前端已有完整的认证实现，weknora-ui 应参考其模式。
+
+### AgentStudio 前端 vs weknora-ui 认证对比
+
+| 维度 | AgentStudio 前端（正确实现） | weknora-ui（当前状态） |
+|------|---------------------------|----------------------|
+| **登录** | 调用 `/api/auth/login` 获取 JWT | 从未调用，直接拿 ADMIN_PASSWORD 当 token |
+| **Token 存储** | `TokensMap`（Record<serviceId, TokenData>）| `weknora_a2a_servers` 存 ADMIN_PASSWORD |
+| **请求认证** | `authFetch` 自动带 JWT | 手动 `fetch` 带 ADMIN_PASSWORD |
+| **Token 刷新** | 双层：5 分钟定时 + 请求时后台刷新 | 无 |
+| **401 处理** | 自动刷新 token + 重试 1 次 | 无 |
+| **多服务器** | `BackendService[]` + `currentServiceId` | `A2AServerConfig[]` + 类似结构 |
+| **HTTP 库** | 原生 fetch + authFetch 封装 | axios（WeKnora API）/ fetch（A2A API） |
+
+### 可参考的核心文件
+
+| AgentStudio 前端文件 | 职责 | weknora-ui 对应 |
+|---------------------|------|----------------|
+| `stores/authStore.ts` | TokensMap + getToken/setToken | → `useAgentStudioAuth.ts` 的 tokenMap |
+| `utils/authFetch.ts` | 带认证的 fetch + 自动刷新 + 401 重试 | → `agentStudioRequest.ts` 的 axios 拦截器 |
+| `hooks/useAuth.ts` | login/logout/verifyToken/refreshToken | → `useAgentStudioAuth.ts` 的 getToken |
+| `utils/authHelpers.ts` | parseJWT/isTokenExpired/shouldRefresh | → `useAgentStudioAuth.ts` 的过期检查 |
+| `utils/backendServiceStorage.ts` | 多服务器存储 + getCurrentService | → `serverStorage.ts` 已有类似结构 |
+
+### 关键参考模式
+
+**1. TokenData 结构**（`authStore.ts`）
+
+```typescript
+// AgentStudio 前端的 Token 存储结构
+interface TokenData {
+  token: string;          // JWT token 字符串
+  serviceId: string;      // 所属服务器 ID
+  serviceName: string;    // 服务器名称
+  serviceUrl: string;     // 服务器 URL
+  timestamp: number;      // Token 创建时间戳
+}
+type TokensMap = Record<string, TokenData>;
+```
+
+weknora-ui 的 `useAgentStudioAuth.ts` 设计中的 `tokenMap: Map<serverUrl, { token, expiresAt }>` 是简化版本，足够使用。
+
+**2. authFetch 401 自动重试**（`authFetch.ts`）
+
+```typescript
+// AgentStudio 前端的请求流程
+while (attempt <= maxRetries) {
+  const response = await makeAuthRequest(url, fetchOptions, skipAuth);
+  if (response.status === 401 && attempt < maxRetries && !skipAuth) {
+    const refreshed = await attemptTokenRefresh();
+    if (refreshed) { attempt++; continue; }  // 用新 token 重试
+  }
+  return response;
+}
+```
+
+weknora-ui 的设计文档已包含类似的 401 重试逻辑（Section 4 的 `clearToken + 重新 login + 重试一次`）。
+
+**3. 多服务器 Token 获取**（`authFetch.ts:makeAuthRequest`）
+
+```typescript
+// AgentStudio 前端按 serviceId 获取 token
+const currentServiceId = getCurrentServiceId();
+const token = currentServiceId ? getToken(currentServiceId) : null;
+const actualToken = extractToken(token);
+headers.set('Authorization', `Bearer ${actualToken}`);
+```
+
+weknora-ui 的类型 A 路由用 `getToken(serverUrl, adminPassword)` 实现类似逻辑。类型 B 路由通过 `getDefaultServer()` 确定目标服务器。
+
+**4. JWT 过期检查**（`authHelpers.ts`）
+
+```typescript
+// AgentStudio 前端的 JWT 解析
+function parseJWT(token: string): { exp?: number } | null {
+  const base64Url = token.split('.')[1];
+  const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+  return JSON.parse(window.atob(base64));
+}
+```
+
+weknora-ui 的设计文档已包含相同的 `atob(token.split('.')[1])` 模式。
+
 ## 改动文件清单
 
 ### 后端（agentstudio）— 2 文件
