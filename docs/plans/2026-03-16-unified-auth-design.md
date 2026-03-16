@@ -383,9 +383,11 @@ interface Props { serverUrl: string; projectPath: string }  // 移除 apiKey
 
 参考 AgentStudio 前端 `utils/authFetch.ts` 的 401 重试模式。
 
-### Step 3：WebSocket 改造
+### Step 3：WebSocket 改造（健壮连接管理）
 
 **修改** `weknora-ui/src/composables/useAgentStudioWS.ts`
+
+#### 3a. JWT 认证
 
 ```typescript
 // 改造前（sync）
@@ -405,7 +407,128 @@ async function connectOne(conn: WSConnection) {
 connectOne(conn).catch(() => { /* getToken 失败，scheduleReconnect 会处理 */ })
 ```
 
-> **注意**：`scheduleReconnect` 中的 `setTimeout` 回调也调用 `connectOne`，必须加 `.catch()` 防止 `getToken` 拒绝时产生 unhandled rejection。
+#### 3b. 重连策略改进
+
+**现状问题**：5 次重连失败后永久放弃（MAX_RECONNECT_ATTEMPTS = 5，约 31 秒），无恢复机制。
+
+**改造**：两阶段重连策略
+
+```typescript
+// 阶段 1：快速重连（前 5 次）
+// 1s → 2s → 4s → 8s → 16s（指数退避，与现有逻辑相同）
+
+// 阶段 2：慢速重连（第 6 次起）
+// 每 60s 尝试一次，无限重试
+// 网络恢复时自动连上，不需要用户手动操作
+
+const FAST_RECONNECT_MAX = 5        // 快速阶段最大次数
+const SLOW_RECONNECT_INTERVAL = 60000  // 慢速阶段间隔（60 秒）
+
+function scheduleReconnect(conn: WSConnection) {
+  if (conn.reconnectTimer) return
+  if (!connections.has(conn.serverUrl)) return
+
+  conn.reconnectAttempts++
+
+  const delay = conn.reconnectAttempts <= FAST_RECONNECT_MAX
+    ? Math.min(conn.reconnectDelay * 2, 30000)   // 阶段 1：指数退避
+    : SLOW_RECONNECT_INTERVAL                      // 阶段 2：固定 60s
+
+  conn.reconnectTimer = setTimeout(() => {
+    conn.reconnectTimer = null
+    if (connections.has(conn.serverUrl)) {
+      connectOne(conn).catch(() => {})
+      if (conn.reconnectAttempts <= FAST_RECONNECT_MAX) {
+        conn.reconnectDelay = delay
+      }
+    }
+  }, delay)
+}
+```
+
+> 移除 `MAX_RECONNECT_ATTEMPTS` 上限。慢速阶段不打 warn 日志避免刷屏。
+
+#### 3c. 页面可见性恢复
+
+用户切 tab 或最小化窗口后回来，WebSocket 可能已僵死（未触发 onclose）。通过 Visibility API 检测页面恢复，主动检查连接健康度：
+
+```typescript
+// 模块级初始化（useAgentStudioWS.ts 顶层）
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      checkAndReconnectAll()
+    }
+  })
+}
+
+function checkAndReconnectAll() {
+  for (const conn of connections.values()) {
+    if (!conn.ws || conn.ws.readyState !== WebSocket.OPEN) {
+      // 连接已断，重置重连计数，立即重连
+      conn.reconnectAttempts = 0
+      conn.reconnectDelay = 1000
+      if (conn.reconnectTimer) {
+        clearTimeout(conn.reconnectTimer)
+        conn.reconnectTimer = null
+      }
+      connectOne(conn).catch(() => {})
+    }
+  }
+}
+```
+
+> 切回页面时，对每个非 OPEN 状态的连接重置重连计数并立即尝试。
+
+#### 3d. 客户端心跳
+
+后端 WebSocket 可能不发 ping。客户端主动发心跳探测连接是否活着：
+
+```typescript
+const HEARTBEAT_INTERVAL = 30000  // 30 秒
+
+// 在 connectOne 的 socket.onopen 中启动心跳
+conn.heartbeatTimer = setInterval(() => {
+  if (conn.ws?.readyState === WebSocket.OPEN) {
+    conn.ws.send(JSON.stringify({ type: 'ping' }))
+  }
+}, HEARTBEAT_INTERVAL)
+
+// WSConnection 接口新增
+interface WSConnection {
+  // ...现有字段
+  heartbeatTimer: ReturnType<typeof setInterval> | null
+}
+
+// cleanupConnection 中清除心跳
+if (conn.heartbeatTimer) {
+  clearInterval(conn.heartbeatTimer)
+  conn.heartbeatTimer = null
+}
+```
+
+> 后端收到 `{ type: 'ping' }` 应回复 `{ type: 'pong' }`。如果 3 次 ping 无 pong 响应，客户端主动关闭连接触发重连。后端如果不支持 pong 可先忽略，心跳的主要作用是保持连接活跃防止被代理/防火墙超时断开。
+
+#### 3e. 连接生命周期全覆盖
+
+**现状调用链**：
+
+| 场景 | 触发点 | 当前行为 |
+|------|--------|---------|
+| 页面加载/刷新 | `menu.vue` onMounted | `connectAll(loadServers())` ✅ 已有 |
+| 用户登录 | Login.vue → 跳转 → platform mount → menu.vue | 同上 ✅ 已有 |
+| 添加服务器 | a2a-project `addServer()` | `addConnection(newServer)` ✅ 已有 |
+| 更新服务器 | a2a-project `updateServer()` | `addConnection(serverData)` ✅ 已有（apiKey 变则重连） |
+| 删除服务器 | a2a-project `confirmDeleteServer()` | `removeConnection(url)` ✅ 已有 |
+| 网络断开 | socket.onclose | `scheduleReconnect()` ✅ 已有（改为无限重试） |
+| 切 tab 回来 | visibilitychange | `checkAndReconnectAll()` ✅ **新增** |
+| JWT 过期 | 后端关闭连接 | onclose → reconnect → getToken 自动 re-login ✅ 自动 |
+| 服务器密码变更 | getToken 失败 | catch → scheduleReconnect → 下次用新密码(localStorage 已更新) ✅ |
+
+**不需要改动的调用方**（生命周期已正确）：
+- `menu.vue:738` — `connectAll(loadServers())` 在 onMounted 中，页面加载/刷新自动执行
+- `a2a-project` — 增删改服务器已正确调用 `addConnection` / `removeConnection`
+- `a2a-chat` — workspace 订阅在 watch config 中，项目切换自动处理
 
 ### Step 4：类型 B 分享/标签/用户 API 改造（26 个函数）
 
