@@ -530,6 +530,69 @@ if (conn.heartbeatTimer) {
 - `a2a-project` — 增删改服务器已正确调用 `addConnection` / `removeConnection`
 - `a2a-chat` — workspace 订阅在 watch config 中，项目切换自动处理
 
+#### 3f. 重连后全量数据刷新
+
+**问题**：WebSocket 依赖增量推送（如 `session:update`），断开期间的事件全部丢失。重连后如果只等下一次推送，UI 可能长时间显示过时数据。
+
+**方案**：`connectOne` 的 `socket.onopen` 触发 `_connection:opened` 内部事件，消费方监听该事件做全量刷新。
+
+```typescript
+// useAgentStudioWS.ts — connectOne 的 onopen 中新增
+socket.onopen = () => {
+  conn.isConnected = true
+  conn.ws = socket
+  conn.reconnectDelay = 1000
+  conn.reconnectAttempts = 0
+  updateConnectedCount()
+
+  // 回放订阅（已有逻辑）
+  for (const sub of activeSubscriptions) { ... }
+
+  // 新增：触发连接建立事件，通知消费方做全量刷新
+  const openHandlers = handlers.get('_connection:opened')
+  if (openHandlers) {
+    for (const handler of openHandlers) handler({ _serverUrl: conn.serverUrl })
+  }
+}
+```
+
+**消费方（menu.vue）** — 监听 `_connection:opened`，对该服务器做全量 session 刷新：
+
+```typescript
+// menu.vue
+const handleConnectionOpened = async (data: any) => {
+  // 连接建立/重连成功 → 拉取该服务器最新 session 列表
+  const serverUrl = data._serverUrl
+  const servers = loadServers()
+  const server = servers.find(s => s.serverUrl === serverUrl)
+  if (!server) return
+
+  try {
+    const result = await fetchActiveSessions(server.serverUrl, server.apiKey)
+    const ids = new Set((result.sessions || []).map(s => s.sessionId))
+    sessionsByServer.set(serverUrl, ids)
+    mergeAndUpdateSessions()
+  } catch {
+    // 拉取失败不影响，等 WebSocket 推送
+  }
+}
+
+wsOn('_connection:opened', handleConnectionOpened)
+// onUnmounted: wsOff('_connection:opened', handleConnectionOpened)
+```
+
+**设计要点**：
+
+| 要点 | 说明 |
+|------|------|
+| 事件名 | `_connection:opened`（`_` 前缀表示前端内部事件，与后端推送事件区分） |
+| 触发时机 | 每次 `socket.onopen`（首次连接和重连都触发） |
+| 刷新范围 | 按 `_serverUrl` 只刷新该服务器的数据，不影响其他连接 |
+| 失败容错 | REST 刷新失败静默忽略，WebSocket 推送仍会补齐 |
+| 扩展性 | 未来任何依赖 WS 增量推送的功能（workspace 文件树、通知等）都可以监听此事件做全量刷新 |
+
+> **注意**：这里 `fetchActiveSessions` 仍使用 ADMIN_PASSWORD 调用 REST API（经过 Step 2 的 A1 改造后用 JWT）。`_connection:opened` 的 REST 全量刷新和 WebSocket 增量推送形成**双保险**：REST 确保重连后立即获取最新状态，WebSocket 确保后续实时更新。
+
 ### Step 4：类型 B 分享/标签/用户 API 改造（26 个函数）
 
 **新建** `weknora-ui/src/utils/agentStudioRequest.ts` — AgentStudio 专用 axios 实例
