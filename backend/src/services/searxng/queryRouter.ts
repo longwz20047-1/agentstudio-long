@@ -30,16 +30,15 @@ const GENERAL_ZH   = 'google,duckduckgo,brave,startpage,wikipedia,baidu,sogou,qu
 
 const CODE_ENGINES     = 'github,stackoverflow,mdn,npm,pypi,docker hub,pkg.go.dev,crates.io,codeberg,hackernews';
 const ACADEMIC_ENGINES = 'google scholar,arxiv,semantic scholar,pubmed,crossref,openalex';
+const NEWS_ENGINES     = 'google news,bing news,yahoo news,duckduckgo news,wikinews,startpage news,brave.news,reuters';
+const NEWS_ENGINES_ZH  = NEWS_ENGINES + ',qwant news,sogou wechat';
 const SOCIAL_ENGINES   = 'reddit,hackernews,stackoverflow';
 
 const INTENT_ENGINE_MAP: Record<SearchIntent, { zh: string; en: string }> = {
   general:  { zh: GENERAL_ZH,                              en: GENERAL_BASE },
   code:     { zh: GENERAL_ZH + ',' + CODE_ENGINES,         en: GENERAL_BASE + ',' + CODE_ENGINES },
   academic: { zh: GENERAL_ZH + ',' + ACADEMIC_ENGINES,     en: ACADEMIC_ENGINES },
-  news:     {
-    zh: 'google news,bing news,yahoo news,duckduckgo news,wikinews,startpage news,brave.news,reuters,qwant news,sogou wechat',
-    en: 'google news,bing news,yahoo news,duckduckgo news,wikinews,startpage news,brave.news,reuters',
-  },
+  news:     { zh: GENERAL_ZH + ',' + NEWS_ENGINES_ZH,      en: GENERAL_BASE + ',' + NEWS_ENGINES },
   social:   { zh: GENERAL_ZH + ',' + SOCIAL_ENGINES,       en: GENERAL_BASE + ',' + SOCIAL_ENGINES },
 };
 
@@ -167,9 +166,18 @@ const LANGUAGE_CODE_MAP: Record<QueryLanguage, string> = {
   other: 'all',
 };
 
-export function analyzeQuery(query: string, options?: { timeRange?: string }): QueryAnalysis {
-  const lang = detectLanguage(query);
-  const { intent, matchedRule } = detectIntent(query, options);
+export function analyzeQuery(
+  query: string,
+  options?: {
+    timeRange?: string;
+    searchTypeOverride?: SearchIntent;
+    languageOverride?: QueryLanguage;
+  }
+): QueryAnalysis {
+  const lang = options?.languageOverride ?? detectLanguage(query);
+  const { intent, matchedRule } = options?.searchTypeOverride
+    ? { intent: options.searchTypeOverride, matchedRule: 'ai_provided' }
+    : detectIntent(query, options);
   const langKey = lang === 'other' ? 'en' : lang;
   const engines = INTENT_ENGINE_MAP[intent][langKey];
   const languageCode = LANGUAGE_CODE_MAP[lang];

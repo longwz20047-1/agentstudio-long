@@ -47,6 +47,21 @@ Extract and optimize search keywords:
 
 Parameters:
 - query: Optimized search keywords (NOT the user's raw question)
+- search_type: Content type — determines which search engines are used.
+  Always provide this based on the user's actual need:
+  - "code": Programming errors, API usage, library docs,
+    package install, debugging, deployment, DevOps
+  - "academic": Papers, research, algorithms, studies,
+    surveys, datasets, benchmarks
+  - "news": Current events, product launches, announcements,
+    policy changes, incidents, market movements
+  - "social": Recommendations, reviews, comparisons (X vs Y),
+    experiences, community discussions
+  - "general": Daily life, knowledge, how-to, everything else
+- language: User's language — adds regional search engines.
+  Always provide this based on the conversation language:
+  - "zh": Chinese-speaking user (adds Baidu, Sogou, Quark)
+  - "en": English-speaking user
 - time_range: "day", "week", "month", "year" — use when
   the query implies recency (news, releases, incidents)
 - max_results: 1-10, default 5. Use 1-3 for precise lookups,
@@ -55,14 +70,19 @@ Parameters:
 Examples:
 - "我的useEffect一直重新渲染停不下来怎么办"
   → query: "React useEffect infinite loop dependency array"
+    search_type: "code", language: "zh"
 - "那个注意力机制的论文叫什么"
   → query: "Attention Is All You Need transformer paper"
+    search_type: "academic", language: "zh"
 - "昨天小米出了什么新手机"
-  → query: "小米 新品发布 手机", time_range: "week"
+  → query: "小米 新品发布 手机"
+    search_type: "news", language: "zh", time_range: "week"
 - "好吃的火锅店推荐"
   → query: "火锅店 推荐 排名"
+    search_type: "social", language: "zh"
 - "最近有什么严重的安全漏洞"
-  → query: "critical CVE security vulnerability", time_range: "month"
+  → query: "critical CVE security vulnerability 2026"
+    search_type: "news", language: "zh", time_range: "month"
 
 Tip: For Chinese technical/academic queries, if results lack depth,
 try searching again with English keywords for broader coverage.`;
@@ -111,10 +131,12 @@ export async function integrateSearchMcp(
       query: z.string().describe('Optimized search keywords'),
       time_range: z.enum(['day', 'week', 'month', 'year']).optional().describe('Time filter for recency'),
       max_results: z.number().min(1).max(10).optional().describe('Max results (default 5)'),
+      search_type: z.enum(['general', 'news', 'code', 'academic', 'social']).optional().describe('Content type — determines which engines are used'),
+      language: z.enum(['zh', 'en']).optional().describe('User language for regional engine selection'),
     },
     async (args) => {
       const startTime = Date.now();
-      const { query, time_range, max_results = 5 } = args;
+      const { query, time_range, max_results = 5, search_type, language } = args;
 
       try {
         // Check search cache
@@ -128,7 +150,12 @@ export async function integrateSearchMcp(
         }
 
         // Step 1: Analyze query for intent, engines, language
-        const analysis = analyzeQuery(query, { timeRange: time_range });
+        // AI-provided search_type/language take priority; queryRouter rules as fallback
+        const analysis = analyzeQuery(query, {
+          timeRange: time_range,
+          searchTypeOverride: search_type,
+          languageOverride: language,
+        });
 
         // Step 2: Search via SearXNG
         const response = await client.search({
@@ -147,7 +174,7 @@ export async function integrateSearchMcp(
         const contentMaxLength = getContentMaxLength(max_results);
         const fetchResults = await mapWithConcurrency(
           ranked,
-          r => fetchAndExtract(r.url, { maxLength: contentMaxLength }),
+          r => fetchAndExtract(r.url, { maxLength: contentMaxLength, query }),
           MAX_CONCURRENT_FETCHES,
         );
 
