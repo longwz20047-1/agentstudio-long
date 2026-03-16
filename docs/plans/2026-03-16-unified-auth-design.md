@@ -407,6 +407,18 @@ async function connectOne(conn: WSConnection) {
 connectOne(conn).catch(() => { /* getToken 失败，scheduleReconnect 会处理 */ })
 ```
 
+`connectOne` 的 `socket.onopen` 新增 `_connection:opened` 内部事件（供 3f Store 监听做全量刷新）：
+```typescript
+socket.onopen = () => {
+  // ...现有逻辑（isConnected, 订阅回放等）
+  // 新增：触发连接建立事件
+  const openHandlers = handlers.get('_connection:opened')
+  if (openHandlers) {
+    for (const handler of openHandlers) handler({ _serverUrl: conn.serverUrl })
+  }
+}
+```
+
 #### 3b. 重连策略改进
 
 **现状问题**：5 次重连失败后永久放弃（MAX_RECONNECT_ATTEMPTS = 5，约 31 秒），无恢复机制。
@@ -530,68 +542,124 @@ if (conn.heartbeatTimer) {
 - `a2a-project` — 增删改服务器已正确调用 `addConnection` / `removeConnection`
 - `a2a-chat` — workspace 订阅在 watch config 中，项目切换自动处理
 
-#### 3f. 重连后全量数据刷新
+#### 3f. Session 数据响应式 Store（重连全量刷新 + 组件零感知）
 
-**问题**：WebSocket 依赖增量推送（如 `session:update`），断开期间的事件全部丢失。重连后如果只等下一次推送，UI 可能长时间显示过时数据。
+**问题**：
 
-**方案**：`connectOne` 的 `socket.onopen` 触发 `_connection:opened` 内部事件，消费方监听该事件做全量刷新。
+当前 session 数据分散在两处，各自监听 WS 事件：
+- `menu.vue` — 组件级 `sessionsByServer` Map（非响应式），监听 `session:update`，写入 `menuStore.activeSessionIds`
+- `ActiveSessionsPanel` — 组件级 `sessions` ref，也监听 `session:update`
+
+问题：① 断开期间丢失事件，重连后 UI 过时 ② 两个组件各自管理数据，逻辑重复 ③ `sessionsByServer` 是 plain Map，Vue 无法追踪。
+
+**方案**：session 数据收归到 Pinia Store，WS 事件写 store，组件只绑定。
+
+```
+WebSocket session:update ──┐
+                           ├──→ Pinia Store (单一数据源) ──→ menu.vue (computed 绑定)
+_connection:opened (REST) ─┘                              ──→ ActiveSessionsPanel (computed 绑定)
+_connection:closed ────────→ 清除该服务器数据              ──→ 未来任何需要 session 的组件
+```
+
+**Store 改造**（扩展 `menuStore` 或新建 `sessionStore`）：
 
 ```typescript
-// useAgentStudioWS.ts — connectOne 的 onopen 中新增
-socket.onopen = () => {
-  conn.isConnected = true
-  conn.ws = socket
-  conn.reconnectDelay = 1000
-  conn.reconnectAttempts = 0
-  updateConnectedCount()
+// stores/menu.ts — 新增 session 响应式数据
 
-  // 回放订阅（已有逻辑）
-  for (const sub of activeSubscriptions) { ... }
+// 改造前（menu.vue 组件内，非响应式 Map）
+const sessionsByServer = new Map<string, Set<string>>()
 
-  // 新增：触发连接建立事件，通知消费方做全量刷新
-  const openHandlers = handlers.get('_connection:opened')
-  if (openHandlers) {
-    for (const handler of openHandlers) handler({ _serverUrl: conn.serverUrl })
+// 改造后（Pinia store 内，响应式 ref）
+const sessionsByServer = ref<Map<string, A2ASessionInfo[]>>(new Map())
+
+// 派生计算属性
+const activeSessionIds = computed(() => {
+  const ids = new Set<string>()
+  for (const sessions of sessionsByServer.value.values()) {
+    for (const s of sessions) ids.add(s.sessionId)
   }
+  return ids
+})
+
+// 按服务器获取 sessions（供 ActiveSessionsPanel 绑定）
+function getServerSessions(serverUrl: string): A2ASessionInfo[] {
+  return sessionsByServer.value.get(serverUrl) || []
+}
+
+// Store actions — WS 事件和 REST 刷新统一调用
+function updateServerSessions(serverUrl: string, sessions: A2ASessionInfo[]) {
+  const map = new Map(sessionsByServer.value)
+  map.set(serverUrl, sessions)
+  sessionsByServer.value = map  // 触发响应式更新
+}
+
+function clearServerSessions(serverUrl: string) {
+  const map = new Map(sessionsByServer.value)
+  map.delete(serverUrl)
+  sessionsByServer.value = map
 }
 ```
 
-**消费方（menu.vue）** — 监听 `_connection:opened`，对该服务器做全量 session 刷新：
+**WS 事件接管**（从 menu.vue 移到 store 或 WS 集成层）：
 
 ```typescript
-// menu.vue
-const handleConnectionOpened = async (data: any) => {
-  // 连接建立/重连成功 → 拉取该服务器最新 session 列表
-  const serverUrl = data._serverUrl
-  const servers = loadServers()
-  const server = servers.find(s => s.serverUrl === serverUrl)
-  if (!server) return
+// 方式 A：在 store 内直接监听 WS（推荐，store 是单例）
+import { useAgentStudioWS } from '@/composables/useAgentStudioWS'
 
+// store 初始化时注册（只执行一次）
+const { on: wsOn, subscribe: wsSub } = useAgentStudioWS()
+
+wsOn('session:update', (data) => {
+  updateServerSessions(data._serverUrl, data.sessions || [])
+})
+
+wsOn('_connection:closed', (data) => {
+  if (data._serverUrl) clearServerSessions(data._serverUrl)
+})
+
+wsOn('_connection:opened', async (data) => {
+  // 重连后全量刷新该服务器的 session
+  const servers = loadServers()
+  const server = servers.find(s => s.serverUrl === data._serverUrl)
+  if (!server) return
   try {
     const result = await fetchActiveSessions(server.serverUrl, server.apiKey)
-    const ids = new Set((result.sessions || []).map(s => s.sessionId))
-    sessionsByServer.set(serverUrl, ids)
-    mergeAndUpdateSessions()
-  } catch {
-    // 拉取失败不影响，等 WebSocket 推送
-  }
-}
+    updateServerSessions(data._serverUrl, result.sessions || [])
+  } catch { /* 静默，等 WS 推送补齐 */ }
+})
 
-wsOn('_connection:opened', handleConnectionOpened)
-// onUnmounted: wsOff('_connection:opened', handleConnectionOpened)
+wsSub('sessions')  // 广播订阅
 ```
 
-**设计要点**：
+**组件改造**：
 
-| 要点 | 说明 |
-|------|------|
-| 事件名 | `_connection:opened`（`_` 前缀表示前端内部事件，与后端推送事件区分） |
-| 触发时机 | 每次 `socket.onopen`（首次连接和重连都触发） |
-| 刷新范围 | 按 `_serverUrl` 只刷新该服务器的数据，不影响其他连接 |
-| 失败容错 | REST 刷新失败静默忽略，WebSocket 推送仍会补齐 |
-| 扩展性 | 未来任何依赖 WS 增量推送的功能（workspace 文件树、通知等）都可以监听此事件做全量刷新 |
+```typescript
+// menu.vue — 删除所有 WS session 处理逻辑
+// 删除：sessionsByServer Map、handleSessionUpdate、handleConnectionClosed
+// 删除：wsOn('session:update')、wsOn('_connection:closed')
+// 删除：mergeAndUpdateSessions()、loadActiveSessions()
+// 保留：menuStore.activeSessionIds 的 computed 绑定（现在从 store 自动计算）
 
-> **注意**：这里 `fetchActiveSessions` 仍使用 ADMIN_PASSWORD 调用 REST API（经过 Step 2 的 A1 改造后用 JWT）。`_connection:opened` 的 REST 全量刷新和 WebSocket 增量推送形成**双保险**：REST 确保重连后立即获取最新状态，WebSocket 确保后续实时更新。
+// ActiveSessionsPanel.vue — 删除所有本地 session 管理
+// 删除：sessions ref、handleSessionUpdate、loadSessions()、fetchActiveSessions import
+// 改为绑定 store：
+const menuStore = useMenuStore()
+const sessions = computed(() =>
+  menuStore.getServerSessions(props.serverUrl)
+    .filter(s => s.projectPath?.startsWith(props.projectPath))
+)
+// 组件只剩 template + computed + 跳转逻辑，零 WS 代码
+```
+
+**改造前后对比**：
+
+| 维度 | 改造前 | 改造后 |
+|------|--------|--------|
+| 数据源 | menu.vue 组件级 Map + ActiveSessionsPanel 组件级 ref | **Pinia Store 单一数据源** |
+| WS 监听 | 两个组件各自 `wsOn('session:update')` | **Store 统一监听，组件零 WS 代码** |
+| 重连刷新 | 无 | **`_connection:opened` → REST 全量 → 写 Store → 组件自动更新** |
+| 响应式 | plain Map 无追踪 | **ref + computed 自动追踪** |
+| 新组件接入 | 需要重复写 WS 监听 + 刷新逻辑 | **`computed(() => store.getServerSessions(url))` 一行** |
 
 ### Step 4：类型 B 分享/标签/用户 API 改造（26 个函数）
 
