@@ -51,7 +51,7 @@ describe('contentExtractor (Crawl4AI)', () => {
   });
 
   describe('Crawl4AI primary path', () => {
-    it('should return LLM-extracted content from Crawl4AI', async () => {
+    it('should return fit-extracted content from Crawl4AI', async () => {
       mockCrawl4AI('# News\n\n1. Breaking news about AI');
 
       const result = await fetchAndExtract('https://example.com');
@@ -65,7 +65,7 @@ describe('contentExtractor (Crawl4AI)', () => {
         expect.stringContaining('/md'),
         expect.objectContaining({
           method: 'POST',
-          body: expect.stringContaining('"f":"llm"'),
+          body: expect.stringContaining('"f":"fit"'),
         })
       );
     });
@@ -77,19 +77,6 @@ describe('contentExtractor (Crawl4AI)', () => {
 
       expect(result).not.toBeNull();
       expect(result!.content.length).toBe(200);
-    });
-
-    it('should pass custom query to Crawl4AI', async () => {
-      mockCrawl4AI('Custom extraction result');
-
-      await fetchAndExtract('https://example.com', {
-        query: 'Extract product prices',
-      });
-
-      const callBody = JSON.parse(
-        (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body
-      );
-      expect(callBody.q).toBe('Extract product prices');
     });
 
     it('should fallback when Crawl4AI returns empty markdown', async () => {
@@ -194,7 +181,7 @@ describe('contentExtractor (Crawl4AI)', () => {
   });
 
   describe('Extraction cache', () => {
-    it('should return cached result for same URL and query', async () => {
+    it('should return cached result for same URL', async () => {
       mockCrawl4AI('cached content');
 
       const result1 = await fetchAndExtract('https://example.com/cached');
@@ -203,18 +190,6 @@ describe('contentExtractor (Crawl4AI)', () => {
       // Only 1 fetch call (second is cached)
       expect(globalThis.fetch).toHaveBeenCalledTimes(1);
       expect(result1).toEqual(result2);
-    });
-
-    it('should not use cache when query differs for same URL', async () => {
-      mockCrawl4AI('content for query A');
-      mockCrawl4AI('content for query B');
-
-      const result1 = await fetchAndExtract('https://example.com/page', { query: 'query A' });
-      const result2 = await fetchAndExtract('https://example.com/page', { query: 'query B' });
-
-      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
-      expect(result1!.content).toBe('content for query A');
-      expect(result2!.content).toBe('content for query B');
     });
 
     it('should not use cache for different URLs', async () => {

@@ -174,7 +174,7 @@ export async function integrateSearchMcp(
         const contentMaxLength = getContentMaxLength(max_results);
         const fetchResults = await mapWithConcurrency(
           ranked,
-          r => fetchAndExtract(r.url, { maxLength: contentMaxLength, query }),
+          r => fetchAndExtract(r.url, { maxLength: contentMaxLength }),
           MAX_CONCURRENT_FETCHES,
         );
 

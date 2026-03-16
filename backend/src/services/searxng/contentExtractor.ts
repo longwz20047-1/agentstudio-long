@@ -5,14 +5,10 @@ import { validateUrl } from '../firecrawl/firecrawlClient.js';
 // --- Constants ---
 
 const CRAWL4AI_URL = process.env.CRAWL4AI_URL || 'http://192.168.100.30:11235';
-const CRAWL4AI_TIMEOUT_MS = 30_000;
+const CRAWL4AI_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_LENGTH = 20_000;
 const MAX_HTML_SIZE = 512 * 1024; // 512KB
 const FETCH_TIMEOUT_MS = 3000;
-
-const CRAWL4AI_DEFAULT_PROMPT =
-  'Extract the core content of this page: titles, body text, key information. ' +
-  'Output clean Markdown. Remove navigation, ads, sidebars, and other irrelevant content.';
 
 // --- Extraction Cache (10-min TTL) ---
 
@@ -43,13 +39,12 @@ interface Crawl4AIResponse {
 
 export async function fetchAndExtract(
   url: string,
-  options?: { maxLength?: number; query?: string }
+  options?: { maxLength?: number }
 ): Promise<{ title: string; content: string } | null> {
   const maxLength = options?.maxLength ?? DEFAULT_MAX_LENGTH;
 
-  // Check cache (keyed by url + query for context-dependent LLM extraction)
-  const cacheKey = options?.query ? `${url}|${options.query}` : url;
-  const cached = extractionCache.get(cacheKey);
+  // Check cache
+  const cached = extractionCache.get(url);
   if (cached && Date.now() < cached.expireAt) {
     return cached.result;
   }
@@ -64,8 +59,8 @@ export async function fetchAndExtract(
   let result: { title: string; content: string } | null = null;
 
   try {
-    // Primary: Crawl4AI + LLM extraction
-    result = await crawl4aiExtract(url, maxLength, options?.query);
+    // Primary: Crawl4AI fit mode (Playwright render + Markdown cleanup, no LLM)
+    result = await crawl4aiExtract(url, maxLength);
   } catch (err) {
     console.warn('[ContentExtractor] Crawl4AI error for', url, err instanceof Error ? err.message : err);
   }
@@ -80,7 +75,7 @@ export async function fetchAndExtract(
   }
 
   // Store in cache
-  extractionCache.set(cacheKey, {
+  extractionCache.set(url, {
     result,
     expireAt: Date.now() + EXTRACTION_CACHE_TTL_MS,
   });
@@ -93,18 +88,11 @@ export async function fetchAndExtract(
 async function crawl4aiExtract(
   url: string,
   maxLength: number,
-  query?: string,
 ): Promise<{ title: string; content: string } | null> {
   const resp = await fetch(`${CRAWL4AI_URL}/md`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      url,
-      f: 'llm',
-      q: query || CRAWL4AI_DEFAULT_PROMPT,
-      temperature: 0.2,
-      c: '0', // Disable Crawl4AI server-side cache (always fresh crawl)
-    }),
+    body: JSON.stringify({ url, f: 'fit' }),
     signal: AbortSignal.timeout(CRAWL4AI_TIMEOUT_MS),
   });
 
