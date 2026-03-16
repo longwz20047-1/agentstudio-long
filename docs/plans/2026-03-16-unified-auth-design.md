@@ -99,7 +99,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
 }
 ```
 
-变化: 保持同步函数签名（Express 4 兼容），内部用 async IIFE + `.catch(next)` 包裹 await 调用。保留 query parameter 支持（SSE 需要）。
+变化: 保持同步函数签名（Express 4 兼容），内部用 async IIFE + `.catch(next)` 包裹 await 调用。保留 query parameter 支持（SSE 需要）。注意：`NO_AUTH` 检查在当前代码中已存在，实现时保留即可。
 
 ### 2. 后端: `services/websocketService.ts` — JWT 验证
 
@@ -233,7 +233,9 @@ export async function fetchA2AProjects(serverUrl: string, apiKey: string) {
 
 受影响函数: `fetchA2AProjects`, `fetchProjectA2AConfig`, `fetchA2AMapping`, `fetchA2AApiKeys`, `fetchActiveSessions`, `closeActiveSession`, `getA2AHistory`
 
-> **注意**: `getA2AHistory` 当前用 `config.apiKey`（agt_proj_*）调用 `/api/a2a/history/...`，该路由挂载在 `a2aManagementRouter` 下，受 `authMiddleware` 保护。修复后 agt_proj_* token 无法通过 JWT 验证，因此必须改用 JWT。调用方 (`a2a-chat/index.vue`) 需要同时传入 `serverUrl` + `adminPassword` 以便 `getA2AHistory` 内部获取 JWT。
+> **注意**: `getA2AHistory` 当前用 `config.apiKey`（agt_proj_*）调用 `/api/a2a/history/...`，该路由挂载在 `a2aManagementRouter` 下，受 `authMiddleware` 保护。修复后 agt_proj_* token 无法通过 JWT 验证，因此必须改用 JWT。
+>
+> **签名变更**: `getA2AHistory` 当前接收 `A2AConfig`（其 `apiKey` 是 `agt_proj_*`），需要改为额外接收 `serverUrl` + `adminPassword`（或直接接收 `A2AServerConfig`），以便内部调用 `getToken()` 获取 JWT。调用方 (`a2a-chat/index.vue`) 需从 `loadServers()` 或当前选中服务器的配置中取得 ADMIN_PASSWORD。
 >
 > `testA2AConnection` 内部调用 `fetchA2AProjects`，无需单独修改。
 
@@ -297,6 +299,12 @@ reconnect 时 `connectOne` 会重新 `getToken` → 如果 JWT 过期会自动 r
 2. **再部署 agentstudio 后端** — 新后端严格验证 JWT。新前端已经在发 JWT → 正常工作
 
 **反过来会出问题**: 如果先部署后端（严格 JWT 验证），而前端还在发 ADMIN_PASSWORD → 所有管理 API 返回 401。
+
+## 安全假设
+
+- `/api/auth/login` 以明文传输 ADMIN_PASSWORD（`password !== config.adminPassword` 直接比较）
+- 生产环境中 weknora-ui → AgentStudio 的调用必须经过 HTTPS 或本地代理（Nginx/Vite proxy），确保密码不被窃听
+- 开发环境中 Vite proxy 为同源调用，无安全风险
 
 ## 改动文件清单
 
