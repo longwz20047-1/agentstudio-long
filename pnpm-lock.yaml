@@ -27,8 +27,8 @@ importers:
         specifier: ^3.0.7
         version: 3.0.21(zod@4.3.6)
       '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.2.74
-        version: 0.2.74(zod@4.3.6)
+        specifier: ^0.2.76
+        version: 0.2.76(zod@4.3.6)
       '@types/js-yaml':
         specifier: ^4.0.9
         version: 4.0.9
@@ -217,8 +217,8 @@ importers:
   frontend:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.2.74
-        version: 0.2.74(zod@4.3.6)
+        specifier: ^0.2.76
+        version: 0.2.76(zod@4.3.6)
       '@monaco-editor/react':
         specifier: ^4.7.0
         version: 4.7.0(monaco-editor@0.54.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -473,8 +473,8 @@ packages:
   '@antfu/utils@9.3.0':
     resolution: {integrity: sha512-9hFT4RauhcUzqOE4f1+frMKLZrgNog5b06I7VmZQV1BkvwvqrbC8EBZf3L1eEL2AKb6rNKjER0sEvJiSP1FXEA==}
 
-  '@anthropic-ai/claude-agent-sdk@0.2.74':
-    resolution: {integrity: sha512-S/SFSSbZHPL1HiQxAqCCxU3iHuE5nM+ir0OK1n0bZ+9hlVUH7OOn88AsV9s54E0c1kvH9YF4/foWH8J9kICsBw==}
+  '@anthropic-ai/claude-agent-sdk@0.2.76':
+    resolution: {integrity: sha512-HZxvnT8ZWkzCnQygaYCA0dl8RSUzuVbxE1YG4ecy6vh4nQbTT36CxUxBy+QVdR12pPQluncC0mCOLhI2918Eaw==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       zod: ^4.0.0
@@ -5954,7 +5954,7 @@ snapshots:
 
   '@antfu/utils@9.3.0': {}
 
-  '@anthropic-ai/claude-agent-sdk@0.2.74(zod@4.3.6)':
+  '@anthropic-ai/claude-agent-sdk@0.2.76(zod@4.3.6)':
     dependencies:
       zod: 4.3.6
     optionalDependencies:
