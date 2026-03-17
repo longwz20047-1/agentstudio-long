@@ -4,7 +4,7 @@
 > Status: Draft
 > Scope: agentstudio backend + weknora-ui frontend
 > Base: 深度分析讨论 + OpenClaw Cron 架构参考
-> Prerequisites: A2A Session Reuse 已实现, taskExecutor 已实现, WebSocket 已打通
+> Prerequisites: A2A Session Reuse 已实现, taskExecutor 已实现, WebSocket 多连接已实现（见代码事实章节）
 
 ## 目标
 
@@ -12,7 +12,7 @@
 
 **与现有 schedulerService 的关系**：并行共存，不修改。schedulerService 是系统级（AgentStudio 管理员用），A2A Cron 是用户级（weknora-ui 用户用）。两者共享 taskExecutor 执行引擎。
 
-**废弃 loopStorageService**：SDK native cron（CronCreate/CronDelete）事件存储不再有消费者，`.a2a/loops/` 目录废弃。已实现的 orphan handler 改写和 CRD 事件提取代码可保留（无害），后续清理。
+**loopStorageService 后续独立清理**：SDK native cron（CronCreate/CronDelete）事件存储不再有消费者，`.a2a/loops/` 目录废弃。已有代码可保留（无害），清理工作不在本设计范围内。
 
 ## 为什么不改现有 schedulerService
 
@@ -66,22 +66,25 @@ agentstudio 负责:
   backend/src/
     ├── types/a2aCron.ts                    ← 类型定义
     ├── services/a2a/
-    │   ├── a2aCronService.ts               ← 调度逻辑（node-cron + 执行分发）
-    │   └── a2aCronStorage.ts               ← 工作空间存储（jobs.json + runs/）
+    │   ├── a2aCronService.ts               ← 调度逻辑（node-cron + cron-parser + 执行分发 + 内存状态同步）
+    │   └── a2aCronStorage.ts               ← 工作空间存储（jobs.json + runs/ + 全局索引互斥锁）
     └── routes/a2aCron.ts                   ← 10 个 REST API 端点
 
 需修改:
   backend/src/
     ├── services/taskExecutor/BuiltinExecutor.ts  ← storeResult() 中 cron_ 前缀路由
-    ├── services/websocketService.ts              ← 新增 cron 订阅频道（按 workingDirectory 过滤 + 退订/清理）
+    ├── services/websocketService.ts              ← 新增 cron 订阅频道（subscribedCron 字段 + broadcastCronEvent + resolveA2AId 异步解析 + 退订/清理）
     └── index.ts                                  ← 挂载路由到 /a2a/:id/cron + 初始化服务
 
-共享基础设施（不修改，直接调用）:
-  ├── taskExecutor + taskWorker.ts          ← isolated 执行
-  ├── ClaudeSession + handleSessionManagement ← reuse 执行
-  ├── a2aAuth.ts 中间件                     ← apiKey → a2aContext 解析
-  ├── websocketService.ts                   ← 结果推送通道
-  └── agentStorage.ts                       ← Agent 配置读取
+新增依赖:
+  └── cron-parser                           ← cron 类型 nextRunAt 计算（新增，项目当前未安装，pnpm add cron-parser）
+
+共享基础设施（直接调用）:
+  ├── taskExecutor + taskWorker.ts          ← isolated 执行（不修改）
+  ├── ClaudeSession + handleSessionManagement ← reuse 执行（不修改）
+  ├── a2aAuth.ts 中间件                     ← apiKey → a2aContext 解析（不修改）
+  ├── agentMappingService.ts resolveA2AId() ← WebSocket 订阅中 a2aAgentId → workingDirectory 解析（不修改）
+  └── agentStorage.ts                       ← Agent 配置读取（不修改）
 ```
 
 ## 现状分析（代码事实）
@@ -94,7 +97,7 @@ agentstudio 负责:
 | **ClaudeSession** | `claudeSession.ts` + `sessionManager.ts` | 100% — reuse 执行引擎 |
 | **handleSessionManagement** | `utils/sessionUtils.ts` | 100% — session 查找/创建 |
 | **a2aAuth 中间件** | `middleware/a2aAuth.ts` | 100% — apiKey → a2aContext 解析 |
-| **WebSocket** | `websocketService.ts` (后端) + `useAgentStudioWS.ts` (前端) | 80% — 需加 cron 频道 |
+| **WebSocket** | `websocketService.ts` (后端) + `useAgentStudioWS.ts` (前端) | 90% — 前端多连接已实现，后端需加 cron 频道 |
 | **A2A 路由挂载** | `index.ts:493` `app.use('/a2a/:a2aAgentId', a2aRouter)` | 参考模式 |
 | **A2A Async Task** | `a2a.ts:1665-1677` executor.submitTask() with a2aContext | 100% — 已验证的 A2A→taskExecutor 映射 |
 
@@ -210,13 +213,14 @@ const results = await Promise.allSettled(
 // 合并所有服务器的 sessionId → setActiveSessionIds(allIds)
 ```
 
-**WebSocket 层未做多连接**（`useAgentStudioWS.ts`，现有问题）：
+**WebSocket 层已实现多连接**（`useAgentStudioWS.ts`，代码事实）：
 
 ```typescript
-// 全局单连接，切换服务器时断开旧连接建新连接
-const ws = ref<WebSocket | null>(null)  // 只有一个
-// menu.vue:672 注释已标注: "primary server only"
-// 问题: handleSessionUpdate 会用单服务器数据覆盖 REST 聚合的全部活动会话
+// 多连接模型：Map<serverUrl, WSConnection>，同时连接所有服务器
+const connections = new Map<string, WSConnection>()
+// 每个消息注入 _serverUrl/_serverName 来源信息
+// subscribe(channel, params?, serverUrl?) 支持广播/定向
+// 详见"WebSocket 多连接（已完成）"章节
 ```
 
 **对定时任务的影响**：
@@ -239,338 +243,192 @@ const ws = ref<WebSocket | null>(null)  // 只有一个
 
 **agentstudio 后端不需要感知多连接** — 每个 AgentStudio 实例只管自己的 Agent 和 workspace，多连接的聚合逻辑完全在 weknora-ui 前端。后端 API 通过 `a2aAuth` 中间件解析 `Authorization: Bearer` → `a2aContext.workingDirectory`，天然隔离。
 
-### WebSocket 多连接改造（前置依赖）
+### 背景：WebSocket 多连接（已完成，非本设计范围）
 
-> 本节为 weknora-ui 前端改造设计，不影响 agentstudio 后端。
+> ✅ **Status: DONE** — 以下为 weknora-ui 当前代码事实，供 cron 订阅实现参考。本节不涉及新开发工作。
 
-**现状问题**：
+#### useAgentStudioWS.ts — 多连接模型（`composables/useAgentStudioWS.ts`）
 
-1. `useAgentStudioWS.ts` 是全局单连接模型（全局一个 `ws` 实例）
-2. `menu.vue:675-680` 的 `handleSessionUpdate` 用单服务器 WebSocket 推送数据**覆盖** `loadActiveSessions()` 聚合的全部活动会话
-3. `ActiveSessionsPanel.vue:25-28` 有同样的覆盖 bug（`sessions.value = data.sessions`）
-4. `loadActiveSessions()`（REST）和 `handleSessionUpdate`（WebSocket）写同一个 store 但数据源不统一
-
-**设计目标**：根据 `loadServers()` 返回的服务器列表，为每个服务器建立独立 WebSocket 连接。活动会话、workspace 变化、cron 事件都从所有连接聚合。
-
-#### 多连接核心改造
+已实现 `Map<string, WSConnection>` 多服务器连接管理，`serverUrl` 做 Map key：
 
 ```typescript
-// useAgentStudioWS.ts 改造为多连接模型
-
-// 每个连接实例
+// 实际代码（composables/useAgentStudioWS.ts:8-18）
 interface WSConnection {
   ws: WebSocket | null
-  serverId: string         // A2AServerConfig.id (UUID)
-  serverUrl: string        // A2AServerConfig.serverUrl
-  serverName: string       // A2AServerConfig.name
+  serverUrl: string
+  serverName: string
   apiKey: string
   isConnected: boolean
-  subscriptions: Array<{ channel: string; params: Record<string, any> }>
   reconnectTimer: ReturnType<typeof setTimeout> | null
   reconnectDelay: number
+  reconnectAttempts: number
+  heartbeatTimer: ReturnType<typeof setInterval> | null
 }
 
-// 使用 serverUrl 做 key（而非 serverId），因为调用者（a2aConfig store）只有 serverUrl
+// :24-25 — module-level singleton
 const connections = new Map<string, WSConnection>()
-
-// handlers 保持全局（所有连接的消息进同一个 handler 分发）
 const handlers = new Map<string, Set<Handler>>()
 
-// 聚合连接状态：任一连接活跃即为 true
-const isConnected = computed(() => {
-  for (const conn of connections.values()) {
-    if (conn.isConnected) return true
+// :49-53 — 带可选 serverUrl 的订阅数组
+const activeSubscriptions: Array<{
+  channel: string
+  params: Record<string, any>
+  serverUrl?: string   // 空 = 广播到所有连接；指定 = 只发到对应连接
+}> = []
+```
+
+**已实现的 Public API**（:340-352）：
+
+```typescript
+export function useAgentStudioWS() {
+  return {
+    isConnected,          // computed: 任一连接活跃即 true（ref 计数驱动）
+    connectAll,           // 连接所有服务器（清理不在列表中的旧连接）
+    disconnectAll,        // 断开所有 + 清空订阅
+    addConnection,        // 新增/更新服务器连接（apiKey 变化时重连）
+    removeConnection,     // 删除服务器 + 清理该服务器的订阅
+    getConnectionStatus,  // 单个服务器连接状态
+    subscribe,            // subscribe(channel, params?, serverUrl?)
+    unsubscribe,          // unsubscribe(channel, serverUrl?)
+    on, off,              // 全局 handler（接收所有连接的消息，注入 _serverUrl/_serverName）
   }
-  return false
+}
+```
+
+**关键机制**（已验证）：
+
+1. **onopen replay**（:102-107）：每个连接只 replay `!sub.serverUrl || sub.serverUrl === conn.serverUrl` 的订阅
+2. **subscribe upsert 退订**（:277-303）：切换服务器时自动向旧连接发 unsubscribe
+3. **消息来源注入**（:141-142）：`data._serverUrl = conn.serverUrl; data._serverName = conn.serverName`
+4. **前端内部事件**（:127-129）：`_connection:closed`/`_connection:opened` 用 `_` 前缀与后端事件区分
+5. **Page visibility 重连**（:27-47）：页面重新可见时检查所有连接并重连
+6. **心跳**（:114-119）：每连接 30 秒 ping
+
+#### sessions 订阅模式（menu store, `stores/menu.ts:130-207`）
+
+**cron 订阅应参考此模式**。核心设计：`sessionsByServer` 作为按服务器隔离的唯一数据源，REST 和 WebSocket 都写入它，computed 自动聚合。
+
+```typescript
+// 实际代码（stores/menu.ts:133）— 按服务器隔离的唯一数据源
+const sessionsByServer = ref<Map<string, A2ASessionInfo[]>>(new Map())
+
+// :136-142 — computed 聚合所有服务器的 session ID
+const activeSessionIds = computed(() => {
+  const ids = new Set<string>()
+  for (const sessions of sessionsByServer.value.values()) {
+    for (const s of sessions) ids.add(s.sessionId)
+  }
+  return ids
 })
-```
 
-**为什么用 `serverUrl` 做 Map key**（而非 `serverId`）：
-
-`a2aConfig` store（聊天页面使用）只有 `{ serverUrl, agentId, apiKey }`，没有 `serverId`。`serverStorage` 的 `validateServer` 保证 `serverUrl` 唯一性（`serverStorage.ts:168`）。用 `serverUrl` 做 key 避免了从 `serverUrl` 反查 `serverId` 的额外步骤。
-
-#### API 变化
-
-```typescript
-// --- 新 API ---
-connectAll(servers: A2AServerConfig[])        // 连接所有服务器
-disconnectAll()                                // 断开所有
-addConnection(server: A2AServerConfig)         // 新增服务器时追加连接
-removeConnection(serverUrl: string)            // 删除服务器时断开 + 清理聚合数据
-getConnectionStatus(serverUrl: string): boolean // 查询单个连接状态
-
-// subscribe 新增可选 serverUrl 参数：
-subscribe(channel: string, params?: Record<string, any>, serverUrl?: string)
-// serverUrl 为空 → 发到所有连接（sessions, cron 聚合场景）
-// serverUrl 指定 → 只发到对应连接（workspace 单 Agent 场景）
-
-unsubscribe(channel: string, serverUrl?: string)
-// serverUrl 为空 → 从所有连接取消订阅
-// serverUrl 指定 → 只取消对应连接
-
-// on / off 保持不变（handler 接收所有连接的消息）
-```
-
-#### activeSubscriptions 改造
-
-**现有 bug**: `activeSubscriptions` 是无 serverUrl 区分的扁平数组。当前 `connect()` 的 `onopen` 回调会 replay 所有订阅。多连接后，每个连接的 `onopen` 都会 replay 全部订阅，导致 workspace 等单 Agent 订阅被发到错误的服务器。
-
-```typescript
-// 改前（扁平数组，不区分服务器）
-activeSubscriptions: Array<{ channel: string; params: Record<string, any> }>
-
-// 改后（带可选 serverUrl 标记）
-activeSubscriptions: Array<{ channel: string; params: Record<string, any>; serverUrl?: string }>
-```
-
-**onopen replay 规则**:
-```typescript
-// 每个连接的 onopen 只 replay 匹配的订阅
-socket.onopen = () => {
-  for (const sub of activeSubscriptions) {
-    // serverUrl 为空 → 广播订阅，发到所有连接
-    // serverUrl 匹配当前连接 → 发送
-    // serverUrl 不匹配 → 跳过
-    if (!sub.serverUrl || sub.serverUrl === conn.serverUrl) {
-      socket.send(JSON.stringify({ type: 'subscribe', channel: sub.channel, ...sub.params }))
-    }
-  }
-}
-```
-
-**三种订阅的 serverUrl 设置**:
-
-| 调用点 | subscribe 调用 | serverUrl 值 | onopen replay 行为 |
-|--------|--------------|-------------|-------------------|
-| `menu.vue:680` | `wsSub('sessions')` | 空 | 发到**所有**连接的 onopen |
-| `a2a-chat/index.vue:1399` | `wsSub('workspace', {agentId, userId}, config.serverUrl)` | 指定 | 只发到**匹配**连接的 onopen |
-| cron 管理页（待实现） | `wsSub('cron', {agentId})` | 空（管理页聚合所有服务器）或指定（聊天页按当前 Agent 过滤） | 空时发到**所有**连接；指定时只发到**匹配**连接 |
-
-#### subscribe upsert 时的旧订阅退订
-
-**问题**: 当前 `subscribe()` 用 `findIndex(s => s.channel === channel)` 做 upsert — 按 channel 去重后替换。在单连接模型下没问题（旧连接关了，订阅自然失效）。但在多连接模型下，用户从 serverA 的 agentX 切到 serverB 的 agentY 时，`wsSub('workspace', {agentId: Y}, serverB)` 会替换 `activeSubscriptions` 中的条目，但 **serverA 的后端 WSClient 仍保留旧的 workspace 订阅**（没发 unsubscribe），serverA 继续推送不需要的 workspace 事件。
-
-**修复**: `subscribe()` 在 upsert 替换时，如果旧条目有不同的 `serverUrl`，先向旧连接发 unsubscribe：
-
-```typescript
-function subscribe(channel: string, params: Record<string, any> = {}, serverUrl?: string) {
-  const existing = activeSubscriptions.findIndex(s => s.channel === channel)
-  if (existing >= 0) {
-    const old = activeSubscriptions[existing]
-    // 旧订阅绑定了特定服务器，且与新服务器不同 → 向旧服务器发 unsubscribe
-    if (old.serverUrl && old.serverUrl !== serverUrl) {
-      const oldConn = connections.get(old.serverUrl)
-      if (oldConn?.ws?.readyState === WebSocket.OPEN) {
-        oldConn.ws.send(JSON.stringify({ type: 'unsubscribe', channel }))
-      }
-    }
-    activeSubscriptions.splice(existing, 1)
-  }
-  activeSubscriptions.push({ channel, params, serverUrl })
-
-  // 发送到目标连接
-  if (serverUrl) {
-    const conn = connections.get(serverUrl)
-    if (conn?.ws?.readyState === WebSocket.OPEN) {
-      conn.ws.send(JSON.stringify({ type: 'subscribe', channel, ...params }))
-    }
-  } else {
-    // 广播到所有连接
-    for (const conn of connections.values()) {
-      if (conn.ws?.readyState === WebSocket.OPEN) {
-        conn.ws.send(JSON.stringify({ type: 'subscribe', channel, ...params }))
-      }
-    }
-  }
-}
-```
-
-#### 消息聚合
-
-```typescript
-// 每个连接的 onmessage 都分发到同一个 handlers
-// 注入来源信息，让 handler 知道是哪个服务器的消息
-socket.onmessage = (event) => {
-  const data = JSON.parse(event.data)
-  data._serverUrl = conn.serverUrl
-  data._serverName = conn.serverName
-  const typeHandlers = handlers.get(data.type)
-  if (typeHandlers) {
-    for (const handler of typeHandlers) handler(data)
-  }
-}
-```
-
-**注意**：用 `_serverUrl`（而非 `_serverId`），与 Map key 一致，调用者无需转换。
-
-#### 断线清理
-
-```typescript
-// 每个连接的 onclose
-socket.onclose = () => {
-  conn.isConnected = false
-  conn.ws = null
-  // 清除该服务器在聚合数据中的部分（通过前端内部事件通知）
-  // 使用 '_' 前缀区分：_connection:* 是前端内部事件，不会与后端推送事件（session:*, cron:*）冲突
-  const typeHandlers = handlers.get('_connection:closed')
-  if (typeHandlers) {
-    for (const handler of typeHandlers) handler({ _serverUrl: conn.serverUrl })
-  }
-  scheduleReconnect(conn)
-}
-```
-
-#### 活动会话修复（统一数据源）
-
-**核心思路**：`sessionsByServer` 作为唯一数据源，REST 和 WebSocket 都写入它，合并后更新 store。
-
-```typescript
-// menu.vue — 统一数据源
-
-// 按服务器维护的活动会话（唯一数据源）
-const sessionsByServer = new Map<string, Set<string>>()
-
-function mergeAndUpdateSessions() {
-  const allIds = new Set<string>()
-  for (const ids of sessionsByServer.values()) {
-    for (const id of ids) allIds.add(id)
-  }
-  usemenuStore.setActiveSessionIds(allIds)
+// :148-151 — 按服务器更新（触发响应式，用 new Map 替换）
+function updateServerSessions(serverUrl: string, sessions: A2ASessionInfo[]) {
+  const map = new Map(sessionsByServer.value)
+  map.set(serverUrl, sessions)
+  sessionsByServer.value = map
 }
 
-// 1. REST 加载（mount + 路由切换时）— 也写入 sessionsByServer
-async function loadActiveSessions() {
+// :172-183 — REST 批量加载（Promise.allSettled 遍历所有服务器）
+async function loadAllServerSessions() {
   const servers = loadServers()
-  if (!servers.length) return
   const results = await Promise.allSettled(
     servers.map(s => fetchActiveSessions(s.serverUrl, s.apiKey))
   )
   for (let i = 0; i < servers.length; i++) {
-    const result = results[i]
-    if (result.status === 'fulfilled') {
-      const ids = new Set<string>((result.value.sessions || []).map((s: any) => s.sessionId))
-      sessionsByServer.set(servers[i].serverUrl, ids)
+    if (results[i].status === 'fulfilled') {
+      updateServerSessions(servers[i].serverUrl, results[i].value.sessions || [])
     }
   }
-  mergeAndUpdateSessions()
 }
 
-// 2. WebSocket 推送（实时）— 按服务器更新
-function handleSessionUpdate(data: any) {
+// :189-192 — WebSocket 实时推送（按 _serverUrl 分流写入）
+wsOn('session:update', (data: any) => {
   const serverUrl = data._serverUrl
-  const ids = new Set<string>((data.sessions || []).map((s: any) => s.sessionId))
-  sessionsByServer.set(serverUrl, ids)
-  mergeAndUpdateSessions()
-}
+  if (!serverUrl) return
+  updateServerSessions(serverUrl, data.sessions || [])
+})
 
-// 3. 服务器断线 — 清除该服务器的数据
+// :195-198 — 断线清理
 wsOn('_connection:closed', (data: any) => {
-  sessionsByServer.delete(data._serverUrl)
-  mergeAndUpdateSessions()
+  if (data._serverUrl) clearServerSessions(data._serverUrl)
 })
 
-wsOn('session:update', handleSessionUpdate)
-subscribe('sessions')  // → 发到所有连接
+// :201-204 — 重连后刷新（REST 拉取最新数据）
+wsOn('_connection:opened', (data: any) => {
+  if (data._serverUrl) refreshServerSessions(data._serverUrl)
+})
+
+// :207 — 广播订阅（无 serverUrl → 发到所有连接）
+wsSub('sessions')
 ```
 
-#### ActiveSessionsPanel 修复
-
-**现有 bug**: handler 是匿名函数且无 `onUnmounted` 清理。组件每次重新挂载都追加新 handler，旧的不释放（泄漏）。两处修复：① handler 改为命名函数 ② 加 onUnmounted 清理。
+#### ActiveSessionsPanel — 从 store computed 读取（`views/a2a-chat/components/ActiveSessionsPanel.vue`）
 
 ```typescript
-// ActiveSessionsPanel.vue — 命名 handler + 生命周期清理 + 按 serverUrl 过滤
+// 实际代码（:18-20）— 绑定 store，由 WS 事件和重连自动更新
+const sessions = computed(() => menuStore.getServerSessions(props.serverUrl))
 
-const props = defineProps<{ serverUrl: string; apiKey: string; projectPath: string }>()
-
-const { on: wsOn, off: wsOff } = useAgentStudioWS()
-
-// 命名函数（而非匿名），以便 onUnmounted 中精确移除
-const handleSessionUpdate = (data: any) => {
-  // 只处理当前服务器的推送
-  if (data._serverUrl !== props.serverUrl) return
-  sessions.value = data.sessions || []
-  // 不再调 setActiveSessionIds — 由 menu.vue 统一管理
-}
-
-wsOn('session:update', handleSessionUpdate)
-
-onUnmounted(() => {
-  wsOff('session:update', handleSessionUpdate)
+// :42-47 — 按 projectPath 过滤
+const filteredSessions = computed(() => {
+  return sessions.value.filter(s => {
+    if (!s.projectPath) return false
+    return s.projectPath.startsWith(props.projectPath)
+  })
 })
 ```
 
-#### workspace 订阅修复
+#### workspace 订阅（`views/a2a-chat/index.vue:1572-1587`）
 
 ```typescript
-// a2a-chat/index.vue — 用 serverUrl 指定连接
-
+// 实际代码 — 用 serverUrl 第三参数指定目标连接
 watch(() => configStore.config, (config) => {
-  // 不再调 wsConnect（连接已由全局 connectAll 管理）
-  if (config.agentId && config.serverUrl) {
-    const userId = authStore.currentUserId || undefined
-    // 指定 serverUrl → 只发到对应服务器的连接
-    wsSub('workspace', { agentId: config.agentId, userId }, config.serverUrl)
+  if (config.serverUrl && config.apiKey) {
+    if (config.agentId) {
+      const userId = authStore.currentUserId || undefined
+      wsSub('workspace', { agentId: config.agentId, userId }, config.serverUrl)
+    }
   }
 }, { immediate: true })
 ```
 
-#### 连接时机
+#### 对 cron 实现的启示
+
+cron 频道应参照 session 的三层模式（REST 批量加载 + WebSocket 实时推送 + 断线/重连处理）：
+
+| 维度 | sessions（已实现） | cron（待实现） |
+|------|-------------------|--------------|
+| Store 数据源 | `sessionsByServer: Map<serverUrl, sessions[]>` | `cronJobsByServer: Map<serverUrl, CronJob[]>`（如需前端聚合） |
+| REST 加载 | `loadAllServerSessions()` — Promise.allSettled 遍历所有服务器 | `loadAllServerCronJobs()` — 同模式 |
+| WS 实时更新 | `session:update` → `updateServerSessions(serverUrl, data)` | `cron:started`/`cron:completed`/`cron:error` → 更新对应 job 状态 |
+| 断线清理 | `_connection:closed` → `clearServerSessions(serverUrl)` | `_connection:closed` → 标记该服务器 jobs 为 disconnected |
+| 重连刷新 | `_connection:opened` → `refreshServerSessions(serverUrl)` | `_connection:opened` → REST 拉取最新 jobs + runs |
+| 订阅方式 | `wsSub('sessions')` — 广播到所有连接 | `wsSub('cron', { agentId })` — 广播或指定 serverUrl |
+
+**agentstudio 后端无需改动**：每个 WebSocket 连接对后端来说都是独立的 `WSClient`，天然支持多连接。后端只需新增 `subscribedCron` 字段和 `broadcastCronEvent` 函数（见 §6 设计）。
+
+### WebSocket 已有订阅模型（代码事实）
+
+**后端** `websocketService.ts`：
 
 ```typescript
-// platform/index.vue 或 App.vue 中（登录后立即连所有服务器）
-import { loadServers } from '@/api/a2a/serverStorage'
-const { connectAll, addConnection, removeConnection } = useAgentStudioWS()
-
-onMounted(() => {
-  const servers = loadServers()
-  connectAll(servers)  // 同时连接所有服务器的 WebSocket
-})
-
-// a2a-project 页面中：添加/删除服务器时同步更新
-function onServerAdded(server: A2AServerConfig) {
-  addConnection(server)
-}
-function onServerDeleted(serverUrl: string) {
-  removeConnection(serverUrl)  // 断开连接 + 清理聚合数据
-}
-```
-
-#### 影响的调用者
-
-| 调用者 | 当前用法 | 改动 |
-|--------|---------|------|
-| `a2a-chat/index.vue:1369` | `wsConnect(config.serverUrl, config.apiKey)` | 移除，改由全局 `connectAll` 管理 |
-| `a2a-chat/index.vue:1373` | `wsSub('workspace', { agentId })` | 加 `config.serverUrl` 第三参数 |
-| `menu.vue:650-670` | `loadActiveSessions()` → `setActiveSessionIds(allIds)` | 改为写入 `sessionsByServer` + `mergeAndUpdateSessions()` |
-| `menu.vue:675-680` | `handleSessionUpdate` → `setActiveSessionIds(ids)` 覆盖 | 改为 `sessionsByServer.set(serverUrl, ids)` + `mergeAndUpdateSessions()` |
-| `menu.vue` | — | 新增 `_connection:closed` handler 清理断线服务器数据 |
-| `ActiveSessionsPanel.vue:25-28` | `sessions.value = data.sessions` 覆盖 + 匿名 handler 无清理 | ① handler 改命名函数 ② 加 `onUnmounted` 清理 ③ 按 `_serverUrl` 过滤 ④ 删除 `setActiveSessionIds` 调用 |
-| `a2a-project/index.vue` | 服务器增删只操作 localStorage | 新增 `addConnection(server)` / `removeConnection(serverUrl)` 调用 |
-
-#### 三种订阅的多连接行为差异
-
-| 订阅类型 | 发到哪些连接 | 前端处理 | 现有 Bug |
-|---------|------------|---------|---------|
-| `sessions` | 所有连接 | 按 serverUrl 维护 `sessionsByServer` Map，合并后更新 store | ❌ `menu.vue` + `ActiveSessionsPanel` 都有覆盖 bug |
-| `workspace` | 仅指定 serverUrl 的连接 | 直接使用（单 Agent 场景，不需要聚合） | ✅ 无 Bug |
-| `cron`（新增） | 所有连接 or 指定 serverUrl | 按场景：任务管理页聚合所有，聊天页按当前 Agent 过滤 | — 待实现 |
-
-**对 agentstudio 后端的影响**：**无**。后端 `websocketService.ts` 不需要任何改动。每个 WebSocket 连接对后端来说都是独立的 `WSClient`，天然支持多连接。
-
-### WebSocket 已有订阅模型
-
-```typescript
-// websocketService.ts — WSClient 结构
+// websocketService.ts — WSClient 结构（实际代码）
 interface WSClient {
   ws: WebSocket;
   apiKey: string;        // apiKey 认证
-  isAlive: boolean;      // 心跳检测
-  workspace?: { agentId, userId, watchKey };  // workspace 订阅
-  subscribedSessions: boolean;                // sessions 订阅
+  isAlive: boolean;      // 心跳检测（30 秒 ping/pong）
+  workspace?: { agentId: string; userId?: string; watchKey: string };  // workspace 订阅
+  subscribedSessions: boolean;                // sessions 订阅（布尔标志，无参数）
   // 需新增: subscribedCron 字段（按 workingDirectory 过滤，见 §6 设计说明）
 }
-// useAgentStudioWS.ts — 前端已有 subscribe/on/off 机制
 ```
+
+已有两个频道：
+- `sessions`（:171-176）— 布尔标志，`sessionManager.events` 的 `session:changed` 触发广播
+- `workspace`（:159-170）— 需要 `agentId` 参数，通过 `workspaceWatcher` 文件变更事件触发广播
+
+**前端** `useAgentStudioWS.ts`（代码事实见上方"WebSocket 多连接"章节）：
+- 多连接模型已实现，`subscribe(channel, params?, serverUrl?)` 支持广播/定向
+- sessions 订阅模式已在 `stores/menu.ts` 中实现完整的三层数据流（REST + WS + 断线/重连）
 
 ## 设计
 
@@ -636,7 +494,7 @@ weknora-ui                                    AgentStudio Backend
 - **API 隔离**：每个 AgentStudio 实例是独立服务器，API 调用到不同 `serverUrl`
 - **存储隔离**：每个实例的 `jobs.json` 在各自的 `workingDirectory` 中
 - **调度隔离**：每个实例的 `a2aCronService` 独立运行 node-cron
-- **WebSocket 多连接**：`useAgentStudioWS.ts` 改造为按 `loadServers()` 同时连接所有服务器，cron/session/workspace 事件从所有连接聚合。改造方案见"WebSocket 多连接改造"章节
+- **WebSocket 多连接**：`useAgentStudioWS.ts` 已实现按 `loadServers()` 同时连接所有服务器（`Map<serverUrl, WSConnection>`），session/workspace 事件已从所有连接聚合。cron 事件参照 session 模式即可。详见"WebSocket 多连接（已完成）"章节
 - **后端无需感知**：每个 AgentStudio 只管自己的 Agent 和 workspace，多实例聚合完全由 weknora-ui 前端负责
 
 ### 1. 存储模型
@@ -794,6 +652,17 @@ class A2ACronStorage {
   private getRunsDir(wd: string): string;          // {wd}/.a2a/cron/runs/
   private getRunsFilePath(wd: string, jobId: string): string;  // ...runs/{jobId}.jsonl
 
+  // --- 全局索引互斥锁 ---
+  // a2a-cron-index.json 的读-改-写需要序列化，防止并发请求丢失更新
+  // Node.js 单进程内并发只来自 async interleaving，用 Promise chain 即可
+  private indexMutex: Promise<void> = Promise.resolve();
+  private withIndexLock<T>(fn: () => Promise<T>): Promise<T> {
+    const release = this.indexMutex;
+    let resolve: () => void;
+    this.indexMutex = new Promise(r => resolve = r);
+    return release.then(fn).finally(() => resolve!());
+  }
+
   // --- Jobs CRUD ---
   loadJobs(wd: string): CronJob[];
   getJob(wd: string, jobId: string): CronJob | null;
@@ -802,6 +671,11 @@ class A2ACronStorage {
   deleteJob(wd: string, jobId: string): boolean;
   updateJobRunStatus(wd: string, jobId: string, status: CronRunStatus, error?: string): void;
   updateJobNextRunAt(wd: string, jobId: string, nextRunAt: string): void;
+
+  // --- 全局索引（使用 withIndexLock 序列化写入） ---
+  addWorkspaceToIndex(wd: string): Promise<void>;       // 创建 job 时调用
+  removeWorkspaceFromIndex(wd: string): Promise<void>;   // 删除最后一个 job 时调用
+  loadIndex(): { workspaces: string[] };                  // 启动时读取（无需锁）
 
   // --- Runs ---
   appendRun(wd: string, jobId: string, run: CronRun): void;       // JSONL append
@@ -853,7 +727,9 @@ class A2ACronService {
   // 2. 构建 CronRun（status, completedAt, executionTimeMs, responseSummary, sessionId）
   // 3. a2aCronStorage.appendRun()      — 写 JSONL
   // 4. a2aCronStorage.updateJobRunStatus() — 更新 jobs.json lastRunStatus（从 running → success/error）
-  // 5. broadcastCronEvent()             — WebSocket 广播 cron:completed / cron:error
+  // 5. 同步更新内存: active.job.lastRunStatus = finalStatus（确保并发检查读到最新状态）
+  // 6. 若 job.schedule.type === 'once'，自动 disable（执行完毕不再需要）
+  // 7. broadcastCronEvent()             — WebSocket 广播 cron:completed / cron:error
   // 注意: executingJobIds 已在 executeJob 的 finally 中释放，此处无需再删
 
   // --- 执行分发 ---
@@ -926,6 +802,25 @@ registerJob(job: CronJob): void {
       const timer = setInterval(executeCallback, intervalMs);
       this.activeJobs.set(job.id, { job, intervalTimer: timer });
     }
+    // interval 类型的 nextRunAt: 对使用 cron 表达式的情况用 cron-parser 计算精确时间
+    // 对 setInterval 的情况用当前时间 + intervalMinutes 估算
+    if (minutes < 60 || minutes % 60 === 0) {
+      // 使用了 cron 表达式，用 cron-parser 计算更精确的 nextRunAt
+      try {
+        const { parseExpression } = await import('cron-parser');
+        const expr = minutes < 60 ? `*/${minutes} * * * *` : `0 */${minutes / 60} * * *`;
+        const interval = parseExpression(expr);
+        const nextRunAt = interval.next().toISOString();
+        a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id, nextRunAt);
+      } catch {
+        const nextRunAt = new Date(Date.now() + minutes * 60 * 1000).toISOString();
+        a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id, nextRunAt);
+      }
+    } else {
+      // setInterval 模式，用估算时间
+      const nextRunAt = new Date(Date.now() + minutes * 60 * 1000).toISOString();
+      a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id, nextRunAt);
+    }
 
   } else if (job.schedule.type === 'cron' && job.schedule.cronExpression) {
     // --- cron: 直接使用 node-cron ---
@@ -935,6 +830,16 @@ registerJob(job: CronJob): void {
     }
     const cronTask = cron.schedule(job.schedule.cronExpression, executeCallback);
     this.activeJobs.set(job.id, { job, cronTask });
+    // cron 类型的 nextRunAt: 使用 cron-parser 计算下次执行时间
+    // 依赖: pnpm add cron-parser（新增依赖，项目当前未安装）
+    try {
+      const { parseExpression } = await import('cron-parser');
+      const interval = parseExpression(job.schedule.cronExpression);
+      const nextRunAt = interval.next().toISOString();
+      a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id, nextRunAt);
+    } catch {
+      // cron-parser 失败不阻塞调度，nextRunAt 留空
+    }
   }
 }
 ```
@@ -1002,7 +907,9 @@ private async executeReuse(job: CronJob, run: CronRun): Promise<void> {
   const agent = this.agentStorage.getAgent(job.agentType);
   if (!agent) throw new Error(`Agent not found: ${job.agentType}`);
 
-  // buildQueryOptions 完整参数（claudeUtils.ts:244，共 13 个参数）
+  // buildQueryOptions 共 13 个参数（claudeUtils.ts:244），此处传前 11 个，省略尾部 2 个 optional 参数:
+  //   - extendedOptions（含 weknoraContext/graphitiContext）: 首版 cron 不支持 WeKnora/Graphiti 集成（见已知限制 #13）
+  //   - cwdOverride: 不需要，已通过 projectPath 传入 workingDirectory
   // 注意: 第 11 个参数 a2aStreamEnabled 显式传 false，因为 cron 执行无 SSE 消费者
   const mcpTools = agent.allowedTools
     .filter((tool: any) => tool.enabled && tool.name.startsWith('mcp__'))
@@ -1037,14 +944,18 @@ private async executeReuse(job: CronJob, run: CronRun): Promise<void> {
   // 注意：sendMessage 在 isProcessing=true 时抛异常，不排队
   // 调用前应由 executeJob 的 lastRunStatus=running 检查拦截
   // sendMessage 签名: sendMessage(message: string, callback: (response: SDKMessage) => void | Promise<void>): Promise<string>
-  // callback 参数 SDKMessage 的 type 和子字段需要参照 a2a.ts 中 reuse session 的消息处理模式确认
-  // 以下用 as any 做临时类型断言，实现时应替换为精确的 SDKMessage 子类型
+  //
+  // SDKMessage 类型参考（来自 a2a.ts reuse session 消息处理模式）:
+  //   type='assistant' → message.content: Array<{type:'text', text:string} | {type:'tool_use', ...}>
+  //   type='result'    → subtype: 'success' | 'error' | 'error_max_turns'
+  //   type='tool_use'  → tool_use 事件（cron 不需要处理）
+  // 实现时应从 claude-agent-sdk 导入精确类型替代 as any
   let fullResponse = '';
   const result = await new Promise<{ status: string; response: string }>((resolve, reject) => {
     claudeSession.sendMessage(
       job.triggerMessage,
       (sdkMessage: SDKMessage) => {
-        // 收集 assistant 文本
+        // 收集 assistant 文本（参照 a2a.ts reuse session 的 assistant 消息处理）
         if (sdkMessage.type === 'assistant') {
           const content = (sdkMessage as any).message?.content;
           if (Array.isArray(content)) {
@@ -1064,7 +975,7 @@ private async executeReuse(job: CronJob, run: CronRun): Promise<void> {
     ).catch(reject);  // sendMessage 返回 Promise<string>，可能 reject
   });
 
-  // 更新执行记录 + 状态 + WebSocket 广播
+  // 更新执行记录 + 状态 + 内存同步 + WebSocket 广播
   const finalStatus = result.status === 'success' ? 'success' : 'error';
   const completedRun: CronRun = {
     ...run,
@@ -1075,6 +986,9 @@ private async executeReuse(job: CronJob, run: CronRun): Promise<void> {
   };
   a2aCronStorage.appendRun(job.workingDirectory, job.id, completedRun);
   a2aCronStorage.updateJobRunStatus(job.workingDirectory, job.id, finalStatus as CronRunStatus);
+  // 同步内存状态，确保后续 cron 触发的并发检查读到最新值
+  const active = this.activeJobs.get(job.id);
+  if (active) active.job.lastRunStatus = finalStatus as CronRunStatus;
   broadcastCronEvent(job.workingDirectory, {
     type: finalStatus === 'success' ? 'cron:completed' : 'cron:error',
     jobId: job.id, runId: run.id, status: finalStatus,
@@ -1092,7 +1006,7 @@ private async executeReuse(job: CronJob, run: CronRun): Promise<void> {
   - session 还在 → 复用（sendMessage）
   - session 已超时 → 创建新的（conversation）
 - 删除 job 时，主动调用 `sessionManager.removeSession('cron_session_' + jobId)` 清理
-- **并发保护**：`executeJob` 在调用 `executeReuse` 前检查 `lastRunStatus === 'running'`，跳过正在执行的 job（与 schedulerService 同样的模式，`schedulerService.ts:407-410`）
+- **并发保护**：`executeJob` 在调用 `executeReuse` 前检查 `active.job.lastRunStatus === 'running'`（内存值，磁盘同步），跳过正在执行的 job（与 schedulerService 同样的模式，`schedulerService.ts:407-410`）
 
 ### 5. API 路由
 
@@ -1172,7 +1086,7 @@ Authorization: Bearer agt_xxx
 
 **后端修改**（`websocketService.ts`）：
 
-> **设计说明**: 前端订阅时发送的是 `a2aAgentId`（UUID），但 CronJob 存储的是 `agentType`（配置名如 "jarvis"），两者不是同一个标识符。因此 cron 订阅按 `workingDirectory` 匹配——这是跨两端唯一稳定的关联键。后端在 subscribe 时通过 `agentMappingService` 将 `a2aAgentId` 解析为 `workingDirectory`，广播时用 `workingDirectory` 过滤。
+> **设计说明**: 前端订阅时发送的是 `a2aAgentId`（UUID），但 CronJob 存储的是 `agentType`（配置名如 "jarvis"），两者不是同一个标识符。因此 cron 订阅按 `workingDirectory` 匹配——这是跨两端唯一稳定的关联键。后端在 subscribe 时通过 `resolveA2AId()` 将 `a2aAgentId` 解析为 `AgentMapping`（含 `workingDirectory`），广播时用 `workingDirectory` 过滤。
 
 ```typescript
 // WSClient 新增字段
@@ -1185,11 +1099,16 @@ interface WSClient {
 
 // handleClientMessage 新增 cron 订阅处理
 // 前端发送 a2aAgentId，后端解析为 workingDirectory
+// 注意: resolveA2AId 是 async 函数（读文件），需在消息处理中用 IIFE 处理
 if (msg.channel === 'cron' && typeof msg.agentId === 'string') {
-  const mapping = agentMappingService.getMapping(msg.agentId);
-  if (mapping) {
-    client.subscribedCron = { workingDirectory: mapping.workingDirectory };
-  }
+  // resolveA2AId 是 agentMappingService.ts 导出的独立 async 函数，不是类方法
+  resolveA2AId(msg.agentId).then(mapping => {
+    if (mapping) {
+      client.subscribedCron = { workingDirectory: mapping.workingDirectory };
+    }
+  }).catch(err => {
+    console.error('[WebSocket] Failed to resolve A2A ID for cron subscription:', err);
+  });
 }
 
 // handleClientMessage 新增 cron 退订处理
@@ -1312,63 +1231,13 @@ shutdown(): void {
 }
 ```
 
-### 8. Main 模式设计（暂不实现）
+### 8. 备忘：Main 模式（不在本设计范围）
 
-> **Status: Designed, NOT Implemented**
-> 优先级最低，等 isolated + reuse 稳定后再考虑。
+> 目标明确为 isolated + reuse 两种模式。Main 模式作为后续扩展备忘，不影响首版实现。
 
-**概念**：Cron 触发时，将消息发到用户当前活跃的 A2A 聊天 session 中，结果出现在聊天记录里。
+**概念**：Cron 触发时发到用户当前活跃的 A2A 聊天 session 中，结果出现在聊天记录里。通过 `sessionManager.getSessionsInfo()` 查找最近活跃的匹配 session，找不到则降级为 isolated。
 
-**Session 查找策略**：
-
-```typescript
-sessionTarget: 'main'
-
-执行时:
-  1. sessionManager.getSessionsInfo() 获取所有 session
-  2. 过滤: agentId === job.agentType && projectPath 匹配 job.workingDirectory
-  3. 排序: lastActivity 最新的
-  4. 找到 → getSession(sessionId) → claudeSession.sendMessage()
-  5. 没找到 → 降级为 isolated 模式
-```
-
-**消息标记**：
-
-```typescript
-// cron 发的消息在历史记录中标记 source: 'cron'
-const userHistoryEvent = {
-  type: 'user',
-  message: { role: 'user', content: `[定时任务: ${job.name}] ${job.triggerMessage}` },
-  sessionId,
-  timestamp: Date.now(),
-  source: 'cron',       // ← 标记来源
-  cronJobId: job.id,
-};
-```
-
-**前端展示**：
-
-```
-聊天记录中，cron 消息用不同样式：
-┌────────────────────────────────────────┐
-│ 🕐 定时任务: 每日部署检查  09:00        │ ← 灰色背景 + 定时图标
-│ 检查所有服务的部署状态，有异常就汇报     │
-├────────────────────────────────────────┤
-│ 🤖 Claude                              │
-│ 所有服务运行正常。具体状态：             │
-│ - API Gateway: ✅ 200ms                 │
-│ - Database: ✅ Connected                │
-└────────────────────────────────────────┘
-```
-
-**核心难题**：
-
-1. **串行排队**：用户正在操作时 cron 要等待，可能延迟数分钟
-2. **无 session 降级**：用户没在线时无法使用 main 模式
-3. **WebSocket 推送复杂**：需要区分用户消息和 cron 消息的 SSE 流
-4. **回调冲突**：sendMessage 在 `isProcessing=true` 时抛异常（`claudeSession.ts:200-203`），cron 消息需要等用户操作完全结束
-
-**暂不实现原因**：isolated 和 reuse 覆盖了 90% 的使用场景，main 模式的可靠性最差，投入产出比低。
+**暂不实现原因**：串行排队（用户操作时 cron 需等待）、无 session 降级、isProcessing 并发冲突。isolated 和 reuse 已覆盖 90% 场景，main 模式可靠性最差，投入产出比低。
 
 ## File Change Summary
 
@@ -1378,16 +1247,22 @@ const userHistoryEvent = {
 |------|---------|
 | `backend/src/types/a2aCron.ts` | CronJob, CronRun, CronSchedule, CronSessionTarget, API 请求类型 |
 | `backend/src/services/a2a/a2aCronStorage.ts` | 工作空间级 JSONL 存储（jobs CRUD + runs append/prune） |
-| `backend/src/services/a2a/a2aCronService.ts` | 调度核心（node-cron + executeIsolated + executeReuse） |
+| `backend/src/services/a2a/a2aCronService.ts` | 调度核心（node-cron + cron-parser + executeIsolated + executeReuse + 内存状态同步） |
 | `backend/src/routes/a2aCron.ts` | 10 个 REST API 端点 |
-| `weknora-ui 前端` | 定时任务管理页面 + 类型定义 + API 调用 + WebSocket 订阅（单独设计文档） |
+| `weknora-ui 前端` | 定时任务管理页面 + 类型定义 + API 调用 + cron WebSocket 订阅（参照 session 模式，WebSocket 多连接已就绪） |
+
+### 新增依赖
+
+| Package | 用途 |
+|---------|------|
+| `cron-parser` | `registerJob` 中 cron 类型的 `nextRunAt` 计算（新增依赖，项目当前未安装。计算失败不阻塞调度） |
 
 ### 需修改的文件
 
 | File | Changes |
 |------|---------|
 | `backend/src/services/taskExecutor/BuiltinExecutor.ts` | storeResult() 中 `cron_` 前缀路由到 a2aCronService |
-| `backend/src/services/websocketService.ts` | 新增 subscribedCron 字段（按 workingDirectory 过滤）+ broadcastCronEvent() + cron 退订/清理 |
+| `backend/src/services/websocketService.ts` | 新增 subscribedCron 字段（按 workingDirectory 过滤）+ broadcastCronEvent() + cron 退订/清理 + import resolveA2AId |
 | `backend/src/index.ts` | 挂载 a2aCronRouter 到 `/a2a/:id/cron` + 初始化/关闭 a2aCronService |
 
 ### 不修改的文件（并行共存，互不影响）
@@ -1407,7 +1282,9 @@ const userHistoryEvent = {
 - [ ] 创建 job (schedule.type=cron, sessionTarget=isolated) → jobs.json 写入成功
 - [ ] cron 触发 → taskExecutor 启动 Worker Thread → SDK 子进程在 workingDirectory 中执行
 - [ ] 执行完成 → runs/{jobId}.jsonl 写入记录 + WebSocket 推送 cron:completed
+- [ ] 执行完成 → activeJobs Map 内存中 lastRunStatus 同步更新为 success/error
 - [ ] 手动触发 (POST /cron/jobs/{id}/run) → 立即执行，不影响正常调度
+- [ ] isolated 快速连续触发（手动 + cron）→ 第二次被 lastRunStatus=running 拦截（内存同步验证）
 - [ ] 停止执行 → Worker Thread 终止，状态标记为 stopped
 - [ ] 服务重启 → 从 index 加载 + 孤儿清理 + 重新注册 cron
 
@@ -1416,30 +1293,49 @@ const userHistoryEvent = {
 - [ ] 后续触发 → 复用同一 ClaudeSession，Claude 记得上次对话
 - [ ] session 超时后再触发 → 自动创建新 session（丢失上下文，属于预期行为）
 - [ ] 删除 reuse job → session 被主动清理 (sessionManager.removeSession)
+- [ ] 上次执行未完成时触发 → lastRunStatus=running 检查跳过，不报错
+- [ ] 修改 maxTurns/timeoutMs → 已有 session 不受影响，需等 session 超时重建后生效（已知限制 #11）
+
+### once 类型
+- [ ] 创建 once job (executeAt 在未来) → setTimeout 注册成功 + nextRunAt 正确
+- [ ] once job 触发并执行成功 → 自动设 enabled=false + unregisterJob
+- [ ] 创建 once job (executeAt 在过去) → 立即标记为 disabled，不执行
+- [ ] 服务重启后 once job (enabled=false) → 不重新注册
+
+### nextRunAt
+- [ ] interval 类型 → registerJob 后 nextRunAt = now + intervalMinutes
+- [ ] cron 类型 → registerJob 后 nextRunAt 由 cron-parser 计算
+- [ ] once 类型 → nextRunAt = executeAt
 
 ### 通用
 - [ ] 不同工作空间的 job 互不可见（apiKey 隔离）
 - [ ] 启用/禁用 job → cron 注册/取消
 - [ ] 更新 schedule → cron 重新调度
 - [ ] 执行历史 → 返回按时间倒序的最新 N 条
-- [ ] 并发控制 → 同一 job 不重复执行（lastRunStatus=running + executingJobIds 乐观锁）
-- [ ] WebSocket 订阅 → subscribe('cron', {agentId}) 后收到该工作空间的执行事件（后端按 workingDirectory 匹配）
+- [ ] 并发控制 → 同一 job 不重复执行（lastRunStatus=running 内存+磁盘同步 + executingJobIds 乐观锁）
+- [ ] WebSocket 订阅 → subscribe('cron', {agentId}) 后收到该工作空间的执行事件（后端用 resolveA2AId 异步解析 workingDirectory）
 - [ ] schedulerService（系统级定时任务）不受影响，继续独立运行
+- [ ] 全局索引并发写入 → 多个 createJob/deleteJob 并发调用不丢失 index 条目
 
 ## 已知限制
 
 1. **reuse 模式不支持并发**：`claudeSession.sendMessage()` 在 `isProcessing=true` 时抛异常（`claudeSession.ts:200-203`，不排队），通过 `lastRunStatus=running` 检查跳过防护
 2. **reuse 模式无法中途停止**：`stopExecution` 仅支持 isolated 模式（终止 Worker Thread），reuse 模式的 sendMessage 执行中无中断机制
 3. **reuse session 无超时配置**：使用 sessionManager 的默认超时，不可自定义。服务重启等同于超时，上下文丢失（预期行为）
-4. **全局索引无原子写入**：`a2a-cron-index.json` 单文件写入，磁盘满或进程崩溃可能导致损坏。启动时校验 JSON 格式，损坏时从各 workspace 重建
+4. **全局索引并发写入**：`a2a-cron-index.json` 使用进程内 Promise chain 互斥锁序列化读-改-写操作，防止并发请求丢失更新。磁盘满或进程崩溃仍可能导致损坏，启动时校验 JSON 格式，损坏时从各 workspace 重建
 5. **无重试机制**：首版不实现，执行失败即标记 error，等下次 cron 触发
 6. **无模型覆盖**：使用 Agent 配置的默认模型，不支持 per-job 覆盖（后续可加）
 7. **Session ID 不能含冒号**：Windows 文件名限制（`sessionManager` 用 `${sessionId}.jsonl` 做文件名），reuse session ID 格式为 `cron_session_{jobId}`
 8. **cron 时区为服务器本地时区**：`node-cron` 默认使用服务器时区，前端需提示用户当前时区。首版不支持 per-job 时区配置
 9. **Agent 删除不联动**：Agent 配置被删除后，引用该 agentType 的 cron job 每次触发都会报错（`Agent not found`），需用户手动删除 job
 10. **并发触发竞态**：手动触发 (POST /run) 与定时触发之间存在竞态窗口。通过进程内 `executingJobIds` Set 做乐观锁防护（见 `executeJob` 流程），但非跨进程原子操作。对 isolated 模式影响小（两个 Worker 各自执行），对 reuse 模式第二个执行会被 `isProcessing` 抛异常后被外层 catch 标记为 error
-11. **reuse 模式 maxTurns 复用不生效**：`handleSessionManagement` 只在创建新 session 时使用 `queryOptions`（含 `maxTurns`）。已存在的 reuse session 复用时不会更新 queryOptions。修改 job 的 `maxTurns` 后需等 session 超时重建才生效
-12. **weknora-ui 前端需单独设计文档**：Vue 组件、路由、API hooks 等不在本文档范围（WebSocket 多连接改造方案已在本文档"WebSocket 多连接改造"章节设计）
+11. **reuse 模式 maxTurns 仅在首次创建 session 时生效**：`handleSessionManagement` 只在创建新 session 时使用 `queryOptions`（含 `maxTurns`）。已存在的 reuse session 复用时（`sendMessage`）不接受 `maxTurns` 参数，SDK 进程使用创建时的配置。修改 job 的 `maxTurns` 后需等 session 超时重建（或手动删除 job 触发 `removeSession` 后重建）才生效。建议前端 UI 在 reuse 模式下对 maxTurns 字段标注此行为
+12. **weknora-ui 前端需单独设计文档**：Vue 组件、路由、API hooks 等不在本文档范围。WebSocket 多连接基础设施已完成（见代码事实章节），cron 频道订阅参照 session 模式实现
+13. **首版不支持 WeKnora/Graphiti 集成**：`buildQueryOptions` 的 `extendedOptions` 参数（含 `weknoraContext` / `graphitiContext`）未传入，cron 任务不具备知识库搜索和 AI 记忆能力。后续版本可通过在 CronJob 中存储相关 context 并传入 `extendedOptions` 来支持
+14. **cron-parser 依赖**：`registerJob` 中 cron 类型的 `nextRunAt` 计算依赖 `cron-parser` 包。项目当前未安装，需 `pnpm add cron-parser`。使用 ESM 动态导入 `await import('cron-parser')`。计算失败不阻塞调度
+15. **无全局并发限制**：现有 `schedulerService` 有 `maxConcurrent` 配置（默认 20），A2A Cron 只有 per-job 并发控制，没有全局上限。大量 cron job 同时触发可能耗尽资源。后续可在 `executeJob` 开头加 `runningExecutions.size >= MAX_CONCURRENT_CRON_RUNS` 检查
+16. **WebSocket cron 订阅异步竞态**：`resolveA2AId` 是 async 函数，subscribe 消息处理中用 `.then()` 解析。在解析完成前广播的 cron 事件会丢失。影响：首次订阅后极短窗口内可能丢一个事件，前端可通过 REST 补偿（类似 sessions 频道 subscribe 后立即发送当前状态）
+17. **reuse 模式 configSnapshot 未传入**：`handleSessionManagement` 调用时省略第 8 参数 `configSnapshot`，Agent 配置（allowedTools、systemPrompt 等）变更后 reuse session 不会检测差异，继续使用旧配置的 SDK 进程。需等 session 超时重建后生效。与限制 #11（maxTurns）是同类问题，影响范围更广
 
 ## API 输入校验规则
 
@@ -1492,11 +1388,12 @@ async executeJob(jobId: string): Promise<void> {
 
   // 进程内乐观锁（防止 manual trigger + cron trigger 并发竞态）
   // 两级并发保护设计:
-  //   第一级: lastRunStatus === 'running' — 持久化状态，覆盖整个执行周期
+  //   第一级: lastRunStatus === 'running' — 内存+磁盘同步状态，覆盖整个执行周期
   //   第二级: executingJobIds Set — 进程内锁，仅覆盖 "check → set running" 之间的短暂竞态窗口
-  // executingJobIds 在 finally 中释放，此时 lastRunStatus 已在第 1482 行被设为 'running'，
-  // 后续触发由第一级检查（第 1465 行）拦截。对于 isolated 模式，submitTask() 在任务入队时即 resolve，
-  // executingJobIds 会在任务实际执行完成前释放，这是预期行为。
+  // executingJobIds 在 finally 中释放，此时 active.job.lastRunStatus 已在内存中被设为 'running'，
+  // 后续触发由第一级检查拦截。对于 isolated 模式，submitTask() 在任务入队时即 resolve，
+  // executingJobIds 会在任务实际执行完成前释放，但 lastRunStatus 内存值为 'running'，
+  // 直到 onExecutionComplete 回调将其更新为 success/error，因此并发保护不会失效。
   if (this.executingJobIds.has(jobId)) {
     console.warn(`[A2A Cron] Job ${jobId} is being dispatched, skipping`);
     return;
@@ -1506,9 +1403,10 @@ async executeJob(jobId: string): Promise<void> {
   // 创建 run 记录
   const run: CronRun = { id: `run_${uuid().slice(0,8)}`, jobId, status: 'running', startedAt: new Date().toISOString() };
 
-  // running 状态只更新 jobs.json（用于并发检查），不写 JSONL
+  // running 状态同时更新 jobs.json 和内存（确保并发检查读到最新状态）
   // JSONL 只在最终完成/失败时写一条记录，避免 getRuns 返回重复条目
   a2aCronStorage.updateJobRunStatus(job.workingDirectory, jobId, 'running');
+  active.job.lastRunStatus = 'running';  // 同步内存，确保后续 cron 触发能检测到 running
 
   // WebSocket 通知执行开始
   broadcastCronEvent(job.workingDirectory, {
@@ -1519,10 +1417,17 @@ async executeJob(jobId: string): Promise<void> {
     if (job.sessionTarget === 'isolated') {
       await this.executeIsolated(job, run);
       // isolated 结果由 BuiltinExecutor.storeResult() 回调 → onExecutionComplete() 处理
-      // onExecutionComplete 负责: 写 JSONL + 更新 lastRunStatus + WebSocket 广播
+      // onExecutionComplete 负责: 写 JSONL + 更新 lastRunStatus（磁盘+内存） + WebSocket 广播
     } else {
       await this.executeReuse(job, run);
-      // reuse 结果在 executeReuse 内部处理（直接写 JSONL + 更新状态）
+      // reuse 结果在 executeReuse 内部处理（直接写 JSONL + 更新状态 + 同步内存）
+    }
+
+    // once 类型执行后自动 disable（setTimeout 已消费，不再需要调度）
+    if (job.schedule.type === 'once') {
+      a2aCronStorage.updateJob(job.workingDirectory, jobId, { enabled: false });
+      active.job.enabled = false;
+      this.unregisterJob(jobId);
     }
   } catch (err) {
     // 统一错误处理：确保 job 状态从 running 更新为 error
@@ -1533,6 +1438,7 @@ async executeJob(jobId: string): Promise<void> {
     };
     a2aCronStorage.appendRun(job.workingDirectory, jobId, completedRun);  // JSONL 唯一写入点
     a2aCronStorage.updateJobRunStatus(job.workingDirectory, jobId, 'error', errorMsg);
+    active.job.lastRunStatus = 'error';  // 同步内存
     broadcastCronEvent(job.workingDirectory, {
       type: 'cron:error', jobId, runId: run.id, status: 'error', timestamp: Date.now(),
     });
@@ -1542,6 +1448,10 @@ async executeJob(jobId: string): Promise<void> {
 }
 ```
 
-**JSONL 写入规则**：每个 run 只写入一条最终状态记录（`success` / `error` / `stopped`），不写入中间状态 `running`。`running` 状态仅存在于 `jobs.json` 的 `lastRunStatus` 字段和 WebSocket 的 `cron:started` 事件中。这确保 `getRuns()` 返回的每条记录都是最终结果，无需去重。
+**JSONL 写入规则**：每个 run 只写入一条最终状态记录（`success` / `error` / `stopped`），不写入中间状态 `running`。`running` 状态仅存在于 `jobs.json` 的 `lastRunStatus` 字段（磁盘+内存同步）和 WebSocket 的 `cron:started` 事件中。这确保 `getRuns()` 返回的每条记录都是最终结果，无需去重。
+
+**内存状态同步规则**：所有 `updateJobRunStatus` 调用后，必须同步更新 `activeJobs` Map 中的 `active.job.lastRunStatus`。这确保 `executeJob` 开头的 `lastRunStatus === 'running'` 检查读到最新状态，避免 isolated 模式下 `submitTask()` 异步入队后、`executingJobIds` 释放后的并发窗口中出现重复执行。
+
+**once 类型自动 disable**：`once` 类型 job 在 try 块末尾（执行成功后）自动设 `enabled: false` 并调用 `unregisterJob`。这确保前端显示正确状态，服务重启后不会因 `delay <= 0` 误判。
 
 **关键**：executeReuse 内部的 sendMessage 可能因 `isProcessing=true` 或 `session not active` 抛异常，外层 catch 确保 run 记录不会卡在 `running` 状态。`finally` 块确保乐观锁总是释放。
