@@ -6,6 +6,7 @@ import { URL } from 'url';
 import { sessionManager } from './sessionManager.js';
 import { workspaceWatcher } from './workspaceWatcher.js';
 import type { FileChange } from './workspaceWatcher.js';
+import { verifyToken } from '../utils/jwt.js';
 
 interface WSClient {
   ws: WebSocket;
@@ -23,9 +24,11 @@ let wss: WebSocketServer | null = null;
 const clients = new Set<WSClient>();
 let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
-// Lightweight WS auth: accept any non-empty token, consistent with authMiddleware.
-function authenticateToken(token: string): boolean {
-  return typeof token === 'string' && token.length > 0;
+async function authenticateToken(token: string): Promise<boolean> {
+  if (process.env.NO_AUTH === 'true') return true;
+  if (typeof token !== 'string' || token.length === 0) return false;
+  const payload = await verifyToken(token);
+  return payload !== null;
 }
 
 function buildSessionMessage(): string {
@@ -46,7 +49,7 @@ function sendSafe(client: WSClient, message: string): void {
 export function setupWebSocket(server: Server): void {
   wss = new WebSocketServer({ noServer: true });
 
-  server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+  server.on('upgrade', async (request: IncomingMessage, socket: Duplex, head: Buffer) => {
     try {
       const url = new URL(request.url || '', `http://${request.headers.host}`);
       if (url.pathname !== '/ws') {
@@ -54,7 +57,7 @@ export function setupWebSocket(server: Server): void {
         return;
       }
       const token = url.searchParams.get('token');
-      if (!token || !authenticateToken(token)) {
+      if (!token || !(await authenticateToken(token))) {
         socket.destroy();
         return;
       }
