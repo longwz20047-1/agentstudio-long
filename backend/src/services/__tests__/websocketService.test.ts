@@ -9,13 +9,6 @@ vi.mock('../a2a/agentMappingService.js', () => ({
   ]),
 }));
 
-vi.mock('../a2a/apiKeyService.js', () => ({
-  validateApiKey: vi.fn().mockImplementation(async (_dir: string, key: string) => {
-    if (key === 'valid-key') return { valid: true, keyId: 'k1' };
-    return { valid: false };
-  }),
-}));
-
 vi.mock('../sessionManager.js', () => {
   const { EventEmitter } = require('events');
   const events = new EventEmitter();

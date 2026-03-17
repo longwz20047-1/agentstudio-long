@@ -67,6 +67,25 @@ describe('authMiddleware', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
+  it('should accept token from query parameter', async () => {
+    mockedVerifyToken.mockResolvedValue({ authenticated: true, exp: 9999999999 });
+    const req = {
+      headers: {},
+      query: { token: 'query-jwt-token' },
+    } as unknown as Request;
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn().mockReturnThis(),
+    } as unknown as Response;
+    const next = vi.fn() as NextFunction;
+
+    authMiddleware(req, res, next);
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    expect(mockedVerifyToken).toHaveBeenCalledWith('query-jwt-token');
+    expect(next).toHaveBeenCalled();
+  });
+
   it('should skip auth when NO_AUTH=true', async () => {
     process.env.NO_AUTH = 'true';
     const { req, res, next } = createMockReqRes();
