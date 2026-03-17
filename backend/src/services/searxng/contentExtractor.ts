@@ -1,14 +1,19 @@
 // agentstudio/backend/src/services/searxng/contentExtractor.ts
 
 import { validateUrl } from '../firecrawl/firecrawlClient.js';
+import { Readability } from '@mozilla/readability';
+import { parseHTML } from 'linkedom';
+import TurndownService from 'turndown';
 
 // --- Constants ---
 
 const CRAWL4AI_URL = process.env.CRAWL4AI_URL || 'http://192.168.100.30:11235';
 const CRAWL4AI_TIMEOUT_MS = 15_000;
+const READABILITY_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_LENGTH = 20_000;
 const MAX_HTML_SIZE = 512 * 1024; // 512KB
 const FETCH_TIMEOUT_MS = 3000;
+const MIN_CONTENT_LENGTH = 50; // Minimum chars to consider extraction valid
 
 // --- Extraction Cache (10-min TTL) ---
 
@@ -35,6 +40,10 @@ interface Crawl4AIResponse {
   url?: string;
 }
 
+// --- Turndown instance (reuse, stateless) ---
+
+const turndown = new TurndownService({ headingStyle: 'atx' });
+
 // --- Main Function ---
 
 export async function fetchAndExtract(
@@ -56,16 +65,19 @@ export async function fetchAndExtract(
     return null;
   }
 
-  let result: { title: string; content: string } | null = null;
+  // Dual extraction: Crawl4AI + Readability in parallel
+  const [crawl4aiResult, readabilityResult] = await Promise.allSettled([
+    crawl4aiExtract(url, maxLength),
+    readabilityExtract(url, maxLength),
+  ]);
 
-  try {
-    // Primary: Crawl4AI fit mode (Playwright render + Markdown cleanup, no LLM)
-    result = await crawl4aiExtract(url, maxLength);
-  } catch (err) {
-    console.warn('[ContentExtractor] Crawl4AI error for', url, err instanceof Error ? err.message : err);
-  }
+  const a = crawl4aiResult.status === 'fulfilled' ? crawl4aiResult.value : null;
+  const b = readabilityResult.status === 'fulfilled' ? readabilityResult.value : null;
 
-  // Fallback: plain fetch + regex extraction
+  // Merge dual extraction results
+  let result = mergeExtractions(a, b, maxLength);
+
+  // Level 3 fallback: regex extraction if both extractors failed
   if (!result) {
     try {
       result = await fetchFallback(url, maxLength);
@@ -83,7 +95,30 @@ export async function fetchAndExtract(
   return result;
 }
 
-// --- Crawl4AI Extraction ---
+// --- Merge Strategy ---
+
+function mergeExtractions(
+  a: { title: string; content: string } | null,  // Crawl4AI
+  b: { title: string; content: string } | null,  // Readability
+  maxLength: number,
+): { title: string; content: string } | null {
+  const hasA = a && a.content.length > MIN_CONTENT_LENGTH;
+  const hasB = b && b.content.length > MIN_CONTENT_LENGTH;
+
+  if (hasA && hasB) {
+    const separator = '\n---\n';
+    const halfLen = Math.floor((maxLength - separator.length) / 2);
+    return {
+      title: a.title || b.title,
+      content: a.content.slice(0, halfLen) + separator + b.content.slice(0, halfLen),
+    };
+  }
+  if (hasA) return { ...a, content: a.content.slice(0, maxLength) };
+  if (hasB) return { ...b, content: b.content.slice(0, maxLength) };
+  return null;
+}
+
+// --- Crawl4AI Extraction (existing, unchanged) ---
 
 async function crawl4aiExtract(
   url: string,
@@ -113,7 +148,63 @@ async function crawl4aiExtract(
   };
 }
 
-// --- Fetch Fallback ---
+// --- Readability Extraction (new, replicates mcp-server-fetch core logic) ---
+
+async function readabilityExtract(
+  url: string,
+  maxLength: number,
+): Promise<{ title: string; content: string } | null> {
+  try {
+    // 1. HTTP fetch
+    const resp = await fetch(url, {
+      signal: AbortSignal.timeout(READABILITY_TIMEOUT_MS),
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; AgentStudio/1.0)',
+        'Accept': 'text/html',
+      },
+      redirect: 'follow',
+    });
+
+    if (!resp.ok) return null;
+
+    // 2. HTML detection
+    const contentType = resp.headers.get('content-type') || '';
+    const contentLength = resp.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > MAX_HTML_SIZE) return null;
+
+    const html = await resp.text();
+    if (html.length > MAX_HTML_SIZE) return null;
+
+    const isHtml = contentType.includes('text/html') || html.slice(0, 100).includes('<html');
+    if (!isHtml) return null;
+
+    // 3. DOM parse + Readability extraction
+    const { document } = parseHTML(html);
+
+    // linkedom doesn't auto-set baseURI — inject <base> for relative URL resolution
+    const base = document.createElement('base');
+    base.setAttribute('href', url);
+    if (document.head) {
+      document.head.appendChild(base);
+    }
+
+    const article = new Readability(document as any).parse();
+    if (!article?.content) return null;
+
+    // 4. Turndown HTML → Markdown
+    const markdown = turndown.turndown(article.content);
+
+    return {
+      title: article.title || '',
+      content: markdown.slice(0, maxLength),
+    };
+  } catch (err) {
+    console.warn('[ContentExtractor] Readability error for', url, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+// --- Fetch Fallback (Level 3, regex extraction — safety net) ---
 
 async function fetchFallback(
   url: string,
@@ -146,7 +237,7 @@ async function fetchFallback(
   }
 }
 
-// --- HTML Extraction ---
+// --- HTML Extraction (regex-based, unchanged) ---
 
 function extractFromHtml(
   html: string,

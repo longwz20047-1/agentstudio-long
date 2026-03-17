@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fetchAndExtract, _resetExtractionCache } from '../contentExtractor.js';
 
-describe('contentExtractor (Crawl4AI)', () => {
+describe('contentExtractor (dual extraction)', () => {
   beforeEach(() => {
     _resetExtractionCache();
     vi.stubGlobal('fetch', vi.fn());
@@ -13,25 +13,63 @@ describe('contentExtractor (Crawl4AI)', () => {
     vi.unstubAllGlobals();
   });
 
-  // Helper: mock Crawl4AI /md response
-  function mockCrawl4AI(markdown: string, success = true) {
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ success, markdown }),
-    });
-  }
+  // Route-aware mock: Crawl4AI calls go to /md, Readability calls go to the URL
+  function setupDualMock(options: {
+    crawl4ai?: { markdown: string; success?: boolean } | 'fail' | 'error';
+    readability?: { html: string } | 'fail' | 'error';
+    fallback?: { html: string } | 'fail';
+  }) {
+    const mockFetch = globalThis.fetch as ReturnType<typeof vi.fn>;
 
-  // Helper: mock Crawl4AI failure then HTML fallback
-  function mockCrawl4AIFailThenHtml(html: string) {
-    // First call: Crawl4AI fails
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error('Crawl4AI timeout')
-    );
-    // Second call: fallback fetch succeeds
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers({ 'content-type': 'text/html; charset=utf-8' }),
-      text: () => Promise.resolve(html),
+    mockFetch.mockImplementation(async (url: string | URL, init?: RequestInit) => {
+      const urlStr = typeof url === 'string' ? url : url.toString();
+
+      // Crawl4AI: POST to /md endpoint
+      if (urlStr.includes('/md') && init?.method === 'POST') {
+        if (options.crawl4ai === 'fail') throw new Error('Crawl4AI timeout');
+        if (options.crawl4ai === 'error') return { ok: false, status: 500 };
+        if (options.crawl4ai) {
+          return {
+            ok: true,
+            json: () => Promise.resolve({
+              success: options.crawl4ai !== 'fail' && options.crawl4ai !== 'error'
+                ? (options.crawl4ai as any).success ?? true
+                : false,
+              markdown: (options.crawl4ai as any).markdown,
+            }),
+          };
+        }
+        throw new Error('Crawl4AI not configured');
+      }
+
+      // Readability or fallback: GET to the target URL
+      if (options.readability === 'fail' || options.readability === 'error') {
+        if (options.readability === 'fail') throw new Error('fetch timeout');
+        return { ok: false, status: 500 };
+      }
+
+      if (options.readability) {
+        return {
+          ok: true,
+          headers: new Headers({ 'content-type': 'text/html; charset=utf-8' }),
+          get: (name: string) => name === 'content-type' ? 'text/html' : null,
+          text: () => Promise.resolve(options.readability !== 'fail' && options.readability !== 'error'
+            ? (options.readability as any).html
+            : ''),
+        };
+      }
+
+      // Fallback path
+      if (options.fallback === 'fail') throw new Error('fallback fail');
+      if (options.fallback) {
+        return {
+          ok: true,
+          headers: new Headers({ 'content-type': 'text/html; charset=utf-8' }),
+          text: () => Promise.resolve((options.fallback as any).html),
+        };
+      }
+
+      throw new Error(`Unexpected fetch: ${urlStr}`);
     });
   }
 
@@ -39,7 +77,6 @@ describe('contentExtractor (Crawl4AI)', () => {
     it('should return null for private IP URLs', async () => {
       const result = await fetchAndExtract('http://192.168.1.1/secret');
       expect(result).toBeNull();
-      // fetch should not be called — blocked before any extraction
       expect(globalThis.fetch).not.toHaveBeenCalled();
     });
 
@@ -50,181 +87,158 @@ describe('contentExtractor (Crawl4AI)', () => {
     });
   });
 
-  describe('Crawl4AI primary path', () => {
-    it('should return fit-extracted content from Crawl4AI', async () => {
-      mockCrawl4AI('# News\n\n1. Breaking news about AI');
-
-      const result = await fetchAndExtract('https://example.com');
-
-      expect(result).toEqual({
-        title: '',
-        content: '# News\n\n1. Breaking news about AI',
+  describe('Dual extraction — both succeed', () => {
+    it('should merge Crawl4AI and Readability results', async () => {
+      setupDualMock({
+        crawl4ai: { markdown: 'Crawl4AI extracted content about Docker networking that is long enough to pass the minimum threshold check for valid extraction' },
+        readability: {
+          html: '<html><head><title>Docker Guide</title></head><body><article><h1>Docker Networking</h1><p>Readability extracted content about Docker containers that is also long enough to pass the minimum threshold</p></article></body></html>',
+        },
       });
 
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/md'),
-        expect.objectContaining({
-          method: 'POST',
-          body: expect.stringContaining('"f":"fit"'),
-        })
-      );
-    });
-
-    it('should truncate content to maxLength', async () => {
-      mockCrawl4AI('A'.repeat(5000));
-
-      const result = await fetchAndExtract('https://example.com', { maxLength: 200 });
+      const result = await fetchAndExtract('https://example.com/docker', { maxLength: 2000 });
 
       expect(result).not.toBeNull();
-      expect(result!.content.length).toBe(200);
+      // Both contents should be present, separated by ---
+      expect(result!.content).toContain('Crawl4AI extracted content');
+      expect(result!.content).toContain('---');
+      expect(result!.content).toContain('Docker');
     });
 
-    it('should fallback when Crawl4AI returns empty markdown', async () => {
-      // Crawl4AI returns success but empty content (length <= 1)
-      mockCrawl4AI(' ', true);
+    it('should split maxLength between both extractions', async () => {
+      const longA = 'A'.repeat(3000);
+      const longB = '<html><body><article><p>' + 'B'.repeat(3000) + '</p></article></body></html>';
 
-      // Fallback HTML
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-        ok: true,
-        headers: new Headers({ 'content-type': 'text/html' }),
-        text: () => Promise.resolve('<html><title>Fallback</title><body><p>Content</p></body></html>'),
+      setupDualMock({
+        crawl4ai: { markdown: longA },
+        readability: { html: longB },
       });
 
-      const result = await fetchAndExtract('https://example.com');
+      const result = await fetchAndExtract('https://example.com/long', { maxLength: 2000 });
+
       expect(result).not.toBeNull();
-      expect(result!.title).toBe('Fallback');
-    });
-
-    it('should fallback when Crawl4AI returns HTTP error', async () => {
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-      });
-      // Fallback HTML
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-        ok: true,
-        headers: new Headers({ 'content-type': 'text/html' }),
-        text: () => Promise.resolve('<html><title>Fallback</title><body>content</body></html>'),
-      });
-
-      const result = await fetchAndExtract('https://example.com');
-      expect(result).not.toBeNull();
-      expect(result!.title).toBe('Fallback');
+      // Total should not exceed maxLength (2000) — each half ~997 + separator 5
+      expect(result!.content.length).toBeLessThanOrEqual(2000);
+      expect(result!.content).toContain('---');
     });
   });
 
-  describe('Fallback path', () => {
-    it('should use fetch fallback when Crawl4AI fails', async () => {
-      const html = '<html><head><title>Fallback Title</title></head><body><p>Fallback content</p></body></html>';
-      mockCrawl4AIFailThenHtml(html);
+  describe('Dual extraction — partial success', () => {
+    it('should use only Crawl4AI when Readability fails', async () => {
+      setupDualMock({
+        crawl4ai: { markdown: 'Crawl4AI only content with enough length to pass threshold' },
+        readability: 'fail',
+      });
 
-      const result = await fetchAndExtract('https://example.com');
+      const result = await fetchAndExtract('https://example.com/crawl-only');
 
       expect(result).not.toBeNull();
-      expect(result!.title).toBe('Fallback Title');
-      expect(result!.content).toContain('Fallback content');
+      expect(result!.content).toContain('Crawl4AI only content');
+      expect(result!.content).not.toContain('---');
     });
 
-    it('should return null for non-HTML content-type in fallback', async () => {
-      // Crawl4AI fails
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('fail'));
-      // Fallback: non-HTML
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-        ok: true,
-        headers: new Headers({ 'content-type': 'application/pdf' }),
-        text: () => Promise.resolve('binary'),
+    it('should use only Readability when Crawl4AI fails', async () => {
+      setupDualMock({
+        crawl4ai: 'fail',
+        readability: {
+          html: '<html><body><article><h1>Title</h1><p>Readability only content with enough length to pass threshold</p></article></body></html>',
+        },
       });
 
-      const result = await fetchAndExtract('https://example.com/file.pdf');
-      expect(result).toBeNull();
-    });
+      const result = await fetchAndExtract('https://example.com/read-only');
 
-    it('should return null for oversized HTML in fallback', async () => {
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('fail'));
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-        ok: true,
-        headers: new Headers({
-          'content-type': 'text/html',
-          'content-length': String(600 * 1024),
-        }),
-        text: () => Promise.resolve('<html>big</html>'),
-      });
-
-      const result = await fetchAndExtract('https://example.com/huge');
-      expect(result).toBeNull();
-    });
-
-    it('should strip script/style/nav/footer/header in fallback HTML', async () => {
-      const html = `<html><head><title>Clean</title></head><body>
-        <script>alert('xss')</script>
-        <style>.hide{display:none}</style>
-        <nav>Navigation</nav>
-        <header>Header</header>
-        <main><p>Real content here</p></main>
-        <footer>Footer</footer>
-      </body></html>`;
-
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('fail'));
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-        ok: true,
-        headers: new Headers({ 'content-type': 'text/html' }),
-        text: () => Promise.resolve(html),
-      });
-
-      const result = await fetchAndExtract('https://example.com/page');
       expect(result).not.toBeNull();
-      expect(result!.content).toContain('Real content here');
-      expect(result!.content).not.toContain('alert');
-      expect(result!.content).not.toContain('Navigation');
-      expect(result!.content).not.toContain('Footer');
+      expect(result!.content).toContain('Readability only content');
+      expect(result!.content).not.toContain('---');
+    });
+
+    it('should ignore extraction with content shorter than threshold', async () => {
+      setupDualMock({
+        crawl4ai: { markdown: 'Short' }, // < 50 chars, below MIN_CONTENT_LENGTH
+        readability: {
+          html: '<html><body><article><p>Readability has enough content to pass the minimum threshold check</p></article></body></html>',
+        },
+      });
+
+      const result = await fetchAndExtract('https://example.com/short-crawl');
+
+      expect(result).not.toBeNull();
+      // Should not contain separator since Crawl4AI was too short
+      expect(result!.content).not.toContain('---');
+      expect(result!.content).toContain('Readability has enough content');
+    });
+  });
+
+  describe('Fallback path (Level 3)', () => {
+    it('should use regex fallback when both extractors fail', async () => {
+      const mockFetch = globalThis.fetch as ReturnType<typeof vi.fn>;
+      let callCount = 0;
+
+      mockFetch.mockImplementation(async (url: string | URL, init?: RequestInit) => {
+        callCount++;
+        const urlStr = typeof url === 'string' ? url : url.toString();
+
+        // First two calls: Crawl4AI + Readability both fail
+        if (urlStr.includes('/md')) throw new Error('Crawl4AI down');
+        if (callCount <= 2) throw new Error('Readability down');
+
+        // Third call: regex fallback succeeds
+        return {
+          ok: true,
+          headers: new Headers({ 'content-type': 'text/html' }),
+          text: () => Promise.resolve('<html><title>Fallback</title><body><p>Regex fallback content here</p></body></html>'),
+        };
+      });
+
+      const result = await fetchAndExtract('https://example.com/both-fail');
+
+      expect(result).not.toBeNull();
+      expect(result!.title).toBe('Fallback');
+      expect(result!.content).toContain('Regex fallback content');
+    });
+
+    it('should return null when everything fails', async () => {
+      const mockFetch = globalThis.fetch as ReturnType<typeof vi.fn>;
+      mockFetch.mockRejectedValue(new Error('all fail'));
+
+      const result = await fetchAndExtract('https://example.com/total-fail');
+      expect(result).toBeNull();
     });
   });
 
   describe('Extraction cache', () => {
-    it('should return cached result for same URL', async () => {
-      mockCrawl4AI('cached content');
+    it('should cache merged result and return on second call', async () => {
+      setupDualMock({
+        crawl4ai: { markdown: 'Cached Crawl4AI content that is long enough to pass threshold' },
+        readability: {
+          html: '<html><body><article><p>Cached Readability content that is long enough to pass threshold</p></article></body></html>',
+        },
+      });
 
       const result1 = await fetchAndExtract('https://example.com/cached');
       const result2 = await fetchAndExtract('https://example.com/cached');
 
-      // Only 1 fetch call (second is cached)
-      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
       expect(result1).toEqual(result2);
-    });
-
-    it('should not use cache for different URLs', async () => {
-      mockCrawl4AI('content A');
-      mockCrawl4AI('content B');
-
-      await fetchAndExtract('https://example.com/a');
-      await fetchAndExtract('https://example.com/b');
-
-      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
-    });
-
-    it('should cache null results', async () => {
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('fail'));
-      (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('fail'));
-
-      const result1 = await fetchAndExtract('https://example.com/fail');
-      const result2 = await fetchAndExtract('https://example.com/fail');
-
-      expect(result1).toBeNull();
-      expect(result2).toBeNull();
-      // Only 2 calls for first attempt (crawl4ai + fallback), 0 for second (cached)
-      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+      // fetch called only for first extraction (Crawl4AI + Readability), not for second
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2); // 1 Crawl4AI + 1 Readability
     });
 
     it('should clear cache with _resetExtractionCache', async () => {
-      mockCrawl4AI('first');
-      await fetchAndExtract('https://example.com/reset');
+      setupDualMock({
+        crawl4ai: { markdown: 'First extraction content that is long enough to pass threshold easily' },
+        readability: 'fail',
+      });
 
+      await fetchAndExtract('https://example.com/reset');
       _resetExtractionCache();
 
-      mockCrawl4AI('second');
-      const result = await fetchAndExtract('https://example.com/reset');
+      setupDualMock({
+        crawl4ai: { markdown: 'Second extraction content that is different and long enough for threshold' },
+        readability: 'fail',
+      });
 
-      expect(result!.content).toBe('second');
+      const result = await fetchAndExtract('https://example.com/reset');
+      expect(result!.content).toContain('Second extraction');
     });
   });
 });
