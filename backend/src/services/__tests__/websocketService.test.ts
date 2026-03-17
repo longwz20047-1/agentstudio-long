@@ -9,13 +9,6 @@ vi.mock('../a2a/agentMappingService.js', () => ({
   ]),
 }));
 
-vi.mock('../a2a/apiKeyService.js', () => ({
-  validateApiKey: vi.fn().mockImplementation(async (_dir: string, key: string) => {
-    if (key === 'valid-key') return { valid: true, keyId: 'k1' };
-    return { valid: false };
-  }),
-}));
-
 vi.mock('../sessionManager.js', () => {
   const { EventEmitter } = require('events');
   const events = new EventEmitter();
@@ -38,6 +31,13 @@ vi.mock('../workspaceWatcher.js', () => {
   return { workspaceWatcher: watcher };
 });
 
+vi.mock('../../utils/jwt.js', () => ({
+  verifyToken: vi.fn().mockImplementation(async (token: string) => {
+    if (token === 'valid-jwt') return { authenticated: true };
+    return null;
+  }),
+}));
+
 import { setupWebSocket, shutdownWebSocket } from '../websocketService.js';
 
 describe('websocketService', () => {
@@ -58,6 +58,7 @@ describe('websocketService', () => {
   afterEach(async () => {
     shutdownWebSocket();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    delete process.env.NO_AUTH;
   });
 
   it('should reject connection without valid token', () => {
@@ -74,9 +75,23 @@ describe('websocketService', () => {
     });
   });
 
-  it('should accept connection with valid token', () => {
+  it('should accept connection with valid JWT token', () => {
     return new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(`ws://localhost:${port}/ws?token=valid-key`);
+      const ws = new WebSocket(`ws://localhost:${port}/ws?token=valid-jwt`);
+      ws.on('open', () => {
+        ws.close();
+        resolve();
+      });
+      ws.on('error', (err) => {
+        reject(err);
+      });
+    });
+  });
+
+  it('should accept connection when NO_AUTH is set', () => {
+    process.env.NO_AUTH = 'true';
+    return new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(`ws://localhost:${port}/ws?token=any-string`);
       ws.on('open', () => {
         ws.close();
         resolve();
