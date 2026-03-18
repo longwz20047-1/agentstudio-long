@@ -33,44 +33,43 @@ export function _resetSearchCache(): void {
   searchCache.clear();
 }
 
-const TOOL_DESCRIPTION = `Search the web and fetch page content for comprehensive results.
+const TOOL_DESCRIPTION = `Search the web and fetch full page content for comprehensive results.
 Use this tool when the user asks questions that require up-to-date
 information, factual lookup, or external knowledge beyond your training.
+This tool visits each result URL and extracts page content — no need for a separate fetch.
 
-IMPORTANT: Do NOT pass the user's raw question as query.
-Extract and optimize search keywords:
-- Remove filler words and conversational language
-- Add relevant technical terms the user may have omitted
-- Include specific version numbers, error codes, or proper nouns
-- For Chinese technical queries, prefer English technical terms
-  (e.g., "useEffect" not "副作用钩子")
-- For time-sensitive queries, add the current year if relevant
+IMPORTANT — Query rules:
+- query: Optimized search keywords (NOT the user's raw question).
+  Extract keywords, remove filler, add technical terms.
+  For Chinese technical queries, prefer English technical terms
+  (e.g., "useEffect" not "副作用钩子").
+  For time-sensitive queries, add the current year.
+- kb_query: When knowledge bases are connected, you MUST also provide
+  the user's original question in their language. KB uses semantic search
+  where natural language outperforms optimized keywords. If omitted,
+  the optimized query is used, which typically yields worse KB results.
 
 Parameters:
-- query: Optimized search keywords (NOT the user's raw question)
 - search_type: Content type — determines which search engines are used.
-  Always provide this based on the user's actual need:
-  - "code": Programming errors, API usage, library docs,
-    package install, debugging, deployment, DevOps
-  - "academic": Papers, research, algorithms, studies,
-    surveys, datasets, benchmarks
-  - "news": Current events, product launches, announcements,
-    policy changes, incidents, market movements
-  - "social": Recommendations, reviews, comparisons (X vs Y),
-    experiences, community discussions
-  - "general": Daily life, knowledge, how-to, everything else
-- language: User's language — adds regional search engines.
-  Always provide this based on the conversation language:
-  - "zh": Chinese-speaking user (adds Baidu, Sogou, Quark)
-  - "en": English-speaking user
-- time_range: "day", "week", "month", "year" — use when
-  the query implies recency (news, releases, incidents)
-- max_results: 1-10, default 5. Use 1-3 for precise lookups,
-  5 for general queries, 8-10 for broad research
+  Provide when the user's intent is clear; when omitted, auto-detected
+  from query keywords.
+  - "code": Programming, API, debugging, DevOps
+  - "academic": Papers, research, algorithms, benchmarks
+  - "news": Current events, launches, policy changes
+  - "social": Recommendations, reviews, comparisons
+  - "general": Everything else
+- language: User's language — adds regional engines.
+  Provide based on conversation language; when omitted, auto-detected.
+  - "zh": Chinese (adds Baidu, Sogou, Quark)
+  - "en": English
+- time_range: "day", "week", "month", "year" — for recency-sensitive queries
+- max_results: 1-10, default 5. Higher counts reduce per-result content depth.
+  Use 1-3 for precise lookups, 5 for general, 8-10 for broad research.
 
 Examples:
 - "我的useEffect一直重新渲染停不下来怎么办"
   → query: "React useEffect infinite loop dependency array"
+    kb_query: "useEffect一直重新渲染停不下来怎么办"
     search_type: "code", language: "zh"
 - "那个注意力机制的论文叫什么"
   → query: "Attention Is All You Need transformer paper"
@@ -78,12 +77,6 @@ Examples:
 - "昨天小米出了什么新手机"
   → query: "小米 新品发布 手机"
     search_type: "news", language: "zh", time_range: "week"
-- "好吃的火锅店推荐"
-  → query: "火锅店 推荐 排名"
-    search_type: "social", language: "zh"
-- "最近有什么严重的安全漏洞"
-  → query: "critical CVE security vulnerability 2026"
-    search_type: "news", language: "zh", time_range: "month"
 
 Tip: For Chinese technical/academic queries, if results lack depth,
 try searching again with English keywords for broader coverage.`;
@@ -132,12 +125,16 @@ export async function integrateSearchMcp(
   const hasKbSelection = kbCount > 0 || docCount > 0;
 
   const kbNote = hasKbSelection
-    ? `\n\nNOTE: When knowledge bases are selected, this tool also searches ` +
+    ? `\n\nKNOWLEDGE BASE: This tool also searches ` +
       (kbCount > 0 ? `${kbCount} knowledge base(s)` : '') +
       (kbCount > 0 && docCount > 0 ? ' and ' : '') +
       (docCount > 0 ? `${docCount} specific document(s)` : '') +
-      `. Results appear in the \`kb_results\` field. ` +
-      `Provide kb_query with the user's original question in their language for better KB matching.`
+      ` in parallel. You do NOT need to call weknora_search separately.` +
+      `\n- Provide kb_query (user's original question) for best KB matching.` +
+      `\n- kb_results items: { title, content, score (0-1), match_type, doc_link }.` +
+      `\n- Use [title](doc_link) when citing KB sources in your response.` +
+      `\n- Prioritize kb_results for organization-specific questions; web results for external context.` +
+      `\n- If KB search fails silently, kb_results will be absent (not empty array).`
     : '';
 
   const webSearchTool = tool(
@@ -145,7 +142,7 @@ export async function integrateSearchMcp(
     TOOL_DESCRIPTION + kbNote,
     {
       query: z.string().describe('Optimized search keywords'),
-      kb_query: z.string().optional().describe('Original user query in their language for KB search (only when kb_results is enabled)'),
+      kb_query: z.string().optional().describe("User's original question in their language for KB semantic search. Recommended when knowledge bases are selected."),
       time_range: z.enum(['day', 'week', 'month', 'year']).optional().describe('Time filter for recency'),
       max_results: z.number().min(1).max(10).optional().describe('Max results (default 5)'),
       search_type: z.enum(['general', 'news', 'code', 'academic', 'social']).optional().describe('Content type — determines which engines are used'),
