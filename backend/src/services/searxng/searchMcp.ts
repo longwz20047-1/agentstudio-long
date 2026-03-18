@@ -125,14 +125,7 @@ export async function integrateSearchMcp(
       (kbCount > 0 && docCount > 0 ? ' and ' : '') +
       (docCount > 0 ? `${docCount} specific document(s)` : '') +
       ` in parallel with web search. No need to call weknora_search separately.` +
-      `\n` +
-      `\nYou MUST provide both parameters:` +
-      `\n  query     = optimized keywords (for web search, same rules as above)` +
-      `\n  kb_query  = user's original question, unchanged (for KB semantic search)` +
-      `\n` +
-      `\nExample: user asks "K8S pod一直重启怎么办"` +
-      `\n  → query: "kubernetes pod crashloopbackoff restart"` +
-      `\n    kb_query: "K8S pod一直重启怎么办"` +
+      `\nThe same optimized query is used for both web and KB search.` +
       `\n` +
       `\nOutput: kb_results contains { title, content, score (0-1), match_type, doc_link }.` +
       `\nUse [title](doc_link) format when citing KB sources.` +
@@ -145,7 +138,6 @@ export async function integrateSearchMcp(
     TOOL_DESCRIPTION + kbNote,
     {
       query: z.string().describe('Optimized search keywords'),
-      kb_query: z.string().optional().describe("User's original question in their language for KB semantic search. MUST provide when knowledge bases are selected."),
       time_range: z.enum(['day', 'week', 'month', 'year']).optional().describe('Time filter for recency'),
       max_results: z.number().min(1).max(10).optional().describe('Max results (default 5)'),
       search_type: z.enum(['general', 'news', 'code', 'academic', 'social']).optional().describe('Content type — determines which engines are used'),
@@ -153,7 +145,7 @@ export async function integrateSearchMcp(
     },
     async (args) => {
       const startTime = Date.now();
-      const { query, kb_query, time_range, max_results = 5, search_type, language } = args;
+      const { query, time_range, max_results = 5, search_type, language } = args;
 
       try {
         // Check search cache
@@ -183,9 +175,8 @@ export async function integrateSearchMcp(
         // Launch KB search in parallel (if context available)
         const hasKbSelection2 = (weknoraContext?.kb_ids?.length ?? 0) > 0
           || (weknoraContext?.knowledge_ids?.length ?? 0) > 0;
-        const kbSearchQuery = kb_query || query;
         const kbPromise = (weknoraContext?.api_key && hasKbSelection2)
-          ? searchWeKnoraRaw(kbSearchQuery, weknoraContext, { timeoutMs: 5_000 })
+          ? searchWeKnoraRaw(query, weknoraContext, { timeoutMs: 5_000 })
           : null;
 
         // Step 2: Search via SearXNG
@@ -251,8 +242,6 @@ export async function integrateSearchMcp(
           fetchedCount,
           kbResultCount: kbResults?.length ?? 0,
           kbEnabled: kbPromise !== null,
-          kbQuery: kbPromise ? kbSearchQuery : undefined,
-          kbQuerySource: kbPromise ? (kb_query ? 'ai_kb_query' : 'optimized_query') : undefined,
           totalMs,
         }));
 
