@@ -683,12 +683,6 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
     // Extract WeKnora context if present
     const weknoraContext = context?.weknora as import('../services/weknora/weknoraIntegration.js').WeknoraContext | undefined;
 
-    // Inject user's original message into WeKnora context for KB search fallback
-    // (AI may not pass kb_query; user_message ensures KB always gets the original question)
-    if (weknoraContext) {
-      weknoraContext.user_message = rawMessage;
-    }
-
     // Extract Graphiti Memory context if present
     const graphitiContext = context?.graphiti as import('../services/graphiti/types.js').GraphitiContext | undefined;
 

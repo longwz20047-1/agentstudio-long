@@ -16,7 +16,6 @@ export interface WeknoraContext {
   kb_ids: string[];
   knowledge_ids?: string[];
   base_url: string;
-  user_message?: string;
 }
 
 /**
