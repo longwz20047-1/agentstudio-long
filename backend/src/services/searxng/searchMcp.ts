@@ -183,8 +183,10 @@ export async function integrateSearchMcp(
         // Launch KB search in parallel (if context available)
         const hasKbSelection2 = (weknoraContext?.kb_ids?.length ?? 0) > 0
           || (weknoraContext?.knowledge_ids?.length ?? 0) > 0;
+        // KB query fallback: AI's kb_query > user's original message > optimized query
+        const kbSearchQuery = kb_query || weknoraContext?.user_message || query;
         const kbPromise = (weknoraContext?.api_key && hasKbSelection2)
-          ? searchWeKnoraRaw(kb_query || query, weknoraContext, { timeoutMs: 5_000 })
+          ? searchWeKnoraRaw(kbSearchQuery, weknoraContext, { timeoutMs: 5_000 })
           : null;
 
         // Step 2: Search via SearXNG
@@ -250,6 +252,8 @@ export async function integrateSearchMcp(
           fetchedCount,
           kbResultCount: kbResults?.length ?? 0,
           kbEnabled: kbPromise !== null,
+          kbQuery: kbPromise ? kbSearchQuery : undefined,
+          kbQuerySource: kbPromise ? (kb_query ? 'ai' : weknoraContext?.user_message ? 'user_message' : 'query_fallback') : undefined,
           totalMs,
         }));
 
