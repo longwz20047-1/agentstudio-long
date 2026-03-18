@@ -207,3 +207,67 @@ Always use the [Document Name](weknora-doc://knowledge_id) link format from the 
 export function getWeknoraToolName(): string {
   return 'mcp__weknora__weknora_search';
 }
+
+/** WeKnora API 返回的搜索结果（字段已归一化） */
+export interface WeKnoraSearchResult {
+  knowledge_id: string;
+  title: string;
+  filename: string;
+  content: string;
+  score: number;
+  match_type?: string;
+}
+
+/**
+ * 调用 WeKnora knowledge-search API，返回归一化结果。
+ * 字段名 fallback 逻辑集中在此处。
+ * 失败返回 null（不抛异常），消费方自行决定降级策略。
+ */
+export async function searchWeKnoraRaw(
+  query: string,
+  ctx: Pick<WeknoraContext, 'api_key' | 'kb_ids' | 'knowledge_ids' | 'base_url'>,
+  options?: { timeoutMs?: number }
+): Promise<WeKnoraSearchResult[] | null> {
+  try {
+    const body: Record<string, unknown> = {
+      query,
+      knowledge_base_ids: ctx.kb_ids.length > 0 ? ctx.kb_ids : undefined,
+    };
+    if (ctx.knowledge_ids?.length) {
+      body.knowledge_ids = ctx.knowledge_ids;
+    }
+
+    const fetchOptions: RequestInit = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${ctx.api_key}`,
+      },
+      body: JSON.stringify(body),
+    };
+    if (options?.timeoutMs) {
+      fetchOptions.signal = AbortSignal.timeout(options.timeoutMs);
+    }
+
+    const response = await fetch(
+      `${ctx.base_url}/api/v1/knowledge-search`,
+      fetchOptions
+    );
+
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    const results = data.data || [];
+
+    return results.map((r: any) => ({
+      knowledge_id: r.knowledge_id || r.id || '',
+      title: r.knowledge_title || r.knowledge_filename || r.title || r.name || 'Untitled',
+      filename: r.knowledge_filename || 'Unknown',
+      content: r.content || '',
+      score: r.score ?? 0,
+      match_type: r.match_type,
+    }));
+  } catch {
+    return null;
+  }
+}
