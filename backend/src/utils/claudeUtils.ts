@@ -559,7 +559,7 @@ export async function buildQueryOptions(
     }
   }
   if (searxngConfig) {
-    await integrateSearchMcp(queryOptions, searxngConfig);
+    await integrateSearchMcp(queryOptions, searxngConfig, weknoraContext);
     await integrateImagesMcp(queryOptions, searxngConfig);
     await integrateVideosMcp(queryOptions, searxngConfig);
     console.log(`✅ [SearXNG] 3 MCP Servers integrated (3 tools: web_search, image_search, video_search): ${searxngConfig.base_url}`);
