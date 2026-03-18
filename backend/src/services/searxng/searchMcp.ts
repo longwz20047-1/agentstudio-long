@@ -244,6 +244,8 @@ export async function integrateSearchMcp(
           engines: analysis.engines,
           resultCount: ranked.length,
           fetchedCount,
+          kbResultCount: kbResults?.length ?? 0,
+          kbEnabled: kbPromise !== null,
           totalMs,
         }));
 
