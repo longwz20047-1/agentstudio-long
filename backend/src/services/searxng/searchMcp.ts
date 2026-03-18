@@ -38,21 +38,17 @@ Use this tool when the user asks questions that require up-to-date
 information, factual lookup, or external knowledge beyond your training.
 This tool visits each result URL and extracts page content — no need for a separate fetch.
 
-IMPORTANT — Query rules:
-- query: Optimized search keywords (NOT the user's raw question).
-  Extract keywords, remove filler, add technical terms.
-  For Chinese technical queries, prefer English technical terms
-  (e.g., "useEffect" not "副作用钩子").
-  For time-sensitive queries, add the current year.
-- kb_query: When knowledge bases are connected, you MUST also provide
-  the user's original question in their language. KB uses semantic search
-  where natural language outperforms optimized keywords. If omitted,
-  the optimized query is used, which typically yields worse KB results.
+IMPORTANT — How to set "query":
+Do NOT pass the user's raw question. Extract and optimize search keywords:
+- Remove filler words and conversational language
+- Add relevant technical terms the user may have omitted
+- For Chinese technical queries, prefer English technical terms
+  (e.g., "useEffect" not "副作用钩子")
+- For time-sensitive queries, add the current year
 
 Parameters:
 - search_type: Content type — determines which search engines are used.
-  Provide when the user's intent is clear; when omitted, auto-detected
-  from query keywords.
+  Provide when the user's intent is clear; when omitted, auto-detected.
   - "code": Programming, API, debugging, DevOps
   - "academic": Papers, research, algorithms, benchmarks
   - "news": Current events, launches, policy changes
@@ -64,7 +60,6 @@ Parameters:
   - "en": English
 - time_range: "day", "week", "month", "year" — for recency-sensitive queries
 - max_results: 1-10, default 5. Higher counts reduce per-result content depth (6000→4000→2500 chars).
-  Use 1-3 for precise lookups, 5 for general, 8-10 for broad research.
 
 Examples:
 - "我的useEffect一直重新渲染停不下来怎么办"
@@ -124,18 +119,25 @@ export async function integrateSearchMcp(
   const hasKbSelection = kbCount > 0 || docCount > 0;
 
   const kbNote = hasKbSelection
-    ? `\n\nKNOWLEDGE BASE: This tool also searches ` +
+    ? `\n\nKNOWLEDGE BASE INTEGRATION:` +
+      `\nThis tool also searches ` +
       (kbCount > 0 ? `${kbCount} knowledge base(s)` : '') +
       (kbCount > 0 && docCount > 0 ? ' and ' : '') +
       (docCount > 0 ? `${docCount} specific document(s)` : '') +
-      ` in parallel. You do NOT need to call weknora_search separately — but only when you provide kb_query.` +
-      `\n- You MUST provide kb_query (user's original question) for best KB matching.` +
-      `\n- kb_results items: { title, content, score (0-1), match_type, doc_link }.` +
-      `\n- Use [title](doc_link) when citing KB sources in your response.` +
-      `\n- Prioritize kb_results for organization-specific questions; web results for external context.` +
-      `\n- If KB search fails silently, kb_results will be absent (not empty array).` +
-      `\n- Example: user asks "K8S pod一直重启怎么办"` +
-      `\n  → query: "kubernetes pod crashloopbackoff restart", kb_query: "K8S pod一直重启怎么办"`
+      ` in parallel with web search. No need to call weknora_search separately.` +
+      `\n` +
+      `\nYou MUST provide both parameters:` +
+      `\n  query     = optimized keywords (for web search, same rules as above)` +
+      `\n  kb_query  = user's original question, unchanged (for KB semantic search)` +
+      `\n` +
+      `\nExample: user asks "K8S pod一直重启怎么办"` +
+      `\n  → query: "kubernetes pod crashloopbackoff restart"` +
+      `\n    kb_query: "K8S pod一直重启怎么办"` +
+      `\n` +
+      `\nOutput: kb_results contains { title, content, score (0-1), match_type, doc_link }.` +
+      `\nUse [title](doc_link) format when citing KB sources.` +
+      `\nPrioritize kb_results for organization-specific questions.` +
+      `\nIf KB search fails, kb_results will be absent (not empty array).`
     : '';
 
   const webSearchTool = tool(
