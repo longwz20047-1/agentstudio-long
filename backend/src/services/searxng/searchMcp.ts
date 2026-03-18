@@ -69,7 +69,6 @@ Parameters:
 Examples:
 - "我的useEffect一直重新渲染停不下来怎么办"
   → query: "React useEffect infinite loop dependency array"
-    kb_query: "useEffect一直重新渲染停不下来怎么办"
     search_type: "code", language: "zh"
 - "那个注意力机制的论文叫什么"
   → query: "Attention Is All You Need transformer paper"
@@ -129,12 +128,14 @@ export async function integrateSearchMcp(
       (kbCount > 0 ? `${kbCount} knowledge base(s)` : '') +
       (kbCount > 0 && docCount > 0 ? ' and ' : '') +
       (docCount > 0 ? `${docCount} specific document(s)` : '') +
-      ` in parallel. You do NOT need to call weknora_search separately.` +
-      `\n- Provide kb_query (user's original question) for best KB matching.` +
+      ` in parallel. You do NOT need to call weknora_search separately — but only when you provide kb_query.` +
+      `\n- You MUST provide kb_query (user's original question) for best KB matching.` +
       `\n- kb_results items: { title, content, score (0-1), match_type, doc_link }.` +
       `\n- Use [title](doc_link) when citing KB sources in your response.` +
       `\n- Prioritize kb_results for organization-specific questions; web results for external context.` +
-      `\n- If KB search fails silently, kb_results will be absent (not empty array).`
+      `\n- If KB search fails silently, kb_results will be absent (not empty array).` +
+      `\n- Example: user asks "K8S pod一直重启怎么办"` +
+      `\n  → query: "kubernetes pod crashloopbackoff restart", kb_query: "K8S pod一直重启怎么办"`
     : '';
 
   const webSearchTool = tool(
@@ -142,7 +143,7 @@ export async function integrateSearchMcp(
     TOOL_DESCRIPTION + kbNote,
     {
       query: z.string().describe('Optimized search keywords'),
-      kb_query: z.string().optional().describe("User's original question in their language for KB semantic search. Recommended when knowledge bases are selected."),
+      kb_query: z.string().optional().describe("User's original question in their language for KB semantic search. MUST provide when knowledge bases are selected."),
       time_range: z.enum(['day', 'week', 'month', 'year']).optional().describe('Time filter for recency'),
       max_results: z.number().min(1).max(10).optional().describe('Max results (default 5)'),
       search_type: z.enum(['general', 'news', 'code', 'academic', 'social']).optional().describe('Content type — determines which engines are used'),
