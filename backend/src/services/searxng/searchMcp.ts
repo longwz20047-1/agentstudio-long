@@ -63,7 +63,7 @@ Parameters:
   - "zh": Chinese (adds Baidu, Sogou, Quark)
   - "en": English
 - time_range: "day", "week", "month", "year" — for recency-sensitive queries
-- max_results: 1-10, default 5. Higher counts reduce per-result content depth.
+- max_results: 1-10, default 5. Higher counts reduce per-result content depth (6000→4000→2500 chars).
   Use 1-3 for precise lookups, 5 for general, 8-10 for broad research.
 
 Examples:
@@ -82,9 +82,9 @@ Tip: For Chinese technical/academic queries, if results lack depth,
 try searching again with English keywords for broader coverage.`;
 
 function getContentMaxLength(maxResults: number): number {
-  if (maxResults <= 5) return 2000;
-  if (maxResults <= 8) return 1200;
-  return 800;
+  if (maxResults <= 5) return 6000;
+  if (maxResults <= 8) return 4000;
+  return 2500;
 }
 
 async function mapWithConcurrency<T, R>(
@@ -207,9 +207,11 @@ export async function integrateSearchMcp(
 
         // Await KB results (usually already resolved by now)
         const rawKb = kbPromise ? await kbPromise : null;
-        const kbResults = rawKb?.map(r => ({
+        const KB_CONTENT_MAX = 3000;
+        const KB_MAX_RESULTS = 8;
+        const kbResults = rawKb?.slice(0, KB_MAX_RESULTS).map(r => ({
           title: r.title,
-          content: r.content.substring(0, contentMaxLength),
+          content: r.content.substring(0, KB_CONTENT_MAX),
           score: r.score,
           match_type: r.match_type,
           doc_link: r.knowledge_id ? `weknora-doc://${r.knowledge_id}` : '',
