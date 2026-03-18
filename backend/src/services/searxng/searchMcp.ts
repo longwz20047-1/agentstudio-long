@@ -136,7 +136,8 @@ export async function integrateSearchMcp(
       (kbCount > 0 ? `${kbCount} knowledge base(s)` : '') +
       (kbCount > 0 && docCount > 0 ? ' and ' : '') +
       (docCount > 0 ? `${docCount} specific document(s)` : '') +
-      `. Results appear in the \`kb_results\` field.`
+      `. Results appear in the \`kb_results\` field. ` +
+      `Provide kb_query with the user's original question in their language for better KB matching.`
     : '';
 
   const webSearchTool = tool(
@@ -144,6 +145,7 @@ export async function integrateSearchMcp(
     TOOL_DESCRIPTION + kbNote,
     {
       query: z.string().describe('Optimized search keywords'),
+      kb_query: z.string().optional().describe('Original user query in their language for KB search (only when kb_results is enabled)'),
       time_range: z.enum(['day', 'week', 'month', 'year']).optional().describe('Time filter for recency'),
       max_results: z.number().min(1).max(10).optional().describe('Max results (default 5)'),
       search_type: z.enum(['general', 'news', 'code', 'academic', 'social']).optional().describe('Content type — determines which engines are used'),
@@ -151,7 +153,7 @@ export async function integrateSearchMcp(
     },
     async (args) => {
       const startTime = Date.now();
-      const { query, time_range, max_results = 5, search_type, language } = args;
+      const { query, kb_query, time_range, max_results = 5, search_type, language } = args;
 
       try {
         // Check search cache
@@ -182,7 +184,7 @@ export async function integrateSearchMcp(
         const hasKbSelection2 = (weknoraContext?.kb_ids?.length ?? 0) > 0
           || (weknoraContext?.knowledge_ids?.length ?? 0) > 0;
         const kbPromise = (weknoraContext?.api_key && hasKbSelection2)
-          ? searchWeKnoraRaw(query, weknoraContext, { timeoutMs: 5_000 })
+          ? searchWeKnoraRaw(kb_query || query, weknoraContext, { timeoutMs: 5_000 })
           : null;
 
         // Step 2: Search via SearXNG
