@@ -97,98 +97,47 @@ Always use the [Document Name](weknora-doc://knowledge_id) link format from the 
     async (args) => {
       const { query } = args;
 
-      // Debug: 工具被调用
-      console.log('🔍 [WeKnora] Tool called with args:', {
+      console.log('🔍 [WeKnora] Tool called:', {
         query,
         kb_ids_count: kb_ids.length,
         knowledge_ids_count: knowledge_ids?.length || 0,
-        base_url,
-        api_key_present: !!api_key,
-        api_key_preview: api_key ? `${api_key.substring(0, 10)}...` : 'MISSING'
       });
 
-      try {
-        const requestUrl = `${base_url}/api/v1/knowledge-search`;
-        const requestBody: Record<string, unknown> = {
-          query: query,
-          knowledge_base_ids: kb_ids.length > 0 ? kb_ids : undefined,
-        };
-        if (knowledge_ids && knowledge_ids.length > 0) {
-          requestBody.knowledge_ids = knowledge_ids;
-        }
+      const results = await searchWeKnoraRaw(query, { api_key, kb_ids, knowledge_ids, base_url });
 
-        console.log('🌐 [WeKnora] Calling API:', requestUrl);
-        console.log('📤 [WeKnora] Request body:', JSON.stringify(requestBody));
-
-        const response = await fetch(requestUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${api_key}`,
-          },
-          body: JSON.stringify(requestBody),
-        });
-
-        console.log('📥 [WeKnora] API response status:', response.status, response.statusText);
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error('❌ [WeKnora] API error:', response.status, errorText);
-          return {
-            content: [{
-              type: 'text',
-              text: `Search failed: HTTP ${response.status} - ${errorText}`
-            }],
-            isError: true,
-          };
-        }
-
-        const data = await response.json();
-        const results = data.data || [];
-
-        console.log('✅ [WeKnora] API success, found', results.length, 'results');
-
-        // Build formatted response
-        let text = `## Search Results\n\n`;
-        text += `**Query:** ${query}\n`;
-        text += `**Found:** ${results.length} results\n\n`;
-
-        if (results.length > 0) {
-          text += '### Matched Documents\n\n';
-          for (let i = 0; i < results.length; i++) {
-            const r = results[i];
-            const title = r.knowledge_title || r.knowledge_filename || r.title || r.name || 'Untitled';
-            const knowledgeId = r.knowledge_id || r.id || '';
-            if (knowledgeId) {
-              text += `#### [${i + 1}] [${title}](weknora-doc://${knowledgeId})\n`;
-            } else {
-              text += `#### [${i + 1}] ${title}\n`;
-            }
-            text += `- **Score:** ${(r.score * 100).toFixed(1)}%\n`;
-            text += `- **Source:** ${r.knowledge_filename || 'Unknown'}\n`;
-            if (r.match_type) {
-              text += `- **Match Type:** ${r.match_type}\n`;
-            }
-            text += `\n> ${r.content?.substring(0, 500)}${r.content?.length > 500 ? '...' : ''}\n\n`;
-          }
-        } else {
-          text += '_No results found. Try different keywords or rephrasing your query._\n';
-        }
-
-        return { content: [{ type: 'text', text }] };
-
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error('[WeKnora] Search error:', error);
-
+      if (results === null) {
         return {
-          content: [{
-            type: 'text',
-            text: `Search error: ${errorMessage}`
-          }],
+          content: [{ type: 'text', text: 'Search failed: unable to reach WeKnora API' }],
           isError: true,
         };
       }
+
+      // Format as markdown (preserving exact output format)
+      let text = `## Search Results\n\n`;
+      text += `**Query:** ${query}\n`;
+      text += `**Found:** ${results.length} results\n\n`;
+
+      if (results.length > 0) {
+        text += '### Matched Documents\n\n';
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i];
+          if (r.knowledge_id) {
+            text += `#### [${i + 1}] [${r.title}](weknora-doc://${r.knowledge_id})\n`;
+          } else {
+            text += `#### [${i + 1}] ${r.title}\n`;
+          }
+          text += `- **Score:** ${(r.score * 100).toFixed(1)}%\n`;
+          text += `- **Source:** ${r.filename}\n`;
+          if (r.match_type) {
+            text += `- **Match Type:** ${r.match_type}\n`;
+          }
+          text += `\n> ${r.content.substring(0, 500)}${r.content.length > 500 ? '...' : ''}\n\n`;
+        }
+      } else {
+        text += '_No results found. Try different keywords or rephrasing your query._\n';
+      }
+
+      return { content: [{ type: 'text', text }] };
     }
   );
 
