@@ -7,6 +7,7 @@ import { SearXNGClient } from './searxngClient.js';
 import { analyzeQuery } from './queryRouter.js';
 import { dedupeAndRank } from './resultProcessor.js';
 import { fetchAndExtract } from './contentExtractor.js';
+import { searchWeKnoraRaw, type WeknoraContext } from '../weknora/weknoraIntegration.js';
 
 const SERVER_NAME = 'searxng-search';
 const TOOL_NAME = 'web_search';
@@ -120,13 +121,27 @@ async function mapWithConcurrency<T, R>(
 
 export async function integrateSearchMcp(
   queryOptions: any,
-  config: SearxngConfig
+  config: SearxngConfig,
+  weknoraContext?: WeknoraContext
 ): Promise<void> {
   const client = new SearXNGClient(config.base_url);
 
+  // Dynamic description: show KB count when available
+  const kbCount = weknoraContext?.kb_ids?.length ?? 0;
+  const docCount = weknoraContext?.knowledge_ids?.length ?? 0;
+  const hasKbSelection = kbCount > 0 || docCount > 0;
+
+  const kbNote = hasKbSelection
+    ? `\n\nNOTE: When knowledge bases are selected, this tool also searches ` +
+      (kbCount > 0 ? `${kbCount} knowledge base(s)` : '') +
+      (kbCount > 0 && docCount > 0 ? ' and ' : '') +
+      (docCount > 0 ? `${docCount} specific document(s)` : '') +
+      `. Results appear in the \`kb_results\` field.`
+    : '';
+
   const webSearchTool = tool(
     TOOL_NAME,
-    TOOL_DESCRIPTION,
+    TOOL_DESCRIPTION + kbNote,
     {
       query: z.string().describe('Optimized search keywords'),
       time_range: z.enum(['day', 'week', 'month', 'year']).optional().describe('Time filter for recency'),
@@ -140,7 +155,13 @@ export async function integrateSearchMcp(
 
       try {
         // Check search cache
-        const cacheKey = getSearchCacheKey(query, time_range, max_results);
+        const kbHash = weknoraContext?.kb_ids?.length
+          ? '|kb:' + weknoraContext.kb_ids.slice().sort().join(',')
+          : '';
+        const kidHash = weknoraContext?.knowledge_ids?.length
+          ? '|kid:' + weknoraContext.knowledge_ids.slice().sort().join(',')
+          : '';
+        const cacheKey = getSearchCacheKey(query, time_range, max_results) + kbHash + kidHash;
         const cached = searchCache.get(cacheKey);
         if (cached && Date.now() < cached.expireAt) {
           console.log('[WebSearch] cache hit:', cacheKey);
@@ -156,6 +177,13 @@ export async function integrateSearchMcp(
           searchTypeOverride: search_type,
           languageOverride: language,
         });
+
+        // Launch KB search in parallel (if context available)
+        const hasKbSelection2 = (weknoraContext?.kb_ids?.length ?? 0) > 0
+          || (weknoraContext?.knowledge_ids?.length ?? 0) > 0;
+        const kbPromise = (weknoraContext?.api_key && hasKbSelection2)
+          ? searchWeKnoraRaw(query, weknoraContext, { timeoutMs: 5_000 })
+          : null;
 
         // Step 2: Search via SearXNG
         const response = await client.search({
@@ -177,6 +205,16 @@ export async function integrateSearchMcp(
           r => fetchAndExtract(r.url, { maxLength: contentMaxLength }),
           MAX_CONCURRENT_FETCHES,
         );
+
+        // Await KB results (usually already resolved by now)
+        const rawKb = kbPromise ? await kbPromise : null;
+        const kbResults = rawKb?.map(r => ({
+          title: r.title,
+          content: r.content.substring(0, contentMaxLength),
+          score: r.score,
+          match_type: r.match_type,
+          doc_link: r.knowledge_id ? `weknora-doc://${r.knowledge_id}` : '',
+        }));
 
         // Step 5: Assemble output
         const results = ranked.map((r, i) => {
@@ -214,6 +252,10 @@ export async function integrateSearchMcp(
           intent: analysis.intent,
           results,
         };
+
+        if (kbResults?.length) {
+          output.kb_results = kbResults;
+        }
 
         if (response.suggestions.length > 0) {
           output.suggestions = response.suggestions;
