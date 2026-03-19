@@ -18,6 +18,7 @@ interface WSClient {
     watchKey: string;
   };
   subscribedSessions: boolean;
+  subscribedCron?: { workingDirectory: string };
 }
 
 let wss: WebSocketServer | null = null;
@@ -173,6 +174,20 @@ async function handleClientMessage(client: WSClient, msg: any): Promise<void> {
         client.subscribedSessions = true;
         try { sendSafe(client, buildSessionMessage()); } catch { /* ignore */ }
       }
+    } else if (msg.channel === 'cron' && typeof msg.agentId === 'string') {
+      try {
+        const { resolveA2AId } = await import('./a2a/agentMappingService.js');
+        const mapping = await resolveA2AId(msg.agentId);
+        if (mapping) {
+          client.subscribedCron = { workingDirectory: mapping.workingDirectory };
+          // Send initial sync
+          const { a2aCronStorage } = await import('./a2a/a2aCronStorage.js');
+          const jobs = a2aCronStorage.loadJobs(mapping.workingDirectory);
+          sendSafe(client, JSON.stringify({ type: 'cron:sync', jobs, timestamp: Date.now() }));
+        }
+      } catch (err) {
+        console.warn('[WebSocket] Failed to subscribe cron:', err);
+      }
     }
   } else if (msg.type === 'unsubscribe') {
     if (msg.channel === 'workspace' && client.workspace) {
@@ -180,6 +195,8 @@ async function handleClientMessage(client: WSClient, msg: any): Promise<void> {
       client.workspace = undefined;
     } else if (msg.channel === 'sessions') {
       client.subscribedSessions = false;
+    } else if (msg.channel === 'cron') {
+      client.subscribedCron = undefined;
     }
   }
 }
@@ -190,6 +207,23 @@ function cleanupClient(client: WSClient): void {
     client.workspace = undefined;
   }
   client.subscribedSessions = false;
+  client.subscribedCron = undefined;
+}
+
+export function broadcastCronEvent(workingDirectory: string, event: {
+  type: 'cron:started' | 'cron:completed' | 'cron:error';
+  jobId: string;
+  runId: string;
+  status?: string;
+  responseSummary?: string;
+  timestamp: number;
+}): void {
+  const message = JSON.stringify(event);
+  for (const client of clients) {
+    if (client.subscribedCron?.workingDirectory === workingDirectory) {
+      sendSafe(client, message);
+    }
+  }
 }
 
 export function shutdownWebSocket(): void {

@@ -9,9 +9,7 @@ import type {
 } from '../../types/a2aCron.js';
 import { a2aCronStorage, A2ACronStorage } from './a2aCronStorage.js';
 import { AgentStorage } from '../agentStorage.js';
-
-// Temporary stub — replaced when websocketService exports broadcastCronEvent (Task 15)
-function broadcastCronEvent(_wd: string, _event: any): void { /* no-op */ }
+import { broadcastCronEvent } from '../websocketService.js';
 
 interface ActiveJob {
   job: CronJob;

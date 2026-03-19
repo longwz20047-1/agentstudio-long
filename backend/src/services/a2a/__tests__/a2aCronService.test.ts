@@ -343,7 +343,7 @@ describe('A2ACronService', () => {
         expect.objectContaining({
           type: 'scheduled',
           scheduledTaskId: job.id,
-          prompt: 'Execute me',
+          message: 'Execute me',
           projectPath: tmpDir,
         })
       );
