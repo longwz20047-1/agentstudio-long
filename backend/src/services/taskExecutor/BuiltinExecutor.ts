@@ -504,38 +504,44 @@ export class BuiltinTaskExecutor implements ITaskExecutor {
           });
         }
       } else if (task.type === 'scheduled') {
-        // Store result for scheduled task
-        const {
-          updateTaskExecution,
-          updateTaskRunStatus,
-        } = await import('../scheduledTaskStorage.js');
-        const { onScheduledTaskComplete } = await import('../schedulerService.js');
-
         // Use scheduledTaskId (original task ID) for storage updates
         // task.id is the executionId, task.scheduledTaskId is the original scheduled task ID
         const scheduledTaskId = task.scheduledTaskId || task.id;
         const executionId = task.id;
 
-        await updateTaskExecution(scheduledTaskId, executionId, {
-          status: result.status === 'completed' ? 'success' : 'error',
-          completedAt: result.completedAt,
-          responseSummary: result.output?.substring(0, 500),
-          sessionId: result.sessionId,
-          error: result.error,
-          errorStack: result.errorStack,
-          logs: result.logs,
-        });
+        if (scheduledTaskId.startsWith('cron_')) {
+          // A2A Cron Job → route to a2aCronService
+          const { a2aCronService } = await import('../a2a/a2aCronService.js');
+          await a2aCronService.onExecutionComplete(executionId, scheduledTaskId, result);
+        } else {
+          // System scheduled task → existing logic
+          const {
+            updateTaskExecution,
+            updateTaskRunStatus,
+          } = await import('../scheduledTaskStorage.js');
+          const { onScheduledTaskComplete } = await import('../schedulerService.js');
 
-        await updateTaskRunStatus(
-          scheduledTaskId,
-          result.status === 'completed' ? 'success' : 'error',
-          result.error
-        );
+          await updateTaskExecution(scheduledTaskId, executionId, {
+            status: result.status === 'completed' ? 'success' : 'error',
+            completedAt: result.completedAt,
+            responseSummary: result.output?.substring(0, 500),
+            sessionId: result.sessionId,
+            error: result.error,
+            errorStack: result.errorStack,
+            logs: result.logs,
+          });
 
-        // Notify scheduler that task execution is complete
-        // This updates runningTaskCount and runningExecutions tracking
-        // Pass executionId (task.id) because that's what's tracked in runningExecutions
-        onScheduledTaskComplete(executionId);
+          await updateTaskRunStatus(
+            scheduledTaskId,
+            result.status === 'completed' ? 'success' : 'error',
+            result.error
+          );
+
+          // Notify scheduler that task execution is complete
+          // This updates runningTaskCount and runningExecutions tracking
+          // Pass executionId (task.id) because that's what's tracked in runningExecutions
+          onScheduledTaskComplete(executionId);
+        }
       }
     } catch (error) {
       console.error(`[TaskExecutor] Error storing result:`, error);

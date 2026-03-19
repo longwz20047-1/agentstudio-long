@@ -24,6 +24,7 @@ import skillsRouter from './routes/skills';
 import pluginsRouter from './routes/plugins';
 import marketplaceSkillsRouter from './routes/marketplaceSkills';
 import a2aRouter from './routes/a2a';
+import a2aCronRouter from './routes/a2aCron';
 import a2aWorkspaceRouter from './routes/a2aWorkspace';
 import a2aManagementRouter from './routes/a2aManagement';
 import scheduledTasksRouter from './routes/scheduledTasks';
@@ -52,6 +53,7 @@ import cookieParser from 'cookie-parser';
 import { runMigrations } from './config/migration.js';
 import { cleanupOrphanedTasks } from './services/a2a/taskCleanup';
 import { initializeScheduler, shutdownScheduler } from './services/schedulerService';
+import { a2aCronService } from './services/a2a/a2aCronService';
 import { initializeTaskExecutor, shutdownTaskExecutor } from './services/taskExecutor/index.js';
 import { tunnelService } from './services/tunnelService.js';
 import { logSdkConfig } from './config/sdkConfig.js';
@@ -379,6 +381,13 @@ const app: express.Express = express();
     console.error('[Scheduler] Error initializing scheduler:', error);
   }
 
+  // 3.1. A2A Cron Service: Initialize cron job scheduling
+  try {
+    a2aCronService.initialize();
+  } catch (error) {
+    console.error('[A2A Cron] Error initializing:', error);
+  }
+
   // 3.5. Share Service: Initialize share routes
   try {
     initShareRoutes();
@@ -488,6 +497,9 @@ const app: express.Express = express();
 
   // A2A Workspace file routes - must be before a2aRouter to avoid double middleware execution
   app.use('/a2a/:a2aAgentId/workspace', httpsOnly, a2aWorkspaceRouter);
+
+  // A2A Cron routes - must be before a2aRouter
+  app.use('/a2a/:a2aAgentId/cron', httpsOnly, a2aCronRouter);
 
   // A2A Protocol routes - Public but require API key authentication and HTTPS in production
   app.use('/a2a/:a2aAgentId', httpsOnly, a2aRouter);
@@ -609,6 +621,14 @@ const app: express.Express = express();
       console.info('[Scheduler] Scheduler stopped');
     } catch (error) {
       console.error('[Scheduler] Error shutting down scheduler:', error);
+    }
+
+    // Stop A2A Cron service
+    try {
+      a2aCronService.shutdown();
+      console.info('[A2A Cron] Service stopped');
+    } catch (error) {
+      console.error('[A2A Cron] Error shutting down:', error);
     }
 
     // 2. Stop marketplace update service

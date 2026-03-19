@@ -90,7 +90,11 @@ class A2ACronService {
       const expr = minutes < 60 ? `*/${minutes} * * * *` : `0 */${minutes / 60} * * *`;
       import('cron-parser').then(({ CronExpressionParser }) => {
         const interval = CronExpressionParser.parse(expr);
-        a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id, interval.next().toISOString());
+        const next = interval.next();
+        const iso = next?.toISOString();
+        if (iso) {
+          a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id, iso);
+        }
       }).catch(() => {
         a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id,
           new Date(Date.now() + minutes * 60 * 1000).toISOString());
@@ -104,7 +108,11 @@ class A2ACronService {
   private computeCronNextRunAt(job: CronJob): void {
     import('cron-parser').then(({ CronExpressionParser }) => {
       const interval = CronExpressionParser.parse(job.schedule.cronExpression!);
-      a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id, interval.next().toISOString());
+      const next = interval.next();
+      const iso = next?.toISOString();
+      if (iso) {
+        a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id, iso);
+      }
     }).catch(() => {
       // cron-parser failure doesn't block scheduling
     });
@@ -227,18 +235,13 @@ class A2ACronService {
       id: run.id,
       type: 'scheduled',
       scheduledTaskId: job.id,
-      prompt: job.triggerMessage,
+      message: job.triggerMessage,
       agentId: job.agentType,
       projectPath: job.workingDirectory,
-      permissionMode: agent.permissionMode || 'acceptEdits',
-      model: agent.model,
+      permissionMode: 'acceptEdits',
+      timeoutMs: job.timeoutMs || 300000,
       maxTurns: job.maxTurns ?? agent.maxTurns,
-      customInstructions: agent.instructions,
-      appendSystemPrompt: agent.appendSystemPrompt,
-      mcpServers: agent.mcpServers,
-      mcpConfigPath: agent.mcpConfigPath,
-      allowedTools: agent.allowedTools,
-      disallowedTools: agent.disallowedTools,
+      createdAt: run.startedAt,
     });
   }
 
