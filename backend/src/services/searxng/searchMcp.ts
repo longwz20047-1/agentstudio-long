@@ -36,6 +36,8 @@ export function _resetSearchCache(): void {
 const TOOL_DESCRIPTION = `Search the web and fetch full page content for comprehensive results.
 Use this tool when the user asks questions that require up-to-date
 information, factual lookup, or external knowledge beyond your training.
+Use weknora_search instead when the question is purely about internal knowledge
+and web results are unnecessary.
 This tool visits each result URL and extracts page content — no need for a separate fetch.
 
 IMPORTANT — How to set "query":
@@ -125,6 +127,7 @@ export async function integrateSearchMcp(
       (kbCount > 0 && docCount > 0 ? ' and ' : '') +
       (docCount > 0 ? `${docCount} specific document(s)` : '') +
       ` in parallel with web search. No need to call weknora_search separately.` +
+      `\nOptimize query primarily for web search quality; KB uses the same query and relies on semantic matching.` +
       `\nThe same optimized query is used for both web and KB search.` +
       `\n` +
       `\nOutput: kb_results contains { title, content, score (0-1), match_type, doc_link }.` +
