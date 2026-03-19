@@ -140,7 +140,7 @@ describe('A2A Cron Routes', () => {
     });
 
     it('GET /jobs/:id should return 404 for nonexistent', async () => {
-      vi.mocked(a2aCronStorage.getJob).mockReturnValue(undefined);
+      vi.mocked(a2aCronStorage.getJob).mockReturnValue(null);
       const res = await request(app).get('/cron/jobs/nonexistent');
       expect(res.status).toBe(404);
     });

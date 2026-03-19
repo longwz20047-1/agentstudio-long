@@ -34,7 +34,7 @@ const CreateCronJobSchema = z.object({
   schedule: CronScheduleSchema,
   sessionTarget: z.enum(['isolated', 'reuse']).optional(),
   enabled: z.boolean().optional(),
-  timeoutMs: z.number().int().min(1000).max(3600000).optional(),
+  timeoutMs: z.number().int().min(10000).max(3600000).optional(),
   maxTurns: z.number().int().min(1).max(100).optional(),
 });
 

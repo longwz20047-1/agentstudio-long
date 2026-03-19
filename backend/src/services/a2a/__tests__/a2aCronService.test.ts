@@ -506,7 +506,7 @@ describe('A2ACronService', () => {
       const result = await a2aCronService.deleteJobFull(tmpDir, job.id);
       expect(result).toBe(true);
       expect(a2aCronService.activeJobs.has(job.id)).toBe(false);
-      expect(storage.getJob(tmpDir, job.id)).toBeUndefined();
+      expect(storage.getJob(tmpDir, job.id)).toBeNull();
     });
 
     it('should return false if job not found', async () => {

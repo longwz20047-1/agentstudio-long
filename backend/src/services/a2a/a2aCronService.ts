@@ -160,8 +160,7 @@ class A2ACronService {
     };
 
     try {
-      // Update storage & memory
-      a2aCronStorage.appendRun(job.workingDirectory, jobId, run);
+      // Update jobs.json & memory (JSONL only gets final status, not 'running')
       a2aCronStorage.updateJobRunStatus(job.workingDirectory, jobId, 'running');
       active.job.lastRunStatus = 'running';
       active.job.lastRunAt = now;
@@ -369,7 +368,7 @@ class A2ACronService {
         try {
           const { a2aHistoryService } = await import('./a2aHistoryService.js');
           for (const log of result.logs) {
-            a2aHistoryService.appendEvent(wd, executionId, log);
+            a2aHistoryService.appendEvent(wd, executionId, log).catch(() => {});
           }
         } catch {
           // history service failure is non-critical
@@ -528,6 +527,8 @@ class A2ACronService {
       if (active.intervalTimer) clearInterval(active.intervalTimer);
     }
     this.activeJobs.clear();
+    this.runningExecutions.clear();
+    this.executingJobIds.clear();
     console.log('[A2A Cron] Service shut down');
   }
 }

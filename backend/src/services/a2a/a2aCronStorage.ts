@@ -13,7 +13,7 @@ const CRON_DIR = '.a2a/cron';
 const JOBS_FILE = 'jobs.json';
 const RUNS_DIR = 'runs';
 const RUNS_MAX_SIZE = 2 * 1024 * 1024; // 2MB auto-prune threshold
-const RUNS_PRUNE_KEEP = 100; // Keep last N runs when pruning
+const RUNS_PRUNE_KEEP = 1000; // Keep last N runs when pruning
 
 export class A2ACronStorage {
   private indexDir: string;
@@ -72,8 +72,8 @@ export class A2ACronStorage {
     fs.writeFileSync(this.getJobsFilePath(wd), JSON.stringify(jobs, null, 2), 'utf-8');
   }
 
-  getJob(wd: string, jobId: string): CronJob | undefined {
-    return this.loadJobs(wd).find(j => j.id === jobId);
+  getJob(wd: string, jobId: string): CronJob | null {
+    return this.loadJobs(wd).find(j => j.id === jobId) ?? null;
   }
 
   createJob(wd: string, req: CreateCronJobRequest, agentType: string): CronJob {
@@ -99,10 +99,10 @@ export class A2ACronStorage {
     return job;
   }
 
-  updateJob(wd: string, jobId: string, req: UpdateCronJobRequest): CronJob | undefined {
+  updateJob(wd: string, jobId: string, req: UpdateCronJobRequest): CronJob | null {
     const jobs = this.loadJobs(wd);
     const idx = jobs.findIndex(j => j.id === jobId);
-    if (idx === -1) return undefined;
+    if (idx === -1) return null;
     const job = jobs[idx];
     if (req.name !== undefined) job.name = req.name;
     if (req.description !== undefined) job.description = req.description;
@@ -124,11 +124,7 @@ export class A2ACronStorage {
     if (idx === -1) return false;
     jobs.splice(idx, 1);
     this.saveJobs(wd, jobs);
-    // Clean up runs file
-    const runsFile = this.getRunsFilePath(wd, jobId);
-    if (fs.existsSync(runsFile)) {
-      fs.unlinkSync(runsFile);
-    }
+    // Preserve runs history file — user can still view execution history
     return true;
   }
 
