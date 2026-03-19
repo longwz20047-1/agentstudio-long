@@ -4,10 +4,8 @@ import type {
   CronJob,
   CronRun,
   CronRunStatus,
-  CreateCronJobRequest,
-  UpdateCronJobRequest,
 } from '../../types/a2aCron.js';
-import { a2aCronStorage, A2ACronStorage } from './a2aCronStorage.js';
+import { a2aCronStorage } from './a2aCronStorage.js';
 import { AgentStorage } from '../agentStorage.js';
 import { broadcastCronEvent } from '../websocketService.js';
 
@@ -524,7 +522,7 @@ class A2ACronService {
   }
 
   shutdown(): void {
-    for (const [_id, active] of this.activeJobs) {
+    for (const [, active] of this.activeJobs) {
       active.cronTask?.stop();
       if (active.timeout) clearTimeout(active.timeout);
       if (active.intervalTimer) clearInterval(active.intervalTimer);

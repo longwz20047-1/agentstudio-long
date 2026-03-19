@@ -56,7 +56,7 @@ router.get('/jobs', (req: A2ARequest, res: Response) => {
     const { workingDirectory } = getContext(req);
     const jobs = a2aCronStorage.loadJobs(workingDirectory);
     res.json({ jobs });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to list jobs' });
   }
 });
@@ -68,7 +68,7 @@ router.get('/jobs/:jobId', (req: A2ARequest, res: Response) => {
     const job = a2aCronStorage.getJob(workingDirectory, req.params.jobId);
     if (!job) return res.status(404).json({ error: 'Job not found' });
     res.json({ job });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to get job' });
   }
 });
@@ -98,7 +98,7 @@ router.post('/jobs', async (req: A2ARequest, res: Response) => {
     }
 
     res.status(201).json({ job });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to create job' });
   }
 });
@@ -126,7 +126,7 @@ router.put('/jobs/:jobId', (req: A2ARequest, res: Response) => {
     a2aCronService.rescheduleJob(job);
 
     res.json({ job });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to update job' });
   }
 });
@@ -138,7 +138,7 @@ router.delete('/jobs/:jobId', async (req: A2ARequest, res: Response) => {
     const deleted = await a2aCronService.deleteJobFull(workingDirectory, req.params.jobId);
     if (!deleted) return res.status(404).json({ error: 'Job not found' });
     res.json({ success: true });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to delete job' });
   }
 });
@@ -157,7 +157,7 @@ router.post('/jobs/:jobId/toggle', (req: A2ARequest, res: Response) => {
 
     a2aCronService.rescheduleJob(job);
     res.json({ job });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to toggle job' });
   }
 });
@@ -176,7 +176,7 @@ router.get('/status', (req: A2ARequest, res: Response) => {
       runningJobs: runningCount,
       registeredJobs: a2aCronService.activeJobs.size,
     });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to get status' });
   }
 });
@@ -202,7 +202,7 @@ router.post('/jobs/:jobId/run', (req: A2ARequest, res: Response) => {
     });
 
     res.json({ message: 'Execution triggered', jobId: job.id });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to trigger execution' });
   }
 });
@@ -218,7 +218,7 @@ router.post('/jobs/:jobId/stop', async (req: A2ARequest, res: Response) => {
     const result = await a2aCronService.stopExecution(req.params.jobId, runId);
     if (!result) return res.status(404).json({ error: 'Running execution not found' });
     res.json({ success: true });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to stop execution' });
   }
 });
@@ -230,7 +230,7 @@ router.get('/jobs/:jobId/runs', (req: A2ARequest, res: Response) => {
     const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
     const runs = a2aCronStorage.getRuns(workingDirectory, req.params.jobId, limit);
     res.json({ runs });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to get runs' });
   }
 });
@@ -242,7 +242,7 @@ router.get('/jobs/:jobId/runs/:runId/history', async (req: A2ARequest, res: Resp
     const { a2aHistoryService } = await import('../services/a2a/a2aHistoryService.js');
     const events = a2aHistoryService.getHistory(workingDirectory, req.params.runId);
     res.json({ events: events || [] });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to get history' });
   }
 });
