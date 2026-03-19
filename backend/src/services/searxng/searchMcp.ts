@@ -178,6 +178,7 @@ export async function integrateSearchMcp(
         // Launch KB search in parallel (if context available)
         const hasKbSelection2 = (weknoraContext?.kb_ids?.length ?? 0) > 0
           || (weknoraContext?.knowledge_ids?.length ?? 0) > 0;
+        const kbStartTime = Date.now();
         const kbPromise = (weknoraContext?.api_key && hasKbSelection2)
           ? searchWeKnoraRaw(query, weknoraContext, { timeoutMs: 5_000 })
           : null;
@@ -205,8 +206,11 @@ export async function integrateSearchMcp(
 
         // Await KB results (usually already resolved by now)
         const rawKb = kbPromise ? await kbPromise : null;
+        const kbSearchMs = kbPromise ? Date.now() - kbStartTime : null;
         const KB_CONTENT_MAX = 3000;
         const KB_MAX_RESULTS = 8;
+        const rawKbCount = rawKb?.length ?? 0;
+        const kbTruncated = rawKbCount > KB_MAX_RESULTS;
         const kbResults = rawKb?.slice(0, KB_MAX_RESULTS).map(r => ({
           title: r.title,
           content: r.content.substring(0, KB_CONTENT_MAX),
@@ -243,8 +247,11 @@ export async function integrateSearchMcp(
           engines: analysis.engines,
           resultCount: ranked.length,
           fetchedCount,
-          kbResultCount: kbResults?.length ?? 0,
           kbEnabled: kbPromise !== null,
+          rawKbCount,
+          kbResultCount: kbResults?.length ?? 0,
+          kbTruncated,
+          kbSearchMs,
           totalMs,
         }));
 

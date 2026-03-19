@@ -68,7 +68,7 @@ agentstudio 负责:
     ├── services/a2a/
     │   ├── a2aCronService.ts               ← 调度逻辑（node-cron + cron-parser + 执行分发 + 内存状态同步）
     │   └── a2aCronStorage.ts               ← 工作空间存储（jobs.json + runs/ + 全局索引互斥锁）
-    └── routes/a2aCron.ts                   ← 10 个 REST API 端点
+    └── routes/a2aCron.ts                   ← 11 个 REST API 端点（含 run history）
 
 需修改:
   backend/src/
@@ -112,6 +112,92 @@ req.a2aContext = {
   apiKeyId: validation.keyId!,
 };
 ```
+
+### weknora-ui → AgentStudio 双认证体系（代码事实）
+
+weknora-ui 对 AgentStudio 使用**两套并行认证**，按路径模式区分：
+
+```
+认证方式 A — apiKey（Bearer Token）
+  路径: /a2a/:agentId/*
+  中间件: a2aAuth.ts（bcryptjs 哈希比较）
+  来源: A2AServerConfig.apiKey（localStorage 存储）
+  请求头: Authorization: Bearer {apiKey}
+
+认证方式 B — JWT（内部管理令牌）
+  路径: /api/*
+  中间件: auth.ts（JWT 验证）
+  来源: useAgentStudioAuth.ts 调用 POST /api/auth/login（admin password），缓存 7 天
+  请求头: Authorization: Bearer {jwt}
+  WebSocket: /ws?token={jwt}（query param）
+```
+
+**各认证方式覆盖的端点**：
+
+| 认证 | 路径模式 | 用途 | 典型端点 |
+|------|---------|------|----------|
+| **apiKey** | `/a2a/:agentId/*` | 运行时操作 | `/messages`（SSE 对话）, `/tasks`（异步任务）, `/skills`, `/.well-known/agent-card.json`, `/workspace/*`（15 个文件操作端点） |
+| **JWT** | `/api/a2a/*` | A2A 管理 | `/api/a2a/history/{projectPath}/{sessionId}`（对话历史）, `/api/a2a/mapping/*`, `/api/a2a/api-keys/*`, `/api/a2a/config/*` |
+| **JWT** | `/api/projects/*` | 项目管理 | `/api/projects`（项目列表）, `/api/projects/{path}/a2a-config` |
+| **JWT** | `/api/agents/*` | Session 管理 | `/api/agents/sessions`（活动 session 列表/关闭） |
+| **JWT** | `/api/kb/*`, `/api/share/*`, `/api/users/*` | 知识库/分享/用户 | KB 标签 CRUD, 分享链接, 用户搜索 |
+| **JWT** | `/ws` | WebSocket | `/ws?token={jwt}`（实时推送：session 状态、workspace 变更） |
+
+**代码引用**（`index.ts:489-584`）：
+```typescript
+// apiKey 认证路由（a2aAuth 在各 router 内部）
+app.use('/a2a/:a2aAgentId/workspace', httpsOnly, a2aWorkspaceRouter);  // :490
+app.use('/a2a/:a2aAgentId', httpsOnly, a2aRouter);                     // :493
+
+// JWT 认证路由（authMiddleware 在挂载时指定）
+app.use('/api/a2a', authMiddleware, a2aManagementRouter);               // :566
+app.use('/api/agents', authMiddleware, agentsRouter);                   // :557
+app.use('/api/projects', authMiddleware, projectsRouter);               // :564
+app.use('/api/kb', authMiddleware, kbRouter);                           // :584
+app.use('/api/share', authMiddleware, shareRouter);                     // :583
+```
+
+**前端实现**（weknora-ui）：
+```typescript
+// apiKey — 直接从 A2AServerConfig 读取，每个请求指定目标服务器
+// api/a2a/index.ts:105 fetchAgentCard()
+headers: { 'Authorization': `Bearer ${config.apiKey}` }
+
+// JWT — useAgentStudioAuth.ts 按 serverUrl 管理独立令牌
+// composables/useAgentStudioAuth.ts:17
+async function getToken(serverUrl: string, adminPassword: string): Promise<string>
+// 内部调用 POST {serverUrl}/api/auth/login，tokenMap 按 serverUrl 缓存
+// adminPassword 实际上是 apiKey（A2AServerConfig.apiKey 兼做 admin password）
+```
+
+**⚠️ JWT 多服务器限制**（`agentStudioRequest.ts` 代码事实）：
+
+`/api/kb/*`、`/api/share/*`、`/api/users/*` 路由使用 `agentStudioRequest.ts` axios 实例，其 JWT 注入逻辑：
+
+```typescript
+// utils/agentStudioRequest.ts:25 — 请求拦截器
+const server = getDefaultServer()  // ← 问题在这里
+if (server) {
+  const jwt = await getToken(server.serverUrl, server.apiKey)
+  config.headers['Authorization'] = `Bearer ${jwt}`
+}
+
+// api/a2a/serverStorage.ts:187-189 — getDefaultServer 实现
+export function getDefaultServer(): { serverUrl: string; apiKey: string } | null {
+  const servers = loadServers()
+  return servers.length > 0 ? servers[0] : null  // ← 固定取 servers[0]，不是当前活跃服务器
+}
+```
+
+**影响**：
+- KB 标签树、分享链接、用户搜索的 JWT **始终来自 servers 数组的第一个服务器**，不跟随用户当前切换的活跃服务器
+- 单 AgentStudio 实例部署无影响（只有一个服务器）
+- 多实例部署时，如果用户切换到第二个服务器操作 KB 标签或分享，JWT 仍指向第一个服务器，可能导致**认证失败或操作到错误的实例**
+- 这不是 cron 设计引入的问题，是现有代码的既有 bug，但 cron 的对话历史回放如果复用此 axios 实例，会受同样影响
+
+**对 cron 设计的影响**：
+- **cron 全部操作在 apiKey 体系内闭环** — CRUD、执行状态、对话历史回放均通过 `/a2a/:agentId/cron/*` 端点（apiKey 认证），前端对目标服务器直接发请求（`serverUrl + apiKey` 成对），不依赖 JWT，不受 `getDefaultServer()` 多服务器 bug 影响
+- **WebSocket cron 订阅**通过已有的 JWT WebSocket 连接发送 — 无需额外认证
 
 ### taskWorker.ts 执行模型（isolated 路径）
 
@@ -690,7 +776,33 @@ class A2ACronStorage {
 export const a2aCronStorage = new A2ACronStorage();
 ```
 
-**runs 自动裁剪**：每次 appendRun 后检查文件大小，超过 2MB 时只保留最新 1000 行（参考 OpenClaw `runLog.maxBytes` + `keepLines`）。
+**runs 自动裁剪**：
+
+```typescript
+// a2aCronStorage.appendRun 内部
+appendRun(wd: string, jobId: string, run: CronRun): void {
+  const filePath = this.getRunsFilePath(wd, jobId);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.appendFileSync(filePath, JSON.stringify(run) + '\n', 'utf-8');
+
+  // 检查文件大小，超过 2MB 时裁剪
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.size > 2 * 1024 * 1024) {
+      this.pruneRuns(wd, jobId, 1000);  // 只保留最新 1000 行
+    }
+  } catch { /* ignore */ }
+}
+
+pruneRuns(wd: string, jobId: string, keepLines: number = 1000): void {
+  const filePath = this.getRunsFilePath(wd, jobId);
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const lines = content.split('\n').filter(l => l.trim());
+  if (lines.length <= keepLines) return;
+  const kept = lines.slice(-keepLines).join('\n') + '\n';
+  fs.writeFileSync(filePath, kept, 'utf-8');
+}
+```
 
 ### 4. 调度服务
 
@@ -702,8 +814,7 @@ import cron from 'node-cron';
 class A2ACronService {
   // 状态
   private activeJobs: Map<string, { job: CronJob; cronTask?: cron.ScheduledTask; timeout?: NodeJS.Timeout; intervalTimer?: ReturnType<typeof setInterval> }>;
-  private runningCount: number;
-  private runningExecutions: Map<string, { jobId: string; startedAt: string }>;
+  private runningExecutions: Map<string, { jobId: string; startedAt: string }>;  // runId → jobId 映射，stopExecution 依赖
   private executingJobIds: Set<string>;   // 进程内乐观锁，防止 manual + cron 并发触发竞态
   private agentStorage: AgentStorage;     // 单例，避免每次执行都 new（构造函数有 I/O 副作用）
 
@@ -713,31 +824,185 @@ class A2ACronService {
 
   // --- Job 调度 ---
   registerJob(job: CronJob): void;       // 根据 schedule.type 注册（cron/interval→node-cron 或 setInterval, once→setTimeout）
+                                          // 注意: nextRunAt 计算使用 cron-parser 的 async import，
+                                          // 但 registerJob 本身是同步的（node-cron/setTimeout/setInterval 注册无需 async），
+                                          // nextRunAt 计算在注册完成后异步执行，不阻塞调度注册
   unregisterJob(jobId: string): void;    // 取消 cron/timeout/interval
   rescheduleJob(job: CronJob): void;     // 更新后重新调度
 
   // --- 执行 ---
   executeJob(jobId: string): Promise<void>;  // 核心：从 activeJobs Map 取 job（含 workingDirectory），根据 sessionTarget 分发
-  stopExecution(runId: string): { success: boolean; message: string };
+  async stopExecution(runId: string): Promise<{ success: boolean; message: string }>;  // 停止执行（async，内部 await cancelTask）
 
   // --- 结果回调（BuiltinExecutor.storeResult 调用，仅 isolated 模式） ---
-  onExecutionComplete(runId: string, jobId: string, result: TaskResult): void;
-  // 实现要点:
-  // 1. 从 activeJobs 取 job（获取 workingDirectory）
-  // 2. 构建 CronRun（status, completedAt, executionTimeMs, responseSummary, sessionId）
-  // 3. a2aCronStorage.appendRun()      — 写 JSONL
-  // 4. a2aCronStorage.updateJobRunStatus() — 更新 jobs.json lastRunStatus（从 running → success/error）
-  // 5. 同步更新内存: active.job.lastRunStatus = finalStatus（确保并发检查读到最新状态）
-  // 6. 若 job.schedule.type === 'once'，自动 disable（执行完毕不再需要）
-  // 7. broadcastCronEvent()             — WebSocket 广播 cron:completed / cron:error
-  // 注意: executingJobIds 已在 executeJob 的 finally 中释放，此处无需再删
+  async onExecutionComplete(runId: string, jobId: string, result: TaskResult): Promise<void>;
 
   // --- 执行分发 ---
   private executeIsolated(job: CronJob, run: CronRun): Promise<void>;
   private executeReuse(job: CronJob, run: CronRun): Promise<void>;
+
+  // --- 删除 Job ---
+  deleteJob(workingDirectory: string, jobId: string): Promise<boolean>;
 }
 
 export const a2aCronService = new A2ACronService();
+```
+
+#### onExecutionComplete — isolated 模式结果回调
+
+由 `BuiltinExecutor.storeResult()` 在 `scheduledTaskId.startsWith('cron_')` 时调用：
+
+```typescript
+async onExecutionComplete(runId: string, jobId: string, result: TaskResult): Promise<void> {
+  const active = this.activeJobs.get(jobId);
+  if (!active) {
+    console.warn(`[A2A Cron] Job ${jobId} not found in activeJobs, skipping result`);
+    return;
+  }
+  const job = active.job;
+
+  // 构建执行记录
+  const finalStatus: CronRunStatus = result.status === 'completed' ? 'success' : 'error';
+  const completedRun: CronRun = {
+    id: runId,
+    jobId,
+    status: finalStatus,
+    startedAt: result.completedAt ? new Date(Date.now() - (result.executionTimeMs || 0)).toISOString() : new Date().toISOString(),
+    completedAt: result.completedAt || new Date().toISOString(),
+    executionTimeMs: result.executionTimeMs,
+    responseSummary: result.output?.substring(0, 500),
+    sessionId: result.sessionId,
+    error: result.error,
+  };
+
+  // 写 JSONL + 更新 jobs.json + 内存同步
+  a2aCronStorage.appendRun(job.workingDirectory, jobId, completedRun);
+  a2aCronStorage.updateJobRunStatus(job.workingDirectory, jobId, finalStatus, result.error);
+  active.job.lastRunStatus = finalStatus;
+  active.job.lastRunAt = completedRun.completedAt;
+
+  // 清理 runningExecutions（stopExecution 依赖此 Map 查找 runId → jobId）
+  this.runningExecutions.delete(runId);
+
+  // isolated 模式的 history 写入：从 TaskResult.logs 构建简化版 A2A history
+  // TaskResult.logs 实际类型: Array<{ timestamp: string; level: 'info'|'warn'|'error'|'debug'; type: string; message: string; data?: Record<string, unknown> }>
+  if (result.logs && result.logs.length > 0) {
+    // ESM 动态导入（避免循环依赖，与 BuiltinExecutor.ts:512 同模式）
+    const { a2aHistoryService } = await import('./a2aHistoryService.js');
+    for (const log of result.logs) {
+      a2aHistoryService.appendEvent(job.workingDirectory, runId, {
+        type: log.type,       // string（自由格式，如 'system', 'tool_use' 等）
+        level: log.level,     // 'info' | 'warn' | 'error' | 'debug'
+        message: log.message,
+        timestamp: log.timestamp,
+        data: log.data,
+      }).catch(() => {});     // fire and forget，不阻塞结果处理
+    }
+  }
+
+  // WebSocket 广播
+  broadcastCronEvent(job.workingDirectory, {
+    type: finalStatus === 'success' ? 'cron:completed' : 'cron:error',
+    jobId, runId, status: finalStatus,
+    responseSummary: completedRun.responseSummary,
+    timestamp: Date.now(),
+  });
+
+  // once 类型自动 disable（isolated 模式在 onExecutionComplete 中处理，
+  //                       因为 executeJob 中的 once disable 在 submitTask 后立即执行，此时结果还没回来）
+  // 注意: executeJob 的 try 块中已有 once disable 逻辑（在 submitTask resolve 后执行），
+  // 但为保险起见，此处再检查一次（幂等操作，重复 disable 无副作用）
+  if (job.schedule.type === 'once' && active.job.enabled) {
+    a2aCronStorage.updateJob(job.workingDirectory, jobId, { enabled: false });
+    active.job.enabled = false;
+    this.unregisterJob(jobId);
+  }
+}
+```
+
+#### stopExecution — 停止正在执行的任务
+
+> **关键代码事实**: `BuiltinExecutor.cancelTask()` 直接调用 `worker.terminate()` + `this.workers.delete(taskId)`，
+> 不会触发 `handleTaskComplete` → `storeResult` → `onExecutionComplete` 回调链。
+> 因此 `stopExecution` 必须自行更新 run/job 状态、写 JSONL、广播 WebSocket 事件。
+
+```typescript
+async stopExecution(runId: string): Promise<{ success: boolean; message: string }> {
+  // 仅支持 isolated 模式（Worker Thread 可终止）
+  // reuse 模式的 sendMessage 执行中无中断机制（已知限制 #2）
+  const executor = getTaskExecutor();
+  const stopped = await executor.cancelTask(runId);  // BuiltinExecutor.cancelTask → worker.terminate()
+  // 注意: cancelTask 返回 Promise<boolean>（async 方法），必须 await
+
+  if (stopped) {
+    // cancelTask 直接终止 worker 并从 workers Map 删除，
+    // 不触发 handleTaskComplete/storeResult/onExecutionComplete。
+    // 必须在此处手动更新状态。
+    const execution = this.runningExecutions.get(runId);
+    if (execution) {
+      const { jobId, startedAt } = execution;
+      const active = this.activeJobs.get(jobId);
+      if (active) {
+        const stoppedRun: CronRun = {
+          id: runId,
+          jobId,
+          status: 'stopped',
+          startedAt,
+          completedAt: new Date().toISOString(),
+          executionTimeMs: Date.now() - new Date(startedAt).getTime(),
+        };
+        a2aCronStorage.appendRun(active.job.workingDirectory, jobId, stoppedRun);
+        a2aCronStorage.updateJobRunStatus(active.job.workingDirectory, jobId, 'stopped');
+        active.job.lastRunStatus = 'stopped';  // 内存同步，解除 running 阻塞
+        broadcastCronEvent(active.job.workingDirectory, {
+          type: 'cron:completed', jobId, runId, status: 'stopped', timestamp: Date.now(),
+        });
+      }
+      this.runningExecutions.delete(runId);
+    }
+    return { success: true, message: `Execution ${runId} stopped` };
+  }
+  return { success: false, message: `Execution ${runId} not found or already completed` };
+}
+```
+
+#### deleteJob — 删除任务完整逻辑
+
+```typescript
+async deleteJob(workingDirectory: string, jobId: string): Promise<boolean> {
+  // 1. 停止调度
+  this.unregisterJob(jobId);
+
+  // 2. 清理 reuse session（如果存在）
+  try {
+    await sessionManager.removeSession(`cron_session_${jobId}`);
+  } catch { /* session 可能不存在，忽略 */ }
+
+  // 3. 从存储删除
+  const deleted = a2aCronStorage.deleteJob(workingDirectory, jobId);
+  if (!deleted) return false;
+
+  // 4. 从内存移除
+  this.activeJobs.delete(jobId);
+
+  // 4.5. 清理 runningExecutions 中该 job 的残留条目（如果执行中被删除）
+  for (const [runId, execution] of this.runningExecutions) {
+    if (execution.jobId === jobId) {
+      this.runningExecutions.delete(runId);
+    }
+  }
+
+  // 5. 如果是该 workspace 最后一个 job，从全局索引移除
+  const remainingJobs = a2aCronStorage.loadJobs(workingDirectory);
+  if (remainingJobs.length === 0) {
+    await a2aCronStorage.removeWorkspaceFromIndex(workingDirectory);
+  }
+
+  // 6. runs 历史文件保留（不删除 runs/{jobId}.jsonl，用户仍可查看历史）
+  // 7. a2a history 文件保留（不删除 .a2a/history/run_*.jsonl）
+
+  return true;
+}
 ```
 
 #### 4.0 registerJob — 三种调度类型
@@ -804,18 +1069,17 @@ registerJob(job: CronJob): void {
     }
     // interval 类型的 nextRunAt: 对使用 cron 表达式的情况用 cron-parser 计算精确时间
     // 对 setInterval 的情况用当前时间 + intervalMinutes 估算
+    // 注意: registerJob 是 void（非 async），nextRunAt 计算用 .then() 异步执行，不阻塞调度注册
     if (minutes < 60 || minutes % 60 === 0) {
       // 使用了 cron 表达式，用 cron-parser 计算更精确的 nextRunAt
-      try {
-        const { parseExpression } = await import('cron-parser');
-        const expr = minutes < 60 ? `*/${minutes} * * * *` : `0 */${minutes / 60} * * *`;
+      const expr = minutes < 60 ? `*/${minutes} * * * *` : `0 */${minutes / 60} * * *`;
+      import('cron-parser').then(({ parseExpression }) => {
         const interval = parseExpression(expr);
-        const nextRunAt = interval.next().toISOString();
-        a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id, nextRunAt);
-      } catch {
-        const nextRunAt = new Date(Date.now() + minutes * 60 * 1000).toISOString();
-        a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id, nextRunAt);
-      }
+        a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id, interval.next().toISOString());
+      }).catch(() => {
+        a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id,
+          new Date(Date.now() + minutes * 60 * 1000).toISOString());
+      });
     } else {
       // setInterval 模式，用估算时间
       const nextRunAt = new Date(Date.now() + minutes * 60 * 1000).toISOString();
@@ -832,14 +1096,13 @@ registerJob(job: CronJob): void {
     this.activeJobs.set(job.id, { job, cronTask });
     // cron 类型的 nextRunAt: 使用 cron-parser 计算下次执行时间
     // 依赖: pnpm add cron-parser（新增依赖，项目当前未安装）
-    try {
-      const { parseExpression } = await import('cron-parser');
-      const interval = parseExpression(job.schedule.cronExpression);
-      const nextRunAt = interval.next().toISOString();
-      a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id, nextRunAt);
-    } catch {
+    // 注意: registerJob 是 void（非 async），用 .then() 异步计算，不阻塞调度注册
+    import('cron-parser').then(({ parseExpression }) => {
+      const interval = parseExpression(job.schedule.cronExpression!);
+      a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id, interval.next().toISOString());
+    }).catch(() => {
       // cron-parser 失败不阻塞调度，nextRunAt 留空
-    }
+    });
   }
 }
 ```
@@ -884,7 +1147,7 @@ private async executeIsolated(job: CronJob, run: CronRun): Promise<void> {
   if (scheduledTaskId.startsWith('cron_')) {
     // A2A Cron Job → 写入 a2aCronStorage
     const { a2aCronService } = await import('../a2a/a2aCronService.js');
-    a2aCronService.onExecutionComplete(task.id, scheduledTaskId, result);
+    await a2aCronService.onExecutionComplete(task.id, scheduledTaskId, result);  // async，内部含 ESM import
   } else {
     // 系统级定时任务 → 保持原逻辑
     // ...existing code...
@@ -943,7 +1206,12 @@ private async executeReuse(job: CronJob, run: CronRun): Promise<void> {
   // 发送消息
   // 注意：sendMessage 在 isProcessing=true 时抛异常，不排队
   // 调用前应由 executeJob 的 lastRunStatus=running 检查拦截
-  // sendMessage 签名: sendMessage(message: string, callback: (response: SDKMessage) => void | Promise<void>): Promise<string>
+  // 二级防护：handleSessionManagement 在 sessionMode='reuse' 时也会检查 sessionManager.isSessionBusy(sessionId)，
+  //          若 session 正忙则抛 'SESSION_BUSY' 异常（sessionUtils.ts reuse 流程），外层 catch 会将 run 标记为 error
+  // sendMessage 签名: sendMessage(message: any, responseCallback: (response: SDKMessage) => void | Promise<void>): Promise<string>
+  //   - 第一参数类型为 any（传 string 可行，SDK 内部处理格式转换）
+  //   - 返回 Promise<string>，resolve 值为 request ID（如 "req_0_170612..."），不是响应内容
+  //   - 响应内容通过 responseCallback 异步回传
   //
   // SDKMessage 类型参考（来自 a2a.ts reuse session 消息处理模式）:
   //   type='assistant' → message.content: Array<{type:'text', text:string} | {type:'tool_use', ...}>
@@ -955,6 +1223,10 @@ private async executeReuse(job: CronJob, run: CronRun): Promise<void> {
     claudeSession.sendMessage(
       job.triggerMessage,
       (sdkMessage: SDKMessage) => {
+        // --- A2A history 写入（每条 SDK 消息都写入，用 run.id 作为 sessionId） ---
+        a2aHistoryService.appendEvent(job.workingDirectory, run.id, sdkMessage)
+          .catch(() => {});  // fire and forget，不阻塞消息处理
+
         // 收集 assistant 文本（参照 a2a.ts reuse session 的 assistant 消息处理）
         if (sdkMessage.type === 'assistant') {
           const content = (sdkMessage as any).message?.content;
@@ -972,7 +1244,7 @@ private async executeReuse(job: CronJob, run: CronRun): Promise<void> {
           });
         }
       }
-    ).catch(reject);  // sendMessage 返回 Promise<string>，可能 reject
+    ).catch(reject);  // sendMessage 返回 Promise<string>（request ID），可能 reject
   });
 
   // 更新执行记录 + 状态 + 内存同步 + WebSocket 广播
@@ -989,6 +1261,8 @@ private async executeReuse(job: CronJob, run: CronRun): Promise<void> {
   // 同步内存状态，确保后续 cron 触发的并发检查读到最新值
   const active = this.activeJobs.get(job.id);
   if (active) active.job.lastRunStatus = finalStatus as CronRunStatus;
+  // 清理 runningExecutions（stopExecution 依赖此 Map）
+  this.runningExecutions.delete(run.id);
   broadcastCronEvent(job.workingDirectory, {
     type: finalStatus === 'success' ? 'cron:completed' : 'cron:error',
     jobId: job.id, runId: run.id, status: finalStatus,
@@ -999,6 +1273,57 @@ private async executeReuse(job: CronJob, run: CronRun): Promise<void> {
 ```
 
 **reuse session 生命周期管理**：
+
+#### 固定 Session ID 设计（`cron_session_{jobId}`）
+
+reuse 模式的核心设计是**每个 cron job 使用固定的 session ID**，而非每次执行生成随机 ID。这个固定 ID 是跨次执行、跨超时、跨重启的**唯一关联键**，承担三个职责：
+
+```
+cron_session_cron_a1b2c3d4
+  │
+  ├── 1. Resume 锚点（上下文保持）
+  │   SDK 历史文件: ~/.claude/projects/{encoded-wd}/cron_session_cron_a1b2c3d4.jsonl
+  │   ├── session 活跃 → getSession() 返回 → 直接 sendMessage（零开销复用）
+  │   ├── session 超时 → 进程死，文件在 → checkSessionExists() = true → resume 加载历史
+  │   ├── 服务重启 → 同超时，SDK 文件保留 → resume 加载历史
+  │   └── 文件被删 → checkSessionExists() = false → 全新 session（唯一真正丢失上下文的场景）
+  │
+  ├── 2. 并发防护锚点
+  │   sessionManager.isSessionBusy('cron_session_cron_a1b2c3d4')
+  │   → 精确检查该 cron job 的 SDK 进程是否正在处理消息
+  │   → handleSessionManagement 的二级防护（第一级是 lastRunStatus 内存检查）
+  │
+  └── 3. 清理锚点
+      删除 job 时: sessionManager.removeSession('cron_session_cron_a1b2c3d4')
+      → 精确终止对应 SDK 进程 + 清除内存索引
+      → 磁盘历史文件保留（removeSession 不删文件）
+```
+
+**为什么不用随机 ID**：如果每次执行用 `run_xxxx` 作为 sessionId，第二次执行找不到上一次的 session，无法复用上下文，退化为 isolated 模式。
+
+**命名规则**：`cron_session_` 前缀 + `jobId`（如 `cron_a1b2c3d4`）。不含冒号（`:`），因为 `sessionManager` 用 `${sessionId}.jsonl` 做文件名，冒号在 Windows 上是非法字符。
+
+**Session 超时后 resume 完整链路**：
+
+```
+第 1 次触发（session 不存在）:
+  handleSessionManagement('cron_session_xxx', reuse)
+    → getSession() = null
+    → checkSessionExists() = false（首次无历史）
+    → createNewSession(agentId, opts, undefined) → 全新 SDK 进程
+    → sendMessage → SDK 写历史到 ~/.claude/projects/.../cron_session_xxx.jsonl
+
+  30 分钟无触发 → sessionManager.cleanupIdleSessions()
+    → session.isIdle(30min) = true
+    → removeSession → session.close()（杀进程） → 清内存 → 不删文件
+
+第 2 次触发（session 已超时）:
+  handleSessionManagement('cron_session_xxx', reuse)
+    → getSession() = null（内存已清）
+    → checkSessionExists() = true（文件还在）
+    → createNewSession(agentId, opts, 'cron_session_xxx') → SDK resume 加载历史
+    → sendMessage → Claude 记得之前的对话
+```
 
 - session ID 固定为 `cron_session_{jobId}`（不含冒号，因为 `sessionManager.checkSessionExists` 用 `${sessionId}.jsonl` 做文件名，冒号在 Windows 上非法）
 - sessionManager 的超时清理机制自动管理（idle timeout 后子进程被 kill）
@@ -1031,9 +1356,59 @@ router.post('/jobs/:jobId/toggle', ...);// 启用/禁用
 router.post('/jobs/:jobId/run', ...);   // 手动触发
 router.post('/jobs/:jobId/stop', ...);  // 停止执行
 router.get('/jobs/:jobId/runs', ...);   // 执行历史
+router.get('/jobs/:jobId/runs/:runId/history', ...);  // 单次执行的完整对话历史（apiKey 认证，a2aHistoryService.getHistory）
 router.get('/status', ...);             // 该工作空间的调度器状态
 
 export default router;
+```
+
+**关键端点实现**：
+
+```typescript
+// DELETE /jobs/:jobId — 删除任务（含 session 清理）
+router.delete('/jobs/:jobId', async (req: A2ARequest, res: Response) => {
+  const { workingDirectory } = req.a2aContext!;
+  const { jobId } = req.params;
+  const deleted = await a2aCronService.deleteJob(workingDirectory, jobId);
+  if (!deleted) return res.status(404).json({ error: 'Job not found' });
+  res.json({ success: true });
+});
+
+// POST /jobs/:jobId/run — 手动触发
+router.post('/jobs/:jobId/run', async (req: A2ARequest, res: Response) => {
+  const { jobId } = req.params;
+  // 异步触发，不等待执行完成
+  a2aCronService.executeJob(jobId).catch(err => {
+    console.error(`[A2A Cron] Manual trigger error for ${jobId}:`, err);
+  });
+  res.json({ success: true, message: 'Job triggered' });
+});
+
+// POST /jobs/:jobId/stop — 停止执行
+router.post('/jobs/:jobId/stop', async (req: A2ARequest, res: Response) => {
+  const { runId } = req.body;
+  if (!runId) return res.status(400).json({ error: 'runId is required' });
+  const result = await a2aCronService.stopExecution(runId);  // async，内部 await cancelTask
+  res.json(result);
+});
+
+// GET /jobs/:jobId/runs/:runId/history — 单次执行的完整对话历史
+router.get('/jobs/:jobId/runs/:runId/history', async (req: A2ARequest, res: Response) => {
+  const { workingDirectory } = req.a2aContext!;
+  const { runId } = req.params;
+  // a2aHistoryService 无 sessionId 格式校验，run_xxxx 直接可用
+  const history = await a2aHistoryService.getHistory(workingDirectory, runId);
+  res.json({ history });
+});
+
+// GET /status — 该工作空间的调度器状态
+router.get('/status', async (req: A2ARequest, res: Response) => {
+  const { workingDirectory } = req.a2aContext!;
+  const jobs = a2aCronStorage.loadJobs(workingDirectory);
+  const activeCount = jobs.filter(j => j.enabled).length;
+  const runningCount = jobs.filter(j => j.lastRunStatus === 'running').length;
+  res.json({ totalJobs: jobs.length, activeCount, runningCount });
+});
 ```
 
 **路由内部认证**（与现有模式一致）：
@@ -1105,6 +1480,12 @@ if (msg.channel === 'cron' && typeof msg.agentId === 'string') {
   resolveA2AId(msg.agentId).then(mapping => {
     if (mapping) {
       client.subscribedCron = { workingDirectory: mapping.workingDirectory };
+      // 订阅成功后立即推送当前 cron jobs 状态（参照 sessions 频道的 buildSessionMessage 模式）
+      // 这能缓解 resolveA2AId 异步期间丢失事件的问题（已知限制 #16）
+      try {
+        const jobs = a2aCronStorage.loadJobs(mapping.workingDirectory);
+        sendSafe(client, JSON.stringify({ type: 'cron:sync', jobs }));
+      } catch { /* ignore — workspace 可能还没有 cron jobs */ }
     }
   }).catch(err => {
     console.error('[WebSocket] Failed to resolve A2A ID for cron subscription:', err);
@@ -1124,6 +1505,7 @@ function cleanupClient(client: WSClient): void {
 }
 
 // 新增广播函数（a2aCronService 调用，按 workingDirectory 过滤）
+// 注意: cron:sync 事件在 subscribe 时单播给订阅者（见上方），不经过此函数
 export function broadcastCronEvent(workingDirectory: string, event: {
   type: 'cron:started' | 'cron:completed' | 'cron:error';
   jobId: string;
@@ -1143,12 +1525,24 @@ export function broadcastCronEvent(workingDirectory: string, event: {
 
 **前端使用**（weknora-ui）：
 
+**WebSocket 事件格式**：
+
+| 事件 | 方向 | 触发时机 | 数据结构 |
+|------|------|---------|---------|
+| `cron:sync` | 后端→前端 | subscribe 完成后立即单播 | `{ type: 'cron:sync', jobs: CronJob[] }` |
+| `cron:started` | 后端→前端 | executeJob 开始 | `{ type: 'cron:started', jobId, runId, timestamp }` |
+| `cron:completed` | 后端→前端 | 执行成功 | `{ type: 'cron:completed', jobId, runId, status: 'success', responseSummary?, timestamp }` |
+| `cron:error` | 后端→前端 | 执行失败 | `{ type: 'cron:error', jobId, runId, status: 'error', timestamp }` |
+
 ```typescript
 // 订阅（传 a2aAgentId，后端自动解析为 workingDirectory）
 const { subscribe, on } = useAgentStudioWS()
 subscribe('cron', { agentId: currentAgentId })
 
 // 监听
+on('cron:sync', (data) => {
+  // 订阅后立即收到当前 jobs 状态（REST 补偿，防止 resolveA2AId 异步期间丢失事件）
+})
 on('cron:started', (data) => {
   // 更新任务状态为"运行中"
 })
@@ -1247,8 +1641,8 @@ shutdown(): void {
 |------|---------|
 | `backend/src/types/a2aCron.ts` | CronJob, CronRun, CronSchedule, CronSessionTarget, API 请求类型 |
 | `backend/src/services/a2a/a2aCronStorage.ts` | 工作空间级 JSONL 存储（jobs CRUD + runs append/prune） |
-| `backend/src/services/a2a/a2aCronService.ts` | 调度核心（node-cron + cron-parser + executeIsolated + executeReuse + 内存状态同步） |
-| `backend/src/routes/a2aCron.ts` | 10 个 REST API 端点 |
+| `backend/src/services/a2a/a2aCronService.ts` | 调度核心（node-cron + cron-parser + executeIsolated + executeReuse + 内存状态同步 + runningExecutions 生命周期） |
+| `backend/src/routes/a2aCron.ts` | 11 个 REST API 端点（含 run history） |
 | `weknora-ui 前端` | 定时任务管理页面 + 类型定义 + API 调用 + cron WebSocket 订阅（参照 session 模式，WebSocket 多连接已就绪） |
 
 ### 新增依赖
@@ -1286,12 +1680,14 @@ shutdown(): void {
 - [ ] 手动触发 (POST /cron/jobs/{id}/run) → 立即执行，不影响正常调度
 - [ ] isolated 快速连续触发（手动 + cron）→ 第二次被 lastRunStatus=running 拦截（内存同步验证）
 - [ ] 停止执行 → Worker Thread 终止，状态标记为 stopped
+- [ ] 停止执行 → JSONL 写入 stopped 记录 + jobs.json lastRunStatus 更新 + runningExecutions 清理 + WebSocket cron:completed(stopped) 广播
+- [ ] 停止执行后重新触发 → lastRunStatus 已非 running，可正常执行
 - [ ] 服务重启 → 从 index 加载 + 孤儿清理 + 重新注册 cron
 
 ### reuse 模式
 - [ ] 创建 job (sessionTarget=reuse) → 首次触发创建 ClaudeSession (cron_session_{jobId})
 - [ ] 后续触发 → 复用同一 ClaudeSession，Claude 记得上次对话
-- [ ] session 超时后再触发 → 自动创建新 session（丢失上下文，属于预期行为）
+- [ ] session 超时后再触发 → 自动创建新 session，SDK resume 加载历史（Claude 记得之前对话）
 - [ ] 删除 reuse job → session 被主动清理 (sessionManager.removeSession)
 - [ ] 上次执行未完成时触发 → lastRunStatus=running 检查跳过，不报错
 - [ ] 修改 maxTurns/timeoutMs → 已有 session 不受影响，需等 session 超时重建后生效（已知限制 #11）
@@ -1317,11 +1713,17 @@ shutdown(): void {
 - [ ] schedulerService（系统级定时任务）不受影响，继续独立运行
 - [ ] 全局索引并发写入 → 多个 createJob/deleteJob 并发调用不丢失 index 条目
 
+### 对话历史
+- [ ] reuse 模式 → sendMessage 回调中用 `run.id` 作为 sessionId 写入 `a2aHistoryService.appendEvent()`
+- [ ] isolated 模式 → Worker 通过 postMessage 传递事件到主线程，主线程写入 `a2aHistoryService`
+- [ ] `GET /a2a/:agentId/cron/jobs/:jobId/runs/:runId/history`（apiKey 认证）→ 返回完整对话事件流
+- [ ] 前端执行历史页面 → 从 `CronRun.id` 获取 `runId` → 调用同一 serverUrl 的 cron history API → 渲染完整对话
+
 ## 已知限制
 
 1. **reuse 模式不支持并发**：`claudeSession.sendMessage()` 在 `isProcessing=true` 时抛异常（`claudeSession.ts:200-203`，不排队），通过 `lastRunStatus=running` 检查跳过防护
-2. **reuse 模式无法中途停止**：`stopExecution` 仅支持 isolated 模式（终止 Worker Thread），reuse 模式的 sendMessage 执行中无中断机制
-3. **reuse session 无超时配置**：使用 sessionManager 的默认超时，不可自定义。服务重启等同于超时，上下文丢失（预期行为）
+2. **reuse 模式无法中途停止**：`stopExecution` 仅支持 isolated 模式（终止 Worker Thread），reuse 模式的 sendMessage 执行中无中断机制。**关键代码事实**：`BuiltinExecutor.cancelTask()` 直接调用 `worker.terminate()` + `workers.delete(taskId)`，不触发 `handleTaskComplete` → `storeResult` → `onExecutionComplete` 回调链，因此 `stopExecution` 内部自行更新 run/job 状态（详见 `stopExecution` 实现）
+3. **reuse session 无超时配置**：使用 sessionManager 的默认超时（30 分钟无活动），不可自定义。session 超时后 SDK 进程被 kill，但**历史文件保留在磁盘**（`~/.claude/projects/{encoded-wd}/cron_session_{jobId}.jsonl`）。下次触发时 `handleSessionManagement` 检测到历史文件存在，使用 SDK 的 resume 机制加载历史上下文，**Claude 能看到之前的对话**。仅在历史文件被手动删除或服务器迁移时才会真正丢失上下文
 4. **全局索引并发写入**：`a2a-cron-index.json` 使用进程内 Promise chain 互斥锁序列化读-改-写操作，防止并发请求丢失更新。磁盘满或进程崩溃仍可能导致损坏，启动时校验 JSON 格式，损坏时从各 workspace 重建
 5. **无重试机制**：首版不实现，执行失败即标记 error，等下次 cron 触发
 6. **无模型覆盖**：使用 Agent 配置的默认模型，不支持 per-job 覆盖（后续可加）
@@ -1336,6 +1738,13 @@ shutdown(): void {
 15. **无全局并发限制**：现有 `schedulerService` 有 `maxConcurrent` 配置（默认 20），A2A Cron 只有 per-job 并发控制，没有全局上限。大量 cron job 同时触发可能耗尽资源。后续可在 `executeJob` 开头加 `runningExecutions.size >= MAX_CONCURRENT_CRON_RUNS` 检查
 16. **WebSocket cron 订阅异步竞态**：`resolveA2AId` 是 async 函数，subscribe 消息处理中用 `.then()` 解析。在解析完成前广播的 cron 事件会丢失。影响：首次订阅后极短窗口内可能丢一个事件，前端可通过 REST 补偿（类似 sessions 频道 subscribe 后立即发送当前状态）
 17. **reuse 模式 configSnapshot 未传入**：`handleSessionManagement` 调用时省略第 8 参数 `configSnapshot`，Agent 配置（allowedTools、systemPrompt 等）变更后 reuse session 不会检测差异，继续使用旧配置的 SDK 进程。需等 session 超时重建后生效。与限制 #11（maxTurns）是同类问题，影响范围更广
+18. **Cron 执行 A2A 对话历史** ✅ **已在设计中解决**：两种执行模式均已接入 `a2aHistoryService.appendEvent()`，使用 `CronRun.id`（如 `run_x1y2`）作为 history sessionId，每次执行生成独立的 history 文件 `{wd}/.a2a/history/{runId}.jsonl`：
+    - **isolated 模式**：在 `onExecutionComplete` 回调中从 `TaskResult.logs`（含 `type`、`level`、`message`、`timestamp`、`data` 字段）构建简化版 A2A history，通过 ESM `await import()` 动态导入 `a2aHistoryService`
+    - **reuse 模式**：在 `executeReuse` 的 `sendMessage` 回调中对每个 `SDKMessage` 直接调用 `a2aHistoryService.appendEvent()`，实时写入完整事件流
+    - **读取端**：新增 `GET /a2a/:agentId/cron/jobs/:jobId/runs/:runId/history`（apiKey 认证，与其他 cron API 一致），内部调用 `a2aHistoryService.getHistory(workingDirectory, runId)`
+    - **为什么不复用现有 JWT 端点**：cron 全部操作在 apiKey 体系内闭环，避免 `getDefaultServer()` 多服务器 bug 影响
+    - **前端数据流**：执行历史列表（`CronRun[]`）→ 点击"查看完整对话"→ 同一 serverUrl + apiKey 调用 cron history API → 渲染完整对话
+19. **认证性能：bcrypt 哈希比较**：`validateApiKey` 每次 API 调用都做 bcrypt 哈希比较（遍历所有未撤销的 key，逐个 `bcrypt.compare`）。高频 cron 触发（如每分钟）叠加 CRUD API 调用可能产生认证开销。但 cron 执行本身不经过 API（由 `a2aCronService` 直接调用），只有 CRUD 操作经过认证，影响可控
 
 ## API 输入校验规则
 
@@ -1403,6 +1812,9 @@ async executeJob(jobId: string): Promise<void> {
   // 创建 run 记录
   const run: CronRun = { id: `run_${uuid().slice(0,8)}`, jobId, status: 'running', startedAt: new Date().toISOString() };
 
+  // 注册到 runningExecutions Map（stopExecution 依赖此 Map 查找 runId → jobId）
+  this.runningExecutions.set(run.id, { jobId, startedAt: run.startedAt });
+
   // running 状态同时更新 jobs.json 和内存（确保并发检查读到最新状态）
   // JSONL 只在最终完成/失败时写一条记录，避免 getRuns 返回重复条目
   a2aCronStorage.updateJobRunStatus(job.workingDirectory, jobId, 'running');
@@ -1439,6 +1851,7 @@ async executeJob(jobId: string): Promise<void> {
     a2aCronStorage.appendRun(job.workingDirectory, jobId, completedRun);  // JSONL 唯一写入点
     a2aCronStorage.updateJobRunStatus(job.workingDirectory, jobId, 'error', errorMsg);
     active.job.lastRunStatus = 'error';  // 同步内存
+    this.runningExecutions.delete(run.id);  // 清理 runningExecutions
     broadcastCronEvent(job.workingDirectory, {
       type: 'cron:error', jobId, runId: run.id, status: 'error', timestamp: Date.now(),
     });
@@ -1451,6 +1864,8 @@ async executeJob(jobId: string): Promise<void> {
 **JSONL 写入规则**：每个 run 只写入一条最终状态记录（`success` / `error` / `stopped`），不写入中间状态 `running`。`running` 状态仅存在于 `jobs.json` 的 `lastRunStatus` 字段（磁盘+内存同步）和 WebSocket 的 `cron:started` 事件中。这确保 `getRuns()` 返回的每条记录都是最终结果，无需去重。
 
 **内存状态同步规则**：所有 `updateJobRunStatus` 调用后，必须同步更新 `activeJobs` Map 中的 `active.job.lastRunStatus`。这确保 `executeJob` 开头的 `lastRunStatus === 'running'` 检查读到最新状态，避免 isolated 模式下 `submitTask()` 异步入队后、`executingJobIds` 释放后的并发窗口中出现重复执行。
+
+**`runningExecutions` Map 生命周期**：`executeJob` 创建 run 后 `set(runId, { jobId, startedAt })`，在 `onExecutionComplete`（isolated 完成）、`executeReuse`（reuse 完成）、`stopExecution`（手动停止）、`executeJob catch`（异常）四处 `delete(runId)`。`stopExecution` 依赖此 Map 将 `runId` 映射回 `jobId` 以更新正确的 job 状态。
 
 **once 类型自动 disable**：`once` 类型 job 在 try 块末尾（执行成功后）自动设 `enabled: false` 并调用 `unregisterJob`。这确保前端显示正确状态，服务重启后不会因 `delay <= 0` 误判。
 
