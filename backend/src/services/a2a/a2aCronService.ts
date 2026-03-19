@@ -243,9 +243,103 @@ class A2ACronService {
     });
   }
 
-  private async executeReuse(_job: CronJob, _run: CronRun): Promise<void> {
-    // TODO: Implement in Task 10
-    throw new Error('executeReuse not yet implemented');
+  private async executeReuse(job: CronJob, run: CronRun): Promise<void> {
+    const fixedSessionId = `cron_session_${job.id}`;
+
+    const agent = this.agentStorage.getAgent(job.agentType);
+    if (!agent) throw new Error(`Agent not found: ${job.agentType}`);
+
+    // Build query options (a2aStreamEnabled=false since cron has no SSE consumer)
+    const { buildQueryOptions } = await import('../../utils/claudeUtils.js');
+    const mcpTools = agent.allowedTools
+      .filter((tool: any) => tool.enabled && tool.name.startsWith('mcp__'))
+      .map((tool: any) => tool.name);
+    const { queryOptions } = await buildQueryOptions(
+      agent,
+      job.workingDirectory,
+      mcpTools.length > 0 ? mcpTools : undefined,
+      'acceptEdits',
+      undefined, // model
+      undefined, // claudeVersion
+      undefined, // defaultEnv
+      undefined, // userEnv
+      undefined, // sessionIdForAskUser
+      undefined, // agentIdForAskUser
+      false,     // a2aStreamEnabled
+    );
+
+    // Get or create reuse session
+    const { handleSessionManagement } = await import('../../utils/sessionUtils.js');
+    const { claudeSession } = await handleSessionManagement(
+      job.agentType,
+      fixedSessionId,
+      job.workingDirectory,
+      queryOptions,
+      undefined, // claudeVersionId
+      undefined, // modelId
+      'reuse',
+    );
+
+    // Send message and collect response
+    const { a2aHistoryService } = await import('./a2aHistoryService.js');
+    let fullResponse = '';
+    const result = await new Promise<{ status: string; response: string }>((resolve, reject) => {
+      claudeSession.sendMessage(
+        job.triggerMessage,
+        (sdkMessage: any) => {
+          // Write each SDK message to history (fire and forget)
+          a2aHistoryService.appendEvent(job.workingDirectory, run.id, sdkMessage)
+            .catch(() => {});
+
+          // Collect assistant text
+          if (sdkMessage.type === 'assistant') {
+            const content = sdkMessage.message?.content;
+            if (Array.isArray(content)) {
+              for (const block of content) {
+                if (block.type === 'text') fullResponse += block.text;
+              }
+            }
+          }
+          // Resolve on result message
+          if (sdkMessage.type === 'result') {
+            resolve({
+              status: sdkMessage.subtype || 'success',
+              response: fullResponse,
+            });
+          }
+        }
+      ).catch(reject);
+    });
+
+    // Update run status + memory + broadcast
+    const finalStatus: CronRunStatus = result.status === 'success' ? 'success' : 'error';
+    const completedAt = new Date().toISOString();
+    const completedRun: CronRun = {
+      ...run,
+      status: finalStatus,
+      completedAt,
+      executionTimeMs: Date.now() - new Date(run.startedAt).getTime(),
+      responseSummary: result.response.substring(0, 500),
+      sessionId: fixedSessionId,
+    };
+    a2aCronStorage.appendRun(job.workingDirectory, job.id, completedRun);
+    a2aCronStorage.updateJobRunStatus(job.workingDirectory, job.id, finalStatus);
+
+    const active = this.activeJobs.get(job.id);
+    if (active) {
+      active.job.lastRunStatus = finalStatus;
+      active.job.lastRunAt = completedAt;
+    }
+    this.runningExecutions.delete(run.id);
+
+    broadcastCronEvent(job.workingDirectory, {
+      type: finalStatus === 'success' ? 'cron:completed' : 'cron:error',
+      jobId: job.id,
+      runId: run.id,
+      status: finalStatus,
+      responseSummary: completedRun.responseSummary,
+      timestamp: Date.now(),
+    });
   }
 
   async onExecutionComplete(executionId: string, cronJobId: string, result: any): Promise<void> {

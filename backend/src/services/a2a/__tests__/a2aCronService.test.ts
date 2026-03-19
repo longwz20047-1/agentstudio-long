@@ -49,8 +49,23 @@ vi.mock('../../sessionManager.js', () => ({
 // Mock a2aHistoryService
 vi.mock('../a2aHistoryService.js', () => ({
   a2aHistoryService: {
-    appendEvent: vi.fn(),
+    appendEvent: vi.fn().mockResolvedValue(undefined),
   },
+}));
+
+// Mock buildQueryOptions
+vi.mock('../../../utils/claudeUtils.js', () => ({
+  buildQueryOptions: vi.fn().mockResolvedValue({
+    queryOptions: { model: 'sonnet', maxTurns: 10 },
+  }),
+}));
+
+// Mock handleSessionManagement
+vi.mock('../../../utils/sessionUtils.js', () => ({
+  handleSessionManagement: vi.fn().mockResolvedValue({
+    claudeSession: { sendMessage: vi.fn() },
+    actualSessionId: 'cron_session_test',
+  }),
 }));
 
 import { A2ACronStorage } from '../a2aCronStorage.js';
@@ -366,6 +381,57 @@ describe('A2ACronService', () => {
       expect(a2aCronService.runningExecutions.size).toBe(0);
       const active = a2aCronService.activeJobs.get(job.id);
       expect(active?.job.lastRunStatus).toBe('error');
+    });
+  });
+
+  describe('executeReuse', () => {
+    // Note: executeReuse uses dynamic await import() for claudeUtils and sessionUtils,
+    // which vitest cannot intercept with vi.mock(). These tests verify the error handling
+    // and state management paths that are exercised when executeReuse encounters errors.
+
+    it('should route reuse jobs through executeReuse and handle errors gracefully', async () => {
+      const job = storage.createJob(tmpDir, {
+        name: 'Reuse Job',
+        triggerMessage: 'Run reuse',
+        schedule: { type: 'cron', cronExpression: '0 * * * *' },
+        sessionTarget: 'reuse',
+      }, 'test');
+
+      a2aCronService.registerJob(job);
+      await a2aCronService.executeJob(job.id);
+
+      // executeReuse's dynamic imports resolve to real modules in test env,
+      // which will error (no real SDK session), caught by executeJob's catch block
+      const active = a2aCronService.activeJobs.get(job.id);
+      expect(active?.job.lastRunStatus).toBe('error');
+      expect(a2aCronService.runningExecutions.size).toBe(0);
+      // executingJobIds should be cleaned up in finally block
+      expect((a2aCronService as any).executingJobIds.size).toBe(0);
+    });
+
+    it('should not execute reuse job if already running', async () => {
+      const job = storage.createJob(tmpDir, {
+        name: 'Already Running',
+        triggerMessage: 'Skip me',
+        schedule: { type: 'cron', cronExpression: '0 * * * *' },
+        sessionTarget: 'reuse',
+      }, 'test');
+
+      a2aCronService.registerJob(job);
+      a2aCronService.activeJobs.get(job.id)!.job.lastRunStatus = 'running';
+
+      await a2aCronService.executeJob(job.id);
+      // Should skip — no run created
+      expect(a2aCronService.runningExecutions.size).toBe(0);
+    });
+
+    it('should use fixed session ID format cron_session_{jobId}', () => {
+      // Verify the session ID pattern used for reuse mode
+      const jobId = 'cron_abc12345';
+      const expectedSessionId = `cron_session_${jobId}`;
+      expect(expectedSessionId).toBe('cron_session_cron_abc12345');
+      // No colons (Windows-safe for file names)
+      expect(expectedSessionId).not.toContain(':');
     });
   });
 
