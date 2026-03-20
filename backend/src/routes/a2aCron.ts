@@ -190,11 +190,8 @@ router.post('/jobs/:jobId/run', (req: A2ARequest, res: Response) => {
     const job = a2aCronStorage.getJob(workingDirectory, req.params.jobId);
     if (!job) return res.status(404).json({ error: 'Job not found' });
 
-    // Ensure job is in activeJobs (register if not)
-    if (!a2aCronService.activeJobs.has(job.id)) {
-      // Temporarily register for execution (even if disabled)
-      a2aCronService.activeJobs.set(job.id, { job } as any);
-    }
+    // Ensure job is in activeJobs for manual execution
+    a2aCronService.ensureRegisteredForManualRun(job);
 
     // Trigger async — don't await
     a2aCronService.executeJob(job.id).catch(err => {

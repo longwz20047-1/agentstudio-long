@@ -18,7 +18,7 @@ interface ActiveJob {
 
 class A2ACronService {
   readonly activeJobs = new Map<string, ActiveJob>();
-  readonly runningExecutions = new Map<string, { jobId: string; runId: string; startedAt: string }>();
+  readonly runningExecutions = new Map<string, { jobId: string; startedAt: string; workingDirectory: string }>();
   private executingJobIds = new Set<string>();
   private agentStorage = new AgentStorage();
 
@@ -128,6 +128,12 @@ class A2ACronService {
     this.registerJob(job);
   }
 
+  ensureRegisteredForManualRun(job: CronJob): void {
+    if (!this.activeJobs.has(job.id)) {
+      this.activeJobs.set(job.id, { job });
+    }
+  }
+
   // --- Execution ---
 
   async executeJob(jobId: string): Promise<void> {
@@ -166,7 +172,7 @@ class A2ACronService {
       active.job.lastRunAt = now;
 
       // Register in runningExecutions
-      this.runningExecutions.set(runId, { jobId, runId, startedAt: now });
+      this.runningExecutions.set(runId, { jobId, startedAt: now, workingDirectory: job.workingDirectory });
 
       // Broadcast cron:started
       broadcastCronEvent(job.workingDirectory, {
@@ -183,8 +189,8 @@ class A2ACronService {
         await this.executeIsolated(job, run);
       }
 
-      // Handle once type auto-disable
-      if (job.schedule.type === 'once') {
+      // Handle once type auto-disable (reuse mode only — isolated completes async via onExecutionComplete)
+      if (job.schedule.type === 'once' && job.sessionTarget === 'reuse') {
         a2aCronStorage.updateJob(job.workingDirectory, jobId, { enabled: false });
         active.job.enabled = false;
         this.unregisterJob(jobId);
@@ -357,8 +363,8 @@ class A2ACronService {
       error: result.error,
     };
 
-    // Get workingDirectory from active job or storage
-    const wd = active?.job.workingDirectory;
+    // Get workingDirectory from active job or runningExecutions fallback
+    const wd = active?.job.workingDirectory ?? runInfo?.workingDirectory;
     if (wd) {
       a2aCronStorage.appendRun(wd, cronJobId, completedRun);
       a2aCronStorage.updateJobRunStatus(wd, cronJobId, status, result.error);

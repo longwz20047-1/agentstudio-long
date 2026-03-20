@@ -128,13 +128,14 @@ export class A2ACronStorage {
     return true;
   }
 
-  updateJobRunStatus(wd: string, jobId: string, status: CronRunStatus, error?: string): void {
+  updateJobRunStatus(wd: string, jobId: string, status: CronRunStatus, error?: string, timestamp?: string): void {
     const jobs = this.loadJobs(wd);
     const idx = jobs.findIndex(j => j.id === jobId);
     if (idx === -1) return;
     jobs[idx].lastRunStatus = status;
-    jobs[idx].lastRunAt = new Date().toISOString();
+    jobs[idx].lastRunAt = timestamp || new Date().toISOString();
     if (error !== undefined) jobs[idx].lastRunError = error;
+    if (status === 'success') jobs[idx].lastRunError = undefined; // clear stale error
     jobs[idx].updatedAt = new Date().toISOString();
     this.saveJobs(wd, jobs);
   }

@@ -448,8 +448,8 @@ describe('A2ACronService', () => {
       const runId = 'run_test001';
       a2aCronService.runningExecutions.set(runId, {
         jobId: job.id,
-        runId,
         startedAt: new Date().toISOString(),
+        workingDirectory: tmpDir,
       });
 
       await a2aCronService.onExecutionComplete(runId, job.id, {
@@ -476,8 +476,8 @@ describe('A2ACronService', () => {
       const runId = 'run_stop001';
       a2aCronService.runningExecutions.set(runId, {
         jobId: job.id,
-        runId,
         startedAt: new Date().toISOString(),
+        workingDirectory: tmpDir,
       });
 
       const result = await a2aCronService.stopExecution(job.id, runId);

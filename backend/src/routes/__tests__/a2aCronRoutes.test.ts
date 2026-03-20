@@ -32,6 +32,7 @@ vi.mock('../../services/a2a/a2aCronService.js', () => ({
     deleteJobFull: vi.fn().mockResolvedValue(true),
     executeJob: vi.fn().mockResolvedValue(undefined),
     stopExecution: vi.fn().mockResolvedValue(true),
+    ensureRegisteredForManualRun: vi.fn(),
     activeJobs: new Map(),
   },
 }));
