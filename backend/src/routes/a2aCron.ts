@@ -237,7 +237,7 @@ router.get('/jobs/:jobId/runs/:runId/history', async (req: A2ARequest, res: Resp
   try {
     const { workingDirectory } = getContext(req);
     const { a2aHistoryService } = await import('../services/a2a/a2aHistoryService.js');
-    const events = a2aHistoryService.getHistory(workingDirectory, req.params.runId);
+    const events = await a2aHistoryService.getHistory(workingDirectory, req.params.runId);
     res.json({ events: events || [] });
   } catch {
     res.status(500).json({ error: 'Failed to get history' });
