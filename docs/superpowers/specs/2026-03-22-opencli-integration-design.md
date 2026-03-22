@@ -99,12 +99,8 @@ AgentStudio Backend:
   +-- MCP Tool Handler
   |     1. PermissionEngine: "bilibili/search" -> "read" -> allow
   |     2. CommandExecutor: opencli bilibili search --keyword "LLM" --limit 10 -f json
-  |     3. OutputFormatter: JSON array -> Markdown table + structured data
-  |     4. Return: { content: [{ type: 'text', text: JSON.stringify({
-  |          __opencli_meta: { site, action, resultCount, columns },
-  |          __opencli_data: [...],
-  |          display: "| title | author | views |..."
-  |        })}]}
+  |     3. OutputFormatter: JSON array -> Markdown table
+  |     4. Return: { content: [{ type: 'text', text: markdownTable }] }
   |
   +-- Claude continues reasoning with Markdown table
   |
@@ -112,7 +108,8 @@ AgentStudio Backend:
   |
 weknora-ui Frontend:
   +-- ToolCallRenderer detects mcp__opencli-media__ prefix
-  +-- Parses __opencli_meta -> routes to OpenCliListCard
+  +-- Extracts site='bilibili' from tool name, action='search' from toolCall.input
+  +-- JSON.parse(toolCall.result) -> array with url field -> OpenCliListCard
   +-- OpenCliListCard renders video list with titles, view counts, links
 ```
 
@@ -267,7 +264,8 @@ When `opencli list` returns sites not in DOMAIN_MAPPING, PlatformRegistry logs a
   - `CLI_NOT_FOUND`: opencli not installed
   - `EXEC_ERROR`: Other errors
 - Shell injection prevention: argument values quoted and escaped
-- Remote mode: passes `OPENCLI_REMOTE_URL` as environment variable
+- **Positional arguments**: 79 of 329 args are positional (`opencli twitter search <query>` not `--query`). CommandExecutor must check `arg.positional` and emit bare values before named flags
+- Remote mode: passes `OPENCLI_CDP_ENDPOINT` environment variable for remote Chrome CDP connection (verified env var: `OPENCLI_CDP_ENDPOINT`, `OPENCLI_DAEMON_PORT`, `OPENCLI_CDP_TARGET`, `OPENCLI_HEADLESS`)
 
 ### 4.3 PermissionEngine
 
@@ -304,27 +302,40 @@ neteasemusic: like (1)
 ### 4.4 BridgeManager
 
 - Runs `opencli doctor` to check daemon (:19825) and extension status
-- Determines mode: local (direct Chrome) / remote (OPENCLI_REMOTE_URL) / disconnected
+- Determines mode: local (direct Chrome) / remote (`OPENCLI_CDP_ENDPOINT` set) / disconnected
 - Assesses per-platform availability (public commands always available, browser commands depend on Bridge)
 - Exposes status via REST API for management console
 
 ### 4.5 OutputFormatter
 
-Dual-format output for both Claude and frontend:
+**Design decision**: Return **pure Markdown** to Claude (not JSON). Frontend determines card type from `toolCall.input` (which contains `action` and site info from the MCP tool name), then parses `toolCall.result` as JSON for rich rendering. This matches existing patterns (WebSearchToolCard parses result string, FirecrawlScrapeCard parses JSON from result).
 
+Rationale: Existing MCP tools all return plain text/Markdown. Embedding JSON metadata in the result string would degrade Claude's reasoning quality (it would see JSON instead of a readable table).
+
+**For Claude** (MCP tool return value):
 ```typescript
-{
-  __opencli_meta: {           // Frontend card routing
-    site: string,
-    action: string,
-    resultCount: number,
-    columns: string[],
-  },
-  __opencli_data: any,        // Frontend card rendering (raw JSON)
-  display: string,            // Claude reading (Markdown table/list)
+return {
+  content: [{
+    type: 'text',
+    text: markdownTable  // Pure Markdown table, Claude reads this
+  }]
+};
+```
+
+**For frontend** (card routing):
+```typescript
+// ToolCallRenderer.vue
+if (toolName.startsWith('mcp__opencli-')) {
+  // Extract site name from tool name: mcp__opencli-media__bilibili → bilibili
+  const site = toolName.split('__')[2];
+  // Extract action from toolCall.input.action
+  const action = toolCall.input?.action;
+  // Try JSON.parse(toolCall.result) for structured data
+  // Fall back to text display if parse fails
 }
 ```
 
+**Markdown generation** (OutputFormatter):
 - Array data -> Markdown table (columns from command metadata, values truncated at 80 chars)
 - Object data -> Key-value list
 - Error data -> Error message with classification
@@ -346,9 +357,8 @@ Orchestrates all components to dynamically generate and register MCP servers:
 interface OpenCliContext {
   enabled: boolean;
   enabledDomains: string[];      // e.g., ['social', 'news', 'media']
-  remoteConfig?: {
-    url: string;                 // e.g., 'http://192.168.1.100:19825'
-  };
+  cdpEndpoint?: string;          // e.g., 'ws://192.168.1.100:9222/devtools/browser/...'
+  daemonPort?: number;           // Override daemon port (default 19825)
 }
 
 // Added to BuildQueryExtendedOptions
@@ -384,13 +394,25 @@ This introduces **prefix-based routing**, a new pattern. The existing codebase u
 ```typescript
 // New pattern: prefix-based routing for opencli tools
 if (toolName.startsWith('mcp__opencli-')) {
-  const parsed = parseOpenCliResult(toolCall.result);
-  if (!parsed) return McpToolCard;  // parse fail -> fallback
-  // Route by site (finance/desktop) or by data shape (list/table/content/status)
+  // Extract site from tool name: mcp__opencli-media__bilibili → bilibili
+  const site = toolName.split('__')[2];
+  const action = toolCall.input?.action as string;
+
+  // Try parsing result as JSON (opencli -f json output)
+  let data: any = null;
+  try { data = JSON.parse(toolCall.result || ''); } catch {}
+
+  // Route by site (finance/desktop) or by data shape
+  if (['xueqiu', 'yahoo-finance', 'barchart'].includes(site)) return OpenCliFinanceCard;
+  if (['cursor', 'codex', 'chatgpt', ...desktopSites].includes(site)) return OpenCliDesktopCard;
+  if (Array.isArray(data) && data[0]?.url) return OpenCliListCard;
+  if (Array.isArray(data)) return OpenCliTableCard;
+  if (data?.content || data?.text) return OpenCliContentCard;
+  return OpenCliStatusCard;
 }
 ```
 
-**Note on `__opencli_meta` / `__opencli_data`:** This structured-data-in-text-result convention is new to the codebase. Existing MCP tools return plain text or Markdown. The opencli integration introduces embedding JSON metadata in the tool result string, detected by the presence of `__opencli_meta` key after JSON.parse(). This is needed because MCP tool results only support `{type: 'text', text}` content blocks, and we need to pass both human-readable (for Claude) and machine-readable (for frontend cards) data.
+Card components receive `toolCall` and extract structured data from `toolCall.result` via `JSON.parse()`. If parse fails, they fall back to plain text display. This matches the pattern used by McpToolCard (L105-118) which also attempts `JSON.parse(result)`.
 
 **All cards extend BaseToolCard** using the slot pattern (verified from WebSearchToolCard/FirecrawlScrapeCard).
 
@@ -455,12 +477,12 @@ Configuration in AgentStudio:
 **Option A (recommended): Remote Chrome on local desktop**
 
 ```
-Server: OPENCLI_REMOTE_URL=http://<desktop-ip>:19825
-Desktop: Chrome + Browser Bridge running
+Server: OPENCLI_CDP_ENDPOINT=ws://<desktop-ip>:9222/devtools/browser/<id>
+Desktop: Chrome launched with --remote-debugging-port=9222
 ```
 
 Pros: Reuses desktop Chrome login sessions, no server-side cookie management.
-Cons: Requires desktop online and network reachable.
+Cons: Requires desktop online, Chrome with remote debugging enabled, network reachable.
 
 **Option B: Headless Chrome in Docker**
 
@@ -481,7 +503,9 @@ Cons: Cookie management complexity.
 ```
 OPENCLI_ENABLED=true
 OPENCLI_DOMAINS=social,media,finance,news,desktop,devtools,jobs
-OPENCLI_REMOTE_URL=                # Optional, for remote Chrome
+OPENCLI_CDP_ENDPOINT=              # Optional, ws:// or http:// for remote Chrome
+OPENCLI_DAEMON_PORT=19825          # Optional, override daemon port
+OPENCLI_HEADLESS=0                 # Optional, set 1 for headless mode
 OPENCLI_HISTORY_ENABLED=true
 OPENCLI_HISTORY_MAX=1000
 ```
@@ -637,7 +661,7 @@ Each phase includes tests co-located with source code, following existing patter
 
 Phase estimates include test code (~30% of implementation code).
 
-## 9. Future Considerations (Not In Scope)
+## 10. Future Considerations (Not In Scope)
 
 - **Scheduled monitoring**: Periodic opencli commands for stock alerts, news digests
 - **Multi-user Chrome sessions**: Different users with different login states
