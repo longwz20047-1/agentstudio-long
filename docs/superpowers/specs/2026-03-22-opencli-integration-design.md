@@ -31,7 +31,7 @@ Make OpenCLI a **platform-level external world interface** for AgentStudio, enab
 | Domain split | 7 domains (social, media, finance, news, desktop, devtools, jobs) | Natural categorization, each domain independently toggleable |
 | Tool generation | Dynamic from `opencli list -f json` metadata | Auto-adapts to opencli updates, no hardcoding per command |
 | Security model | Read-write separation | Read: auto-execute. Write: user confirmation via AskUserQuestion. 47 write ops whitelisted |
-| Deployment | Local + remote dual mode | Local: direct Chrome Bridge. Remote: OPENCLI_REMOTE_URL env var |
+| Deployment | Local + remote dual mode | Local: direct Chrome Bridge. Remote: OPENCLI_CDP_ENDPOINT env var |
 | Frontend | 4 generic + 2 special cards + management console | Data-shape driven routing, not per-site cards |
 
 ## 2. Architecture
@@ -98,35 +98,41 @@ AgentStudio Backend:
   |
   +-- MCP Tool Handler
   |     1. PermissionEngine: "bilibili/search" -> "read" -> allow
-  |     2. CommandExecutor: opencli bilibili search --keyword "LLM" --limit 10 -f json
-  |     3. OutputFormatter: JSON array -> Markdown table
-  |     4. Return: { content: [{ type: 'text', text: markdownTable }] }
+  |     2. CommandExecutor: opencli bilibili search "LLM" --limit 10 -f json
+  |        (note: "query" is positional arg, emitted as bare value before flags)
+  |     3. OutputFormatter: Markdown header + JSON code block (Firecrawl pattern)
+  |     4. Return: { content: [{ type: 'text', text: '## bilibili/search results...\n```json\n[...]\n```' }] }
   |
-  +-- Claude continues reasoning with Markdown table
+  +-- Claude continues reasoning with Markdown header + JSON data
   |
   v  SSE push to frontend
   |
 weknora-ui Frontend:
   +-- ToolCallRenderer detects mcp__opencli-media__ prefix
   +-- Extracts site='bilibili' from tool name, action='search' from toolCall.input
-  +-- JSON.parse(toolCall.result) -> array with url field -> OpenCliListCard
+  +-- parseOpenCliJsonResult(toolCall.result) -> JSON array with url field -> OpenCliListCard
   +-- OpenCliListCard renders video list with titles, view counts, links
 ```
 
 ### 2.3 Integration Point in buildQueryOptions
 
-Position: after Firecrawl integration, before AskUserQuestion.
+Position: after Firecrawl integration **and** after AskUserQuestion integration (needs sessionRef).
 
 ```typescript
-// claudeUtils.ts - new block
+// claudeUtils.ts - new block (after AskUserQuestion integration at ~L587)
 const opencliContext = extendedOptions?.opencliContext;
 if (opencliContext?.enabled && opencliContext?.enabledDomains?.length > 0) {
+  // Create independent SessionRef using the same sessionId
+  // (sessionIdForAskUser is already available as buildQueryOptions parameter)
+  const opencliSessionRef: SessionRef = { current: sessionIdForAskUser || '' };
   await integrateOpenCliMcpServers(
-    queryOptions, opencliContext, sessionRef, agentId
+    queryOptions, opencliContext, opencliSessionRef, agentIdForAskUser || ''
   );
   console.log(`[OpenCLI] Integrated domains: ${opencliContext.enabledDomains.join(', ')}`);
 }
 ```
+
+Note: `sessionIdForAskUser` and `agentIdForAskUser` are existing parameters of `buildQueryOptions()` (verified at `claudeUtils.ts:256`). The opencli integration creates its own `SessionRef` object using the same session ID, independent of the AskUserQuestion integration's `askUserSessionRef`.
 
 ## 3. Site-Level Composite Tool Design
 
@@ -256,12 +262,13 @@ When `opencli list` returns sites not in DOMAIN_MAPPING, PlatformRegistry logs a
 - Executes `opencli <site> <action> <args> -f json` via `child_process.exec` with `shell: true`
 - Forces `-f json` output (verified stable; `-f table` has bugs in some commands)
 - Cross-platform: uses `shell: true` for consistent behavior on Windows (dev env) and Linux (server). Argument values double-quoted and escaped
+- **Error output goes to stderr** (verified: stdout is empty on error, stderr contains error message). Must capture both streams
 - Timeout tiers: read 30s, write 60s, download 120s
-- Error classification into 5 standard types:
-  - `BRIDGE_DISCONNECTED`: Chrome daemon/extension not running
-  - `LOGIN_EXPIRED`: Chrome session expired on target site
-  - `TIMEOUT`: Command execution timed out
-  - `CLI_NOT_FOUND`: opencli not installed
+- Error classification into 5 standard types (matched against stderr content):
+  - `BRIDGE_DISCONNECTED`: stderr contains "Extension is not connected" or "not running"
+  - `LOGIN_EXPIRED`: stderr contains "Unauthorized" or "login"
+  - `TIMEOUT`: stderr contains "ETIMEDOUT" or "timeout"
+  - `CLI_NOT_FOUND`: stderr contains "not found" or "ENOENT"
   - `EXEC_ERROR`: Other errors
 - Shell injection prevention: argument values quoted and escaped
 - **Positional arguments**: 79 of 329 args are positional (`opencli twitter search <query>` not `--query`). CommandExecutor must check `arg.positional` and emit bare values before named flags
@@ -308,37 +315,37 @@ neteasemusic: like (1)
 
 ### 4.5 OutputFormatter
 
-**Design decision**: Return **pure Markdown** to Claude (not JSON). Frontend determines card type from `toolCall.input` (which contains `action` and site info from the MCP tool name), then parses `toolCall.result` as JSON for rich rendering. This matches existing patterns (WebSearchToolCard parses result string, FirecrawlScrapeCard parses JSON from result).
-
-Rationale: Existing MCP tools all return plain text/Markdown. Embedding JSON metadata in the result string would degrade Claude's reasoning quality (it would see JSON instead of a readable table).
+**Design decision**: Follow the **Firecrawl pattern** (verified at `firecrawlIntegration.ts:395-399`): Markdown header + JSON code block. This serves both Claude (reads the header + structured JSON) and frontend cards (`JSON.parse` on extracted code block).
 
 **For Claude** (MCP tool return value):
 ```typescript
-return {
-  content: [{
-    type: 'text',
-    text: markdownTable  // Pure Markdown table, Claude reads this
-  }]
-};
+// Adopt Firecrawl's proven pattern
+let text = `## ${site}/${action} results (${data.length} found)\n\n`;
+text += '```json\n' + JSON.stringify(data, null, 2) + '\n```';
+return { content: [{ type: 'text', text }] };
 ```
 
-**For frontend** (card routing):
+Claude reads the Markdown header for context and the JSON code block for data. This is the same format Firecrawl uses successfully in production.
+
+**For frontend** (card data extraction):
 ```typescript
-// ToolCallRenderer.vue
-if (toolName.startsWith('mcp__opencli-')) {
-  // Extract site name from tool name: mcp__opencli-media__bilibili → bilibili
-  const site = toolName.split('__')[2];
-  // Extract action from toolCall.input.action
-  const action = toolCall.input?.action;
-  // Try JSON.parse(toolCall.result) for structured data
-  // Fall back to text display if parse fails
+// opencli-utils.ts
+export function parseOpenCliJsonResult(result: string): any {
+  // Try 1: entire string is JSON (direct opencli output)
+  try { return JSON.parse(result); } catch {}
+  // Try 2: extract from Markdown code block (OutputFormatter format)
+  const match = result.match(/```json\n([\s\S]*?)\n```/);
+  if (match) {
+    try { return JSON.parse(match[1]); } catch {}
+  }
+  return null;  // parse fail -> card falls back to text display
 }
 ```
 
-**Markdown generation** (OutputFormatter):
-- Array data -> Markdown table (columns from command metadata, values truncated at 80 chars)
-- Object data -> Key-value list
-- Error data -> Error message with classification
+**Markdown generation rules:**
+- Array data -> Markdown header + JSON code block
+- Object data -> Markdown header + JSON code block
+- Error data -> Plain text error message with classification (no JSON wrapping)
 
 ### 4.6 OpenCliMcpFactory
 
@@ -394,17 +401,16 @@ This introduces **prefix-based routing**, a new pattern. The existing codebase u
 ```typescript
 // New pattern: prefix-based routing for opencli tools
 if (toolName.startsWith('mcp__opencli-')) {
-  // Extract site from tool name: mcp__opencli-media__bilibili → bilibili
+  // Extract site from tool name: mcp__opencli-media__bilibili -> bilibili
   const site = toolName.split('__')[2];
-  const action = toolCall.input?.action as string;
 
-  // Try parsing result as JSON (opencli -f json output)
-  let data: any = null;
-  try { data = JSON.parse(toolCall.result || ''); } catch {}
+  // Parse JSON from result (handles both raw JSON and Markdown+code block)
+  const data = parseOpenCliJsonResult(toolCall.result || '');
 
   // Route by site (finance/desktop) or by data shape
   if (['xueqiu', 'yahoo-finance', 'barchart'].includes(site)) return OpenCliFinanceCard;
   if (['cursor', 'codex', 'chatgpt', ...desktopSites].includes(site)) return OpenCliDesktopCard;
+  if (data === null) return OpenCliStatusCard;  // parse failed, show as text
   if (Array.isArray(data) && data[0]?.url) return OpenCliListCard;
   if (Array.isArray(data)) return OpenCliTableCard;
   if (data?.content || data?.text) return OpenCliContentCard;
@@ -412,7 +418,7 @@ if (toolName.startsWith('mcp__opencli-')) {
 }
 ```
 
-Card components receive `toolCall` and extract structured data from `toolCall.result` via `JSON.parse()`. If parse fails, they fall back to plain text display. This matches the pattern used by McpToolCard (L105-118) which also attempts `JSON.parse(result)`.
+Card components receive `toolCall` and extract structured data via `parseOpenCliJsonResult(toolCall.result)` (handles both raw JSON and Markdown+code block formats). If parse fails, they fall back to plain text display. This matches the pattern used by McpToolCard (L105-118) which also attempts `JSON.parse(result)` with fallback.
 
 **All cards extend BaseToolCard** using the slot pattern (verified from WebSearchToolCard/FirecrawlScrapeCard).
 
