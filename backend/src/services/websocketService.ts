@@ -54,7 +54,6 @@ export function setupWebSocket(server: Server): void {
     try {
       const url = new URL(request.url || '', `http://${request.headers.host}`);
       if (url.pathname !== '/ws') {
-        socket.destroy();
         return;
       }
       const token = url.searchParams.get('token');
