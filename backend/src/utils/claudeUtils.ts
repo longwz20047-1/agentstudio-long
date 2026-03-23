@@ -26,6 +26,8 @@ import {
   getSearxngConfigFromEnv,
 } from '../services/searxng/index.js';
 import { integrateFirecrawlMcpServer, getFirecrawlConfigFromEnv, getFirecrawlToolNames } from '../services/firecrawl/index.js';
+import { integrateOpenCliMcpServers, bridgeRegistry } from '../services/opencli/index.js';
+import type { OpenCliContext } from '../services/opencli/types.js';
 
 export type { SessionRef };
 import { MCP_SERVER_CONFIG_FILE } from '../config/paths.js';
@@ -239,6 +241,7 @@ export interface BuildQueryExtendedOptions {
   weknoraContext?: WeknoraContext;
   graphitiContext?: GraphitiContext;
   effort?: 'low' | 'medium' | 'high' | 'max';
+  opencliContext?: OpenCliContext;
 }
 
 export async function buildQueryOptions(
@@ -396,6 +399,8 @@ export async function buildQueryOptions(
     ...(extendedOptions?.effort && { effort: extendedOptions.effort }),
     // 启用子代理进度摘要，生成 system.task_* 事件
     agentProgressSummaries: true,
+    // 启用 prompt suggestions，每轮回复后生成建议问题
+    promptSuggestions: true,
   };
 
   // Only add pathToClaudeCodeExecutable if we have a valid path
@@ -582,6 +587,18 @@ export async function buildQueryOptions(
   if (sessionIdForAskUser && agentIdForAskUser) {
     const integration = await integrateAskUserQuestionMcpServer(queryOptions, sessionIdForAskUser, agentIdForAskUser);
     askUserSessionRef = integration.sessionRef;
+  }
+
+  // Integrate OpenCLI MCP servers (if bridge connected)
+  const opencliContext = extendedOptions?.opencliContext;
+  if (opencliContext?.enabled && opencliContext?.enabledDomains?.length > 0) {
+    if (bridgeRegistry.isOnline(opencliContext.projectId, opencliContext.userId)) {
+      await integrateOpenCliMcpServers(queryOptions, opencliContext, askUserSessionRef, agentIdForAskUser || '');
+      console.log(`[OpenCLI] Integrated domains: ${opencliContext.enabledDomains.join(', ')}`);
+    } else {
+      queryOptions.systemPrompt = (queryOptions.systemPrompt || '') +
+        '\n\n[OpenCLI Bridge is not connected. External platform access unavailable.]';
+    }
   }
 
   return { queryOptions, askUserSessionRef };

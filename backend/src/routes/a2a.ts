@@ -48,6 +48,7 @@ import { handleSessionManagement } from '../utils/sessionUtils.js';
 import { buildQueryOptions } from '../utils/claudeUtils.js';
 import { executeA2AQuery, executeA2AQueryStreaming } from '../services/a2a/a2aQueryService.js';
 import { userInputRegistry } from '../services/askUserQuestion/index.js';
+import { loadProjectOpenCliConfig } from '../services/opencli/opencliConfigStorage.js';
 
 // Cursor A2A Service imports
 import {
@@ -692,6 +693,13 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       graphitiContext.a2aSessionId = sessionId;
     }
 
+    // Construct OpenCLI context (server-side, not from client request)
+    const opencliConfig = loadProjectOpenCliConfig(a2aContext.workingDirectory);
+    const opencliUserId = graphitiContext?.user_id || undefined;
+    const opencliContext = opencliConfig?.enabled && opencliUserId
+      ? { enabled: true, enabledDomains: opencliConfig.enabledDomains, projectId: a2aContext.projectId, userId: opencliUserId }
+      : undefined;
+
     // Extract MCP tools from agent configuration
     // MCP tools are stored in allowedTools with format: mcp__serverName__toolName or serverName.toolName
     const mcpTools: string[] = [];
@@ -792,11 +800,12 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       askUserSessionId, // sessionIdForAskUser - 用于 AskUserQuestion MCP 集成
       a2aContext.a2aAgentId, // agentIdForAskUser - 用于 AskUserQuestion MCP 集成
       undefined, // a2aStreamEnabled
-      (weknoraContext || graphitiContext || effort)
+      (weknoraContext || graphitiContext || effort || opencliContext)
         ? {
             ...(weknoraContext ? { weknoraContext } : {}),
             ...(graphitiContext ? { graphitiContext } : {}),
             ...(effort ? { effort } : {}),
+            ...(opencliContext ? { opencliContext } : {}),
           }
         : undefined, // extendedOptions
       cwdPath !== projectRoot ? cwdPath : undefined // cwdOverride
