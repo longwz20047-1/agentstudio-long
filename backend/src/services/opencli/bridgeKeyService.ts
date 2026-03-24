@@ -87,7 +87,17 @@ export class BridgeKeyService {
 
   private saveRegistry(registry: BridgeKeyRegistry): void {
     fs.mkdirSync(this.dataDir, { recursive: true });
-    fs.writeFileSync(this.keysFilePath, JSON.stringify(registry, null, 2));
+    const filePath = this.keysFilePath;
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, JSON.stringify({ version: '1.0.0', keys: [] }, null, 2));
+    }
+    const lockfile = require('proper-lockfile');
+    const release = lockfile.lockSync(filePath);
+    try {
+      fs.writeFileSync(filePath, JSON.stringify(registry, null, 2));
+    } finally {
+      release();
+    }
   }
 
   async generateBridgeKey(userId: string, deviceName: string, bridgeId: string): Promise<string> {

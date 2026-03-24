@@ -21,6 +21,14 @@ function isRateLimited(apiKey: string): boolean {
   return entry.count > 10;
 }
 
+// Cleanup expired rate limiter entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of wsRateLimiter) {
+    if (now > entry.resetAt) wsRateLimiter.delete(key);
+  }
+}, 5 * 60 * 1000);
+
 export function setupOpenCliBridgeWs(server: Server): void {
   server.on('upgrade', async (request: IncomingMessage, socket: Duplex, head: Buffer) => {
     const url = new URL(request.url || '', `http://${request.headers.host}`);
