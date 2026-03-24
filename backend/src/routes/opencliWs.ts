@@ -8,7 +8,7 @@ import type { RegisterMessage, ResultMessage } from '../services/opencli/types.j
 
 const wssOpenCLI = new WebSocketServer({ noServer: true });
 
-// Rate limiter
+// Rate limiter: max 10 upgrades per key per minute
 const wsRateLimiter = new Map<string, { count: number; resetAt: number }>();
 function isRateLimited(apiKey: string): boolean {
   const now = Date.now();
@@ -26,20 +26,41 @@ export function setupOpenCliBridgeWs(server: Server): void {
     const url = new URL(request.url || '', `http://${request.headers.host}`);
     if (url.pathname !== '/api/opencli/bridge') return;
 
-    const apiKey = request.headers['x-bridge-key'] as string;
-    if (!apiKey) { socket.destroy(); return; }
+    // Priority 1: Long-lived bridge key (normal connection)
+    const bridgeKey = request.headers['x-bridge-key'] as string;
+    if (bridgeKey) {
+      const userId = await bridgeKeyService.validateBridgeKey(bridgeKey);
+      if (!userId) { socket.destroy(); return; }
+      if (isRateLimited(bridgeKey)) { socket.destroy(); return; }
 
-    const userId = await bridgeKeyService.validateBridgeKey(apiKey);
-    if (!userId) { socket.destroy(); return; }
-    if (isRateLimited(apiKey)) { socket.destroy(); return; }
+      wssOpenCLI.handleUpgrade(request, socket, head, (ws) => {
+        handleBridgeConnection(ws, userId, false);
+      });
+      return;
+    }
 
-    wssOpenCLI.handleUpgrade(request, socket, head, (ws) => {
-      handleBridgeConnection(ws, userId);
-    });
+    // Priority 2: One-time pairing token (first-time pairing)
+    const pairingToken = request.headers['x-bridge-pairing-token'] as string;
+    if (pairingToken) {
+      const result = bridgeKeyService.consumePairingToken(pairingToken);
+      if (!result) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\nX-Bridge-Close-Code: 4002\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+
+      wssOpenCLI.handleUpgrade(request, socket, head, (ws) => {
+        handleBridgeConnection(ws, result.userId, true);
+      });
+      return;
+    }
+
+    // No auth header
+    socket.destroy();
   });
 }
 
-function handleBridgeConnection(ws: WebSocket, userId: string): void {
+function handleBridgeConnection(ws: WebSocket, userId: string, isPairing: boolean): void {
   let missedHeartbeats = 0;
 
   const heartbeatInterval = setInterval(() => {
@@ -52,11 +73,22 @@ function handleBridgeConnection(ws: WebSocket, userId: string): void {
     ws.send(JSON.stringify({ type: 'ping', ts: Date.now() }));
   }, HEARTBEAT_INTERVAL);
 
-  ws.on('message', (data) => {
+  ws.on('message', async (data) => {
     try {
       const msg = JSON.parse(data.toString());
       switch (msg.type) {
         case 'register':
+          if (isPairing) {
+            // Pairing mode: generate permanent key, send to bridge, close
+            const key = await bridgeKeyService.generateBridgeKey(
+              userId, msg.deviceName, msg.bridgeId
+            );
+            ws.send(JSON.stringify({ type: 'paired', obkKey: key }));
+            console.log(`[OpenCLI Bridge] Paired: ${msg.deviceName} → key issued`);
+            ws.close(1000, 'Pairing complete');
+            return;
+          }
+          // Normal mode
           bridgeRegistry.register(ws, msg as RegisterMessage);
           console.log(`[OpenCLI Bridge] Registered: ${msg.deviceName} (${msg.projects?.length || 0} projects)`);
           break;
