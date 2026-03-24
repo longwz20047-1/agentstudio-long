@@ -89,3 +89,37 @@ export class BridgeError extends Error {
     this.name = 'BridgeError';
   }
 }
+
+// --- Phase 2: Pairing Protocol ---
+
+export interface PairingToken {
+  token: string;        // obp_xxx (32 hex chars)
+  userId: string;
+  projectId: string;
+  expiresAt: Date;
+}
+
+export interface BridgeKeyRecord {
+  id: string;              // UUID
+  userId: string;          // normalized lowercase
+  deviceName: string;
+  bridgeId: string;
+  keyHash: string;         // bcrypt hash of obk_ key
+  createdAt: string;       // ISO timestamp
+  lastUsedAt: string;      // ISO timestamp
+  revokedAt: string | null;
+}
+
+export interface BridgeKeyRegistry {
+  version: string;         // "1.0.0"
+  keys: BridgeKeyRecord[];
+}
+
+export interface PairingConfigString {
+  v: number;               // version, always 1
+  s: string;               // WebSocket server URL
+  t: string;               // obp_ pairing token
+  p: string;               // project ID
+  n: string;               // project display name
+  u: string;               // user ID (email)
+}
