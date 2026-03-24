@@ -36,18 +36,22 @@ router.post('/pairing-token', (req, res) => {
 });
 
 /**
- * GET /api/opencli/keys
- * List all bridge keys (optionally include revoked).
- *
- * Query: { includeRevoked?: 'true' }
- * Returns: { keys: BridgeKeyRecord[] }
+ * GET /api/opencli/keys?userId=<required>&includeRevoked=true
+ * List bridge keys for the specified user.
+ * userId is required to prevent cross-user enumeration (IDOR).
  */
 router.get('/keys', (req, res) => {
   try {
+    const userId = req.query.userId;
+    if (!userId || typeof userId !== 'string') {
+      return res.status(400).json({ error: 'userId query parameter required' });
+    }
     const includeRevoked = req.query.includeRevoked === 'true';
-    const keys = bridgeKeyService.listBridgeKeys(includeRevoked);
-    // Strip keyHash from response for security
-    const safeKeys = keys.map(({ keyHash, ...rest }) => rest);
+    const allKeys = bridgeKeyService.listBridgeKeys(includeRevoked);
+    // Filter to only the requesting user's keys
+    const userKeys = allKeys.filter(k => k.userId === userId.trim().toLowerCase());
+    // Strip keyHash from response
+    const safeKeys = userKeys.map(({ keyHash, ...rest }) => rest);
     res.json({ keys: safeKeys });
   } catch (err) {
     console.error('[OpenCLI] List keys error:', err);
@@ -56,15 +60,24 @@ router.get('/keys', (req, res) => {
 });
 
 /**
- * DELETE /api/opencli/keys/:keyId
- * Revoke a bridge key.
- *
- * Returns: { success: boolean }
+ * DELETE /api/opencli/keys/:keyId?userId=<required>
+ * Revoke a bridge key. userId required for ownership verification.
  */
 router.delete('/keys/:keyId', (req, res) => {
   try {
     const { keyId } = req.params;
+    const userId = req.query.userId;
     if (!keyId || typeof keyId !== 'string') return res.status(400).json({ error: 'keyId required' });
+    if (!userId || typeof userId !== 'string') return res.status(400).json({ error: 'userId query parameter required' });
+
+    // Verify ownership before revoking
+    const allKeys = bridgeKeyService.listBridgeKeys(false);
+    const key = allKeys.find(k => k.id === keyId);
+    if (!key) return res.status(404).json({ error: 'Key not found' });
+    if (key.userId !== (userId as string).trim().toLowerCase()) {
+      return res.status(403).json({ error: 'Not authorized to revoke this key' });
+    }
+
     const success = bridgeKeyService.revokeBridgeKey(keyId);
     if (!success) return res.status(404).json({ error: 'Key not found or already revoked' });
     res.json({ success: true });
@@ -75,25 +88,17 @@ router.delete('/keys/:keyId', (req, res) => {
 });
 
 /**
- * GET /api/opencli/status
- * Get online bridge connections status.
- *
- * Query: { userId?: string, projectId?: string }
- * Returns: { bridges: Array<{ bridgeId, deviceName, userId, projectId, status, connectedAt, lastHeartbeat, capabilities }> }
+ * GET /api/opencli/status?userId=<required>
+ * Get online bridge connections for the specified user.
  */
 router.get('/status', (req, res) => {
   try {
-    const { userId, projectId } = req.query;
-    let entries;
-    if (userId && typeof userId === 'string') {
-      entries = bridgeRegistry.getAllForUser(userId);
-    } else if (projectId && typeof projectId === 'string') {
-      entries = bridgeRegistry.getAllForProject(projectId);
-    } else {
-      // No filter — return empty (require at least one filter for security)
-      return res.status(400).json({ error: 'userId or projectId query parameter required' });
+    const userId = req.query.userId;
+    if (!userId || typeof userId !== 'string') {
+      return res.status(400).json({ error: 'userId query parameter required' });
     }
 
+    const entries = bridgeRegistry.getAllForUser(userId);
     const bridges = entries.map(e => ({
       bridgeId: e.bridgeId,
       deviceName: e.deviceName,
