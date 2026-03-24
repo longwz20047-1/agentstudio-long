@@ -2,8 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'http';
 import type { IncomingMessage } from 'http';
 import type { Duplex } from 'stream';
-import { validateBridgeKey } from '../services/opencli/bridgeKeyService.js';
-import { bridgeRegistry, bridgeCommandProxy } from '../services/opencli/singletons.js';
+import { bridgeRegistry, bridgeCommandProxy, bridgeKeyService } from '../services/opencli/singletons.js';
 import { HEARTBEAT_INTERVAL, MAX_MISSED_HEARTBEATS } from '../services/opencli/constants.js';
 import type { RegisterMessage, ResultMessage } from '../services/opencli/types.js';
 
@@ -30,7 +29,7 @@ export function setupOpenCliBridgeWs(server: Server): void {
     const apiKey = request.headers['x-bridge-key'] as string;
     if (!apiKey) { socket.destroy(); return; }
 
-    const userId = await validateBridgeKey(apiKey);
+    const userId = await bridgeKeyService.validateBridgeKey(apiKey);
     if (!userId) { socket.destroy(); return; }
     if (isRateLimited(apiKey)) { socket.destroy(); return; }
 

@@ -1,35 +1,92 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { BridgeKeyService } from '../bridgeKeyService.js';
 
-let generateBridgeKey: typeof import('../bridgeKeyService.js').generateBridgeKey;
-let validateBridgeKey: typeof import('../bridgeKeyService.js').validateBridgeKey;
+describe('BridgeKeyService', () => {
+  let tmpDir: string;
+  let service: BridgeKeyService;
 
-beforeEach(async () => {
-  const mod = await import('../bridgeKeyService.js');
-  generateBridgeKey = mod.generateBridgeKey;
-  validateBridgeKey = mod.validateBridgeKey;
-});
-
-describe('bridgeKeyService', () => {
-  it('generates key with obk_ prefix and correct hex format', async () => {
-    const key = await generateBridgeKey('user@example.com');
-    expect(key).toMatch(/^obk_[a-f0-9]{32}$/);
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bks-test-'));
+    service = new BridgeKeyService(tmpDir);
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('validates a generated key and returns lowercase userId', async () => {
-    const key = await generateBridgeKey('  Alice@Example.COM  ');
-    const userId = await validateBridgeKey(key);
-    expect(userId).toBe('alice@example.com');
+  describe('pairing tokens', () => {
+    it('generates token with obp_ prefix and returns config string', () => {
+      const result = service.generatePairingToken('alice@example.com', 'proj_001', 'ws://localhost:4936/api/opencli/bridge', 'Test Project');
+      expect(result.configString).toBeTruthy();
+      expect(result.protocolLink).toMatch(/^obk:\/\//);
+      expect(result.expiresAt).toBeTruthy();
+    });
+
+    it('consumes token successfully', () => {
+      const result = service.generatePairingToken('alice@example.com', 'proj_001', 'ws://localhost:4936/api/opencli/bridge', 'Test');
+      const config = JSON.parse(Buffer.from(result.configString, 'base64url').toString());
+      const consumed = service.consumePairingToken(config.t);
+      expect(consumed).toEqual({ userId: 'alice@example.com', projectId: 'proj_001' });
+    });
+
+    it('rejects already consumed token', () => {
+      const result = service.generatePairingToken('alice@example.com', 'proj_001', 'ws://localhost:4936/api/opencli/bridge', 'Test');
+      const config = JSON.parse(Buffer.from(result.configString, 'base64url').toString());
+      service.consumePairingToken(config.t);
+      expect(service.consumePairingToken(config.t)).toBeNull();
+    });
+
+    it('rejects expired token', () => {
+      vi.useFakeTimers();
+      const result = service.generatePairingToken('alice@example.com', 'proj_001', 'ws://localhost:4936/api/opencli/bridge', 'Test');
+      const config = JSON.parse(Buffer.from(result.configString, 'base64url').toString());
+      vi.advanceTimersByTime(11 * 60 * 1000);
+      expect(service.consumePairingToken(config.t)).toBeNull();
+      vi.useRealTimers();
+    });
+
+    it('rate limits: max 5 tokens per user per minute', () => {
+      for (let i = 0; i < 5; i++) {
+        service.generatePairingToken('alice@example.com', `proj_${i}`, 'ws://localhost:4936/api/opencli/bridge', 'Test');
+      }
+      expect(() => service.generatePairingToken('alice@example.com', 'proj_6', 'ws://localhost:4936/api/opencli/bridge', 'Test'))
+        .toThrow('Rate limited');
+    });
   });
 
-  it('rejects invalid key (wrong content)', async () => {
-    // Generate a real key so there is something in the store
-    await generateBridgeKey('user@example.com');
-    const result = await validateBridgeKey('obk_0000000000000000000000000000dead');
-    expect(result).toBeNull();
-  });
+  describe('bridge keys', () => {
+    it('generates key with obk_ prefix', async () => {
+      const key = await service.generateBridgeKey('alice@example.com', 'Alice-PC', 'b_test');
+      expect(key).toMatch(/^obk_[a-f0-9]{32}$/);
+    });
 
-  it('rejects key without obk_ prefix', async () => {
-    const result = await validateBridgeKey('bad_0123456789abcdef0123456789abcdef');
-    expect(result).toBeNull();
+    it('validates generated key', async () => {
+      const key = await service.generateBridgeKey('alice@example.com', 'Alice-PC', 'b_test');
+      const userId = await service.validateBridgeKey(key);
+      expect(userId).toBe('alice@example.com');
+    });
+
+    it('persists keys to disk', async () => {
+      await service.generateBridgeKey('alice@example.com', 'Alice-PC', 'b_test');
+      const service2 = new BridgeKeyService(tmpDir);
+      const keys = service2.listBridgeKeys();
+      expect(keys).toHaveLength(1);
+      expect(keys[0].userId).toBe('alice@example.com');
+    });
+
+    it('rejects revoked key', async () => {
+      const key = await service.generateBridgeKey('alice@example.com', 'Alice-PC', 'b_test');
+      const keys = service.listBridgeKeys();
+      service.revokeBridgeKey(keys[0].id);
+      const userId = await service.validateBridgeKey(key);
+      expect(userId).toBeNull();
+    });
+
+    it('rejects invalid key', async () => {
+      const userId = await service.validateBridgeKey('obk_invalid_key_not_registered');
+      expect(userId).toBeNull();
+    });
   });
 });
