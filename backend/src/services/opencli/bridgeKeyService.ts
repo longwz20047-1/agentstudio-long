@@ -76,25 +76,34 @@ export class BridgeKeyService {
     return path.join(this.dataDir, KEYS_FILENAME);
   }
 
+  private ensureFile(): void {
+    fs.mkdirSync(this.dataDir, { recursive: true });
+    if (!fs.existsSync(this.keysFilePath)) {
+      fs.writeFileSync(this.keysFilePath, JSON.stringify({ version: '1.0.0', keys: [] }, null, 2));
+    }
+  }
+
   private loadRegistry(): BridgeKeyRegistry {
     try {
       if (fs.existsSync(this.keysFilePath)) {
         return JSON.parse(fs.readFileSync(this.keysFilePath, 'utf-8'));
       }
-    } catch {}
+    } catch (err) {
+      console.warn('[BridgeKeyService] Failed to load registry:', (err as Error).message);
+    }
     return { version: '1.0.0', keys: [] };
   }
 
-  private saveRegistry(registry: BridgeKeyRegistry): void {
-    fs.mkdirSync(this.dataDir, { recursive: true });
-    const filePath = this.keysFilePath;
-    if (!fs.existsSync(filePath)) {
-      fs.writeFileSync(filePath, JSON.stringify({ version: '1.0.0', keys: [] }, null, 2));
-    }
+  /** Atomic read-modify-write with file lock to prevent race conditions */
+  private withLockedRegistry<T>(fn: (registry: BridgeKeyRegistry) => T): T {
+    this.ensureFile();
     const lockfile = require('proper-lockfile');
-    const release = lockfile.lockSync(filePath);
+    const release = lockfile.lockSync(this.keysFilePath);
     try {
-      fs.writeFileSync(filePath, JSON.stringify(registry, null, 2));
+      const registry = JSON.parse(fs.readFileSync(this.keysFilePath, 'utf-8')) as BridgeKeyRegistry;
+      const result = fn(registry);
+      fs.writeFileSync(this.keysFilePath, JSON.stringify(registry, null, 2));
+      return result;
     } finally {
       release();
     }
@@ -106,18 +115,18 @@ export class BridgeKeyService {
     const keyHash = await bcrypt.hash(key, SALT_ROUNDS);
     const now = new Date().toISOString();
 
-    const registry = this.loadRegistry();
-    registry.keys.push({
-      id: uuidv4(),
-      userId: userId.trim().toLowerCase(),
-      deviceName,
-      bridgeId,
-      keyHash,
-      createdAt: now,
-      lastUsedAt: now,
-      revokedAt: null,
+    this.withLockedRegistry(registry => {
+      registry.keys.push({
+        id: uuidv4(),
+        userId: userId.trim().toLowerCase(),
+        deviceName,
+        bridgeId,
+        keyHash,
+        createdAt: now,
+        lastUsedAt: now,
+        revokedAt: null,
+      });
     });
-    this.saveRegistry(registry);
     return key;
   }
 
@@ -127,8 +136,13 @@ export class BridgeKeyService {
     for (const record of registry.keys) {
       if (record.revokedAt) continue;
       if (await bcrypt.compare(key, record.keyHash)) {
-        record.lastUsedAt = new Date().toISOString();
-        this.saveRegistry(registry);
+        // Update lastUsedAt (best-effort, don't fail validation on write error)
+        try {
+          this.withLockedRegistry(reg => {
+            const r = reg.keys.find(k => k.id === record.id);
+            if (r) r.lastUsedAt = new Date().toISOString();
+          });
+        } catch {}
         return record.userId;
       }
     }
@@ -136,12 +150,12 @@ export class BridgeKeyService {
   }
 
   revokeBridgeKey(keyId: string): boolean {
-    const registry = this.loadRegistry();
-    const record = registry.keys.find(k => k.id === keyId);
-    if (!record || record.revokedAt) return false;
-    record.revokedAt = new Date().toISOString();
-    this.saveRegistry(registry);
-    return true;
+    return this.withLockedRegistry(registry => {
+      const record = registry.keys.find(k => k.id === keyId);
+      if (!record || record.revokedAt) return false;
+      record.revokedAt = new Date().toISOString();
+      return true;
+    });
   }
 
   listBridgeKeys(includeRevoked = false): BridgeKeyRecord[] {

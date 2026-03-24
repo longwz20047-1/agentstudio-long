@@ -86,6 +86,8 @@ function handleBridgeConnection(ws: WebSocket, userId: string, isPairing: boolea
       const msg = JSON.parse(data.toString());
       switch (msg.type) {
         case 'register':
+          // Security: override client-declared userId with server-authenticated userId
+          msg.userId = userId;
           if (isPairing) {
             // Pairing mode: generate permanent key, send to bridge, close
             const key = await bridgeKeyService.generateBridgeKey(
