@@ -1,7 +1,10 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
-import { DOMAIN_MAPPING } from './constants.js';
+import { v4 as uuidv4 } from 'uuid';
+import { DOMAIN_MAPPING, WRITE_COMMAND_TIMEOUT, DEFAULT_COMMAND_TIMEOUT, CONFIRMATION_TIMEOUT } from './constants.js';
 import { formatOpenCliResult, formatOpenCliError } from './outputFormatter.js';
+import { isWriteOperation, hasSessionApproval, grantSessionApproval, buildConfirmationPrompt } from './permissionEngine.js';
+import { userInputRegistry } from '../askUserQuestion/userInputRegistry.js';
 import type { OpenCliContext } from './types.js';
 
 import { bridgeCommandProxy as commandProxy, bridgeRegistry } from './singletons.js';
@@ -43,8 +46,9 @@ Parameters:
 export async function integrateOpenCliMcpServers(
   queryOptions: any,
   opencliContext: OpenCliContext,
-  _askUserSessionRef: any,
-  _agentId: string
+  askUserSessionRef: any,
+  agentId: string,
+  sessionId?: string
 ): Promise<void> {
   const { projectId, userId, enabledDomains } = opencliContext;
 
@@ -83,11 +87,56 @@ export async function integrateOpenCliMcpServers(
             }
           }
 
+          // Permission check for write operations
+          if (isWriteOperation(site, args.action)) {
+            const effectiveSessionId = askUserSessionRef?.current || sessionId || '';
+            if (!effectiveSessionId) {
+              return formatOpenCliError(site, args.action, 'No session context — cannot confirm write operation.');
+            }
+            if (!hasSessionApproval(effectiveSessionId, site, args.action)) {
+              const CONFIRM_TIMEOUT = CONFIRMATION_TIMEOUT;
+              const prompt = buildConfirmationPrompt(site, args.action, cliArgs);
+              const toolUseId = `opencli-confirm-${uuidv4()}`;
+              let timeoutId: NodeJS.Timeout | undefined;
+
+              try {
+                const response = await Promise.race([
+                  userInputRegistry.waitForUserInput(
+                    effectiveSessionId,
+                    agentId,
+                    toolUseId,
+                    [{ question: prompt, header: 'OpenCLI Permission', options: [], multiSelect: false }]
+                  ),
+                  new Promise<never>((_, reject) => {
+                    timeoutId = setTimeout(
+                      () => reject(new Error('Confirmation timed out (3 min). Please retry the command.')),
+                      CONFIRM_TIMEOUT
+                    );
+                  }),
+                ]);
+                clearTimeout(timeoutId);
+
+                const lower = response.toLowerCase().trim();
+                if (lower.includes('reject') || lower.includes('cancel') || lower === 'no' || lower === 'n') {
+                  return formatOpenCliError(site, args.action, 'User rejected the write operation.');
+                }
+
+                grantSessionApproval(effectiveSessionId, site, args.action);
+              } catch (err) {
+                clearTimeout(timeoutId);
+                try { userInputRegistry.cancelUserInput(toolUseId); } catch {}
+                return formatOpenCliError(site, args.action, (err as Error).message);
+              }
+            }
+          }
+
           try {
+            const timeout = isWriteOperation(site, args.action) ? WRITE_COMMAND_TIMEOUT : DEFAULT_COMMAND_TIMEOUT;
             const stdout = await commandProxy.dispatch(projectId, userId, {
               site,
               action: args.action,
               args: cliArgs,
+              timeout,
             });
             return formatOpenCliResult(site, args.action, stdout);
           } catch (error) {

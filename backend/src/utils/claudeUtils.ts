@@ -593,7 +593,7 @@ export async function buildQueryOptions(
   const opencliContext = extendedOptions?.opencliContext;
   if (opencliContext?.enabled && opencliContext?.enabledDomains?.length > 0) {
     if (bridgeRegistry.isOnline(opencliContext.projectId, opencliContext.userId)) {
-      await integrateOpenCliMcpServers(queryOptions, opencliContext, askUserSessionRef, agentIdForAskUser || '');
+      await integrateOpenCliMcpServers(queryOptions, opencliContext, askUserSessionRef, agentIdForAskUser || '', sessionIdForAskUser);
       console.log(`[OpenCLI] Integrated domains: ${opencliContext.enabledDomains.join(', ')}`);
     } else {
       queryOptions.systemPrompt = (queryOptions.systemPrompt || '') +

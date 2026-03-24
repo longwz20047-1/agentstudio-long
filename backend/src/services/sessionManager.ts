@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { getProjectsDir } from '../config/sdkConfig.js';
+import { clearSessionApprovals, clearAllApprovals } from './opencli/permissionEngine.js';
 
 /**
  * 会话配置快照
@@ -353,7 +354,10 @@ export class SessionManager {
     }
 
     const agentId = session.getAgentId();
-    
+
+    // Clean up OpenCLI permission approvals
+    clearSessionApprovals(sessionId);
+
     // 关闭会话
     await session.close();
     
@@ -659,6 +663,7 @@ export class SessionManager {
     this.sessionConfigs.clear();
     
     console.log(`✅ Cleared ${totalSessions} sessions`);
+    clearAllApprovals();
     return totalSessions;
   }
 
@@ -753,6 +758,7 @@ export class SessionManager {
     this.sessionConfigs.clear();
     
     console.log('✅ SessionManager shutdown complete');
+    clearAllApprovals();
   }
 }
 

@@ -30,6 +30,7 @@ export const WRITE_OPERATIONS: Record<string, string[]> = {
 
 export const DEFAULT_COMMAND_TIMEOUT = 30000;
 export const WRITE_COMMAND_TIMEOUT = 60000;
+export const CONFIRMATION_TIMEOUT = 3 * 60 * 1000; // 3 minutes for user confirmation
 export const HEARTBEAT_INTERVAL = 30000;
 export const HEARTBEAT_TIMEOUT = 10000;
 export const MAX_MISSED_HEARTBEATS = 3;
