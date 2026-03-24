@@ -1,12 +1,10 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { DOMAIN_MAPPING } from './constants.js';
-import { bridgeRegistry } from './bridgeRegistry.js';
-import { BridgeCommandProxy } from './bridgeCommandProxy.js';
 import { formatOpenCliResult, formatOpenCliError } from './outputFormatter.js';
 import type { OpenCliContext } from './types.js';
 
-const commandProxy = new BridgeCommandProxy(bridgeRegistry);
+import { bridgeCommandProxy as commandProxy, bridgeRegistry } from './singletons.js';
 
 /**
  * Returns the intersection of sites defined for a domain with the sites

@@ -3,13 +3,11 @@ import type { Server } from 'http';
 import type { IncomingMessage } from 'http';
 import type { Duplex } from 'stream';
 import { validateBridgeKey } from '../services/opencli/bridgeKeyService.js';
-import { bridgeRegistry } from '../services/opencli/bridgeRegistry.js';
-import { BridgeCommandProxy } from '../services/opencli/bridgeCommandProxy.js';
+import { bridgeRegistry, bridgeCommandProxy } from '../services/opencli/singletons.js';
 import { HEARTBEAT_INTERVAL, MAX_MISSED_HEARTBEATS } from '../services/opencli/constants.js';
 import type { RegisterMessage, ResultMessage } from '../services/opencli/types.js';
 
 const wssOpenCLI = new WebSocketServer({ noServer: true });
-export const bridgeCommandProxy = new BridgeCommandProxy(bridgeRegistry);
 
 // Rate limiter
 const wsRateLimiter = new Map<string, { count: number; resetAt: number }>();
