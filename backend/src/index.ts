@@ -7,6 +7,7 @@ import { readFileSync } from 'fs';
 import { createServer } from 'http';
 import { setupWebSocket, shutdownWebSocket } from './services/websocketService.js';
 import { setupOpenCliBridgeWs } from './routes/opencliWs.js';
+import opencliRouter from './routes/opencli.js';
 
 import filesRouter from './routes/files';
 import agentsRouter from './routes/agents';
@@ -566,6 +567,7 @@ const app: express.Express = express();
   });
 
   // Protected routes - Require authentication
+  app.use('/api/opencli', authMiddleware, opencliRouter);
   app.use('/api/files', authMiddleware, filesRouter);
   app.use('/api/agents', authMiddleware, agentsRouter);
   app.use('/api/mcp', authMiddleware, mcpRouter);
