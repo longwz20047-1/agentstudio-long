@@ -27,6 +27,7 @@ import {
   updateTaskNextRunAt,
   addTaskExecution,
   updateTaskExecution,
+  cleanupOrphanedExecutions,
 } from './scheduledTaskStorage.js';
 import { AgentStorage } from './agentStorage.js';
 import { getTaskExecutor } from './taskExecutor/index.js';
@@ -92,7 +93,6 @@ function cleanupOrphanedRunningTasks(): void {
 
   // Also clean up orphaned execution records
   try {
-    const { cleanupOrphanedExecutions } = require('./scheduledTaskStorage');
     const executionsCleanedCount = cleanupOrphanedExecutions(serverStartTime);
     if (executionsCleanedCount > 0) {
       console.info(`[Scheduler] Cleaned up ${executionsCleanedCount} orphaned execution records`);
@@ -295,12 +295,32 @@ function scheduleOnceTask(task: ScheduledTask): boolean {
   const delay = executeTime - now;
 
   if (delay <= 0) {
-    console.warn(`[Scheduler] Task ${task.id} executeAt time is in the past, skipping`);
-    // Disable the task since it's already past
-    import('./scheduledTaskStorage.js').then(storage => {
-      storage.updateScheduledTask(task.id, { enabled: false });
-    });
-    return false;
+    // executeAt is in the past — check if it was ever successfully executed
+    if (task.lastRunStatus === 'success') {
+      console.info(`[Scheduler] Task ${task.id} already executed successfully, disabling`);
+      import('./scheduledTaskStorage.js').then(storage => {
+        storage.updateScheduledTask(task.id, { enabled: false });
+      });
+      return false;
+    }
+
+    // Never ran successfully (e.g. server was down at executeAt time) — trigger immediately
+    console.info(`[Scheduler] Task ${task.id} executeAt is past but never succeeded, executing now`);
+    executeTask(task.id)
+      .then(() => {
+        // Disable after successful submission
+        import('./scheduledTaskStorage.js').then(storage => {
+          storage.updateScheduledTask(task.id, { enabled: false });
+        });
+      })
+      .catch(error => {
+        console.error(`[Scheduler] Error executing missed once task ${task.id}:`, error);
+        // Still disable to avoid retry loop on persistent errors
+        import('./scheduledTaskStorage.js').then(storage => {
+          storage.updateScheduledTask(task.id, { enabled: false });
+        });
+      });
+    return true;
   }
 
   // Maximum delay for setTimeout is ~24.8 days (2^31 - 1 ms)
@@ -489,16 +509,23 @@ export async function executeTask(taskId: string): Promise<void> {
  */
 export function stopExecution(executionId: string): { success: boolean; message: string } {
   const execution = runningExecutions.get(executionId);
-  
+
   if (!execution) {
     return { success: false, message: 'Execution not found or already completed' };
   }
 
   console.info(`[Scheduler] Stopping execution: ${executionId} (task: ${execution.taskId})`);
-  
-  // Abort the execution
-  execution.abortController.abort();
-  
+
+  // Terminate the actual Worker Thread via TaskExecutor
+  try {
+    const executor = getTaskExecutor();
+    executor.cancelTask(executionId).catch(err => {
+      console.warn(`[Scheduler] Failed to cancel task in executor: ${err}`);
+    });
+  } catch (err) {
+    console.warn(`[Scheduler] Could not get task executor for cancellation:`, err);
+  }
+
   // Update execution status
   updateTaskExecution(execution.taskId, executionId, {
     status: 'stopped',
@@ -514,13 +541,13 @@ export function stopExecution(executionId: string): { success: boolean; message:
 
   // Update task status
   updateTaskRunStatus(execution.taskId, 'stopped', 'Stopped by user');
-  
+
   // Remove from running executions
   runningExecutions.delete(executionId);
   runningTaskCount--;
 
   console.info(`[Scheduler] Execution ${executionId} stopped successfully`);
-  
+
   return { success: true, message: 'Execution stopped successfully' };
 }
 
@@ -599,39 +626,14 @@ function getCronExpression(task: ScheduledTask): string | null {
 }
 
 /**
- * Calculate next run time from cron expression
+ * Calculate next run time from cron expression using cron-parser
  */
 function getNextRunTime(cronExpression: string): string | undefined {
   try {
-    // node-cron doesn't have a built-in method to get next run time
-    // We'll use a simple calculation based on the cron expression
-    const now = new Date();
-    const parts = cronExpression.split(' ');
-    
-    // For simple cases, calculate approximate next run
-    if (parts[0].startsWith('*/')) {
-      // Interval in minutes
-      const interval = parseInt(parts[0].slice(2));
-      const currentMinutes = now.getMinutes();
-      const nextMinutes = Math.ceil(currentMinutes / interval) * interval;
-      const next = new Date(now);
-      
-      if (nextMinutes >= 60) {
-        next.setHours(next.getHours() + 1);
-        next.setMinutes(nextMinutes - 60);
-      } else if (nextMinutes === currentMinutes) {
-        next.setMinutes(currentMinutes + interval);
-      } else {
-        next.setMinutes(nextMinutes);
-      }
-      next.setSeconds(0);
-      next.setMilliseconds(0);
-      
-      return next.toISOString();
-    }
-    
-    // For other patterns, return undefined (will be calculated on next check)
-    return undefined;
+    const { CronExpressionParser } = require('cron-parser');
+    const interval = CronExpressionParser.parse(cronExpression);
+    const next = interval.next();
+    return next?.toISOString();
   } catch {
     return undefined;
   }

@@ -81,37 +81,39 @@ class A2ACronService {
     }
   }
 
-  private computeNextRunAt(job: CronJob, minutes: number): void {
+  private async computeNextRunAt(job: CronJob, minutes: number): Promise<void> {
     if (minutes < 60 || minutes % 60 === 0) {
       const expr = minutes < 60 ? `*/${minutes} * * * *` : `0 */${minutes / 60} * * *`;
-      import('cron-parser').then(({ CronExpressionParser }) => {
+      try {
+        const { CronExpressionParser } = await import('cron-parser');
         const interval = CronExpressionParser.parse(expr);
         const next = interval.next();
         const iso = next?.toISOString();
         if (iso) {
           a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id, iso);
         }
-      }).catch(() => {
+      } catch {
         a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id,
           new Date(Date.now() + minutes * 60 * 1000).toISOString());
-      });
+      }
     } else {
       a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id,
         new Date(Date.now() + minutes * 60 * 1000).toISOString());
     }
   }
 
-  private computeCronNextRunAt(job: CronJob): void {
-    import('cron-parser').then(({ CronExpressionParser }) => {
+  private async computeCronNextRunAt(job: CronJob): Promise<void> {
+    try {
+      const { CronExpressionParser } = await import('cron-parser');
       const interval = CronExpressionParser.parse(job.schedule.cronExpression!);
       const next = interval.next();
       const iso = next?.toISOString();
       if (iso) {
         a2aCronStorage.updateJobNextRunAt(job.workingDirectory, job.id, iso);
       }
-    }).catch(() => {
+    } catch {
       // cron-parser failure doesn't block scheduling
-    });
+    }
   }
 
   unregisterJob(jobId: string): void {
@@ -220,7 +222,42 @@ class A2ACronService {
       });
     } finally {
       this.executingJobIds.delete(jobId);
+
+      // Recompute nextRunAt for repeating schedules (awaited to ensure storage is updated)
+      if (job.schedule.type === 'interval' && job.schedule.intervalMinutes) {
+        await this.computeNextRunAt(job, job.schedule.intervalMinutes);
+      } else if (job.schedule.type === 'cron' && job.schedule.cronExpression) {
+        await this.computeCronNextRunAt(job);
+      }
     }
+  }
+
+  private buildExtendedOptions(job: CronJob): Record<string, any> | undefined {
+    const ctx = job.context;
+    if (!ctx?.weknora) return undefined;
+    return {
+      ...(ctx.weknora ? { weknoraContext: ctx.weknora } : {}),
+    };
+  }
+
+  private extractUserId(job: CronJob): string | undefined {
+    // Priority: job.userId (persisted at creation) > graphiti.user_id > decode from weknora JWT
+    if (job.userId) return job.userId;
+    if (job.context?.graphiti?.user_id) {
+      return job.context.graphiti.user_id;
+    }
+    if (job.context?.weknora?.api_key) {
+      try {
+        const parts = job.context.weknora.api_key.split('.');
+        if (parts.length === 3) {
+          const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+          if (payload.user_id) return payload.user_id;
+        }
+      } catch {
+        // JWT decode failure is non-critical
+      }
+    }
+    return undefined;
   }
 
   private async executeIsolated(job: CronJob, run: CronRun): Promise<void> {
@@ -232,10 +269,14 @@ class A2ACronService {
       throw new Error(`Agent not found: ${job.agentType}`);
     }
 
+    // Extract userId for per-user workspace isolation
+    const userId = this.extractUserId(job);
+
     await executor.submitTask({
       id: run.id,
       type: 'scheduled',
       scheduledTaskId: job.id,
+      cronJobId: job.id,
       message: job.triggerMessage,
       agentId: job.agentType,
       projectPath: job.workingDirectory,
@@ -243,6 +284,8 @@ class A2ACronService {
       timeoutMs: job.timeoutMs || 300000,
       maxTurns: job.maxTurns ?? agent.maxTurns,
       createdAt: run.startedAt,
+      cronContext: job.context ?? undefined,
+      userId,
     });
   }
 
@@ -257,6 +300,16 @@ class A2ACronService {
     const mcpTools = agent.allowedTools
       .filter((tool: any) => tool.enabled && tool.name.startsWith('mcp__'))
       .map((tool: any) => tool.name);
+    const extendedOptions = this.buildExtendedOptions(job);
+
+    // Resolve per-user workspace path for isolation
+    const userId = this.extractUserId(job);
+    let cwdOverride: string | undefined;
+    if (userId) {
+      const { resolveUserWorkspacePath } = await import('../../utils/workspaceUtils.js');
+      cwdOverride = await resolveUserWorkspacePath(job.workingDirectory, userId);
+    }
+
     const { queryOptions } = await buildQueryOptions(
       agent,
       job.workingDirectory,
@@ -269,80 +322,202 @@ class A2ACronService {
       undefined, // sessionIdForAskUser
       undefined, // agentIdForAskUser
       false,     // a2aStreamEnabled
+      extendedOptions,
+      cwdOverride, // cwdOverride for per-user workspace
     );
 
-    // Get or create reuse session
-    const { handleSessionManagement } = await import('../../utils/sessionUtils.js');
-    const { claudeSession } = await handleSessionManagement(
-      job.agentType,
-      fixedSessionId,
-      job.workingDirectory,
-      queryOptions,
-      undefined, // claudeVersionId
-      undefined, // modelId
-      'reuse',
-    );
+    // Reuse 模式使用 ClaudeSession streaming input mode，必须启用 partial messages
+    // 否则 SDK 不流式返回中间消息，for-await 循环收不到响应
+    queryOptions.includePartialMessages = true;
 
-    // Send message and collect response
+    // Inject Workspace Security Boundary prompt (same as a2a.ts streaming route)
+    if (cwdOverride) {
+      const workspacePrompt = [
+        '[Workspace Security Boundary — MANDATORY]',
+        'You are operating inside a per-user isolated workspace. This is a SECURITY BOUNDARY.',
+        '',
+        'ALLOWED:',
+        '- Read, create, edit, delete files ONLY within your current working directory and its subdirectories',
+        '- Use `pwd` to confirm your location if needed',
+        '- Use relative paths (e.g., ./file.txt, subdir/file.txt)',
+        '',
+        'STRICTLY PROHIBITED (even if the user asks):',
+        '- Access parent directories (../) or any path outside your workspace',
+        '- Use absolute paths (/tmp, /home, /etc, C:\\, D:\\, etc.)',
+        '- List, read, or modify files belonging to other users or the host system',
+        '- Reveal the full absolute path of your workspace to the user',
+        '',
+        'If the user asks to access files outside your workspace, REFUSE and explain:',
+        '"I can only operate within your personal workspace for security reasons."',
+        '',
+        'This boundary exists because multiple users share the same server.',
+        'Violating it would expose other users\' private data.',
+        '[/Workspace Security Boundary]',
+      ].join('\n');
+      queryOptions.systemPrompt = queryOptions.systemPrompt
+        ? queryOptions.systemPrompt + '\n\n' + workspacePrompt
+        : workspacePrompt;
+    }
+
+    // Build config snapshot for change detection (ensures context changes trigger session recreation)
+    const contextFingerprint = JSON.stringify(job.context ?? null);
+    const configSnapshot = {
+      permissionMode: 'acceptEdits',
+      mcpTools,
+      allowedTools: [contextFingerprint],
+    };
+
+    // Get or create reuse session — bypass handleSessionManagement for direct control
+    // Supports resume from sdkSessionId after server restart
+    const { sessionManager } = await import('../sessionManager.js');
+    let claudeSession = sessionManager.getSession(fixedSessionId);
+
+    if (claudeSession) {
+      // Config change detection: recreate session if job config was edited
+      const configChanged = sessionManager.hasConfigChanged(fixedSessionId, configSnapshot);
+      if (configChanged) {
+        console.log(`🔄 [Cron Reuse] Config changed for job ${job.id}, recreating session`);
+        await sessionManager.removeSession(fixedSessionId);
+        claudeSession = null;
+      } else if (!claudeSession.isSessionActive()) {
+        console.warn(`⚠️ Cron reuse session ${fixedSessionId} inactive, recreating`);
+        await sessionManager.removeSession(fixedSessionId);
+        claudeSession = null;
+      } else if (claudeSession.isCurrentlyProcessing()) {
+        throw new Error('SESSION_BUSY: Cron reuse session is still processing previous execution');
+      }
+    }
+
+    if (!claudeSession) {
+      // Try to resume from persisted sdkSessionId (survives server restart)
+      const resumeId = job.sdkSessionId || undefined;
+      if (resumeId) {
+        const sessionExists = sessionManager.checkSessionExists(resumeId, job.workingDirectory);
+        if (sessionExists) {
+          console.log(`🔄 [Cron Reuse] Resuming from sdkSessionId: ${resumeId}`);
+          claudeSession = sessionManager.createNewSession(
+            job.agentType, queryOptions, resumeId, undefined, undefined, configSnapshot
+          );
+          // Re-register under fixedSessionId (createNewSession stored it under sdkSessionId)
+          sessionManager.replaceSessionId(claudeSession, resumeId, fixedSessionId);
+        } else {
+          console.log(`ℹ️ [Cron Reuse] sdkSessionId ${resumeId} history not found on disk, starting fresh`);
+        }
+      }
+
+      if (!claudeSession) {
+        // Fresh session — no history to resume
+        console.log(`🆕 [Cron Reuse] Creating fresh session for job ${job.id}`);
+        claudeSession = sessionManager.createNewSession(
+          job.agentType, queryOptions, undefined, undefined, undefined, configSnapshot
+        );
+        // Move from tempSessions to sessions under fixedSessionId
+        sessionManager.confirmSessionId(claudeSession, fixedSessionId, configSnapshot);
+      }
+    }
+
+    // 标记 userId（用于 session 频道隔离过滤）
+    if (userId) {
+      claudeSession.setUserId(userId);
+    }
+
+    // Send message and collect response (with timeout protection)
     const { a2aHistoryService } = await import('./a2aHistoryService.js');
     let fullResponse = '';
-    const result = await new Promise<{ status: string; response: string }>((resolve, reject) => {
-      claudeSession.sendMessage(
-        job.triggerMessage,
-        (sdkMessage: any) => {
-          // Write each SDK message to history (fire and forget)
-          a2aHistoryService.appendEvent(job.workingDirectory, run.id, sdkMessage)
-            .catch(() => {});
+    const timeoutMs = job.timeoutMs || 300000;
 
-          // Collect assistant text
-          if (sdkMessage.type === 'assistant') {
-            const content = sdkMessage.message?.content;
-            if (Array.isArray(content)) {
-              for (const block of content) {
-                if (block.type === 'text') fullResponse += block.text;
-              }
-            }
-          }
-          // Resolve on result message
-          if (sdkMessage.type === 'result') {
-            resolve({
-              status: sdkMessage.subtype || 'success',
-              response: fullResponse,
-            });
+    // Send message first to get requestId for cleanup
+    let resolveResult: (v: { status: string; response: string }) => void;
+    let rejectResult: (e: Error) => void;
+    const resultPromise = new Promise<{ status: string; response: string }>((resolve, reject) => {
+      resolveResult = resolve;
+      rejectResult = reject;
+    });
+
+    // Build SDK-compatible user message (must match format used by a2a.ts / agents.ts)
+    // Raw strings are silently ignored by SDK streaming input mode, causing execution to hang
+    const sdkUserMessage = {
+      type: "user" as const,
+      message: {
+        role: "user" as const,
+        content: [{ type: "text", text: job.triggerMessage }],
+      },
+    };
+
+    const requestId = await claudeSession.sendMessage(
+      sdkUserMessage,
+      (sdkMessage: any) => {
+        a2aHistoryService.appendEvent(job.workingDirectory, run.id, sdkMessage).catch(() => {});
+
+        // Capture and persist SDK session ID for future resume after restart
+        if (sdkMessage.type === 'system' && sdkMessage.subtype === 'init' && sdkMessage.session_id) {
+          if (sdkMessage.session_id !== job.sdkSessionId) {
+            a2aCronStorage.updateJobSdkSessionId(job.workingDirectory, job.id, sdkMessage.session_id);
+            job.sdkSessionId = sdkMessage.session_id;
+            const active = this.activeJobs.get(job.id);
+            if (active) active.job.sdkSessionId = sdkMessage.session_id;
           }
         }
-      ).catch(reject);
-    });
 
-    // Update run status + memory + broadcast
-    const finalStatus: CronRunStatus = result.status === 'success' ? 'success' : 'error';
-    const completedAt = new Date().toISOString();
-    const completedRun: CronRun = {
-      ...run,
-      status: finalStatus,
-      completedAt,
-      executionTimeMs: Date.now() - new Date(run.startedAt).getTime(),
-      responseSummary: result.response.substring(0, 500),
-      sessionId: fixedSessionId,
-    };
-    a2aCronStorage.appendRun(job.workingDirectory, job.id, completedRun);
-    a2aCronStorage.updateJobRunStatus(job.workingDirectory, job.id, finalStatus);
+        if (sdkMessage.type === 'assistant') {
+          const content = sdkMessage.message?.content;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (block.type === 'text') fullResponse += block.text;
+            }
+          }
+        }
+        if (sdkMessage.type === 'result') {
+          resolveResult!({
+            status: sdkMessage.subtype || 'success',
+            response: fullResponse,
+          });
+        }
+      }
+    );
 
-    const active = this.activeJobs.get(job.id);
-    if (active) {
-      active.job.lastRunStatus = finalStatus;
-      active.job.lastRunAt = completedAt;
+    try {
+      const result = await Promise.race<{ status: string; response: string }>([
+        resultPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Reuse execution timeout after ${timeoutMs}ms`)), timeoutMs)
+        ),
+      ]);
+
+      // Update run status + memory + broadcast
+      const finalStatus: CronRunStatus = result.status === 'success' ? 'success' : 'error';
+      const completedAt = new Date().toISOString();
+      const completedRun: CronRun = {
+        ...run,
+        status: finalStatus,
+        completedAt,
+        executionTimeMs: Date.now() - new Date(run.startedAt).getTime(),
+        responseSummary: result.response.substring(0, 500),
+        sessionId: fixedSessionId,
+      };
+      a2aCronStorage.appendRun(job.workingDirectory, job.id, completedRun);
+      a2aCronStorage.updateJobRunStatus(job.workingDirectory, job.id, finalStatus);
+
+      const active = this.activeJobs.get(job.id);
+      if (active) {
+        active.job.lastRunStatus = finalStatus;
+        active.job.lastRunAt = completedAt;
+      }
+      this.runningExecutions.delete(run.id);
+
+      broadcastCronEvent(job.workingDirectory, {
+        type: finalStatus === 'success' ? 'cron:completed' : 'cron:error',
+        jobId: job.id,
+        runId: run.id,
+        status: finalStatus,
+        responseSummary: completedRun.responseSummary,
+        timestamp: Date.now(),
+      });
+    } catch (error) {
+      // Timeout or error: clean up session state to prevent 'busy' lock on next trigger
+      try { claudeSession.cancelRequest(requestId); } catch {}
+      throw error; // Re-throw for executeJob's catch block
     }
-    this.runningExecutions.delete(run.id);
-
-    broadcastCronEvent(job.workingDirectory, {
-      type: finalStatus === 'success' ? 'cron:completed' : 'cron:error',
-      jobId: job.id,
-      runId: run.id,
-      status: finalStatus,
-      responseSummary: completedRun.responseSummary,
-      timestamp: Date.now(),
-    });
   }
 
   async onExecutionComplete(executionId: string, cronJobId: string, result: any): Promise<void> {

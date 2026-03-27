@@ -46,13 +46,32 @@ export interface TaskDefinition {
   claudeVersionId?: string;
   permissionMode?: PermissionMode;
 
+  // User isolation
+  userId?: string; // For per-user workspace isolation (.workspaces/u_{userId})
+
   // Metadata
   createdAt: string;
   scheduledFor?: string; // For scheduled tasks
   scheduledTaskId?: string; // Original scheduled task ID (for status updates)
+  cronJobId?: string; // Set only for A2A Cron jobs — used to route completion callbacks
 
   // Push Notification (for A2A async tasks)
   pushNotificationConfig?: TaskPushNotificationConfig;
+
+  // Cron job context (WeKnora/Graphiti integration for scheduled tasks)
+  cronContext?: {
+    weknora?: {
+      api_key: string;
+      kb_ids: string[];
+      knowledge_ids?: string[];
+      base_url: string;
+    };
+    graphiti?: {
+      base_url: string;
+      user_id: string;
+      group_ids?: string[];
+    };
+  };
 }
 
 /**

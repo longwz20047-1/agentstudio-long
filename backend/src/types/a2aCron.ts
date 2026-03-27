@@ -7,6 +7,20 @@ export interface CronSchedule {
 
 export type CronSessionTarget = 'isolated' | 'reuse';
 
+export interface CronJobContext {
+  weknora?: {
+    api_key: string;
+    kb_ids: string[];
+    knowledge_ids?: string[];
+    base_url: string;
+  };
+  graphiti?: {
+    base_url: string;
+    user_id: string;
+    group_ids?: string[];
+  };
+}
+
 export interface CronJob {
   id: string;
   name: string;
@@ -19,10 +33,13 @@ export interface CronJob {
   workingDirectory: string;
   timeoutMs?: number;
   maxTurns?: number;
+  userId?: string; // For per-user workspace isolation
+  context?: CronJobContext | null;
   lastRunAt?: string;
   lastRunStatus?: CronRunStatus;
   lastRunError?: string;
   nextRunAt?: string;
+  sdkSessionId?: string; // Real Claude SDK session ID for reuse resume after restart
   createdAt: string;
   updatedAt: string;
 }
@@ -50,6 +67,7 @@ export interface CreateCronJobRequest {
   enabled?: boolean;
   timeoutMs?: number;
   maxTurns?: number;
+  context?: CronJobContext | null;
 }
 
 export interface UpdateCronJobRequest {
@@ -61,4 +79,5 @@ export interface UpdateCronJobRequest {
   enabled?: boolean;
   timeoutMs?: number;
   maxTurns?: number;
+  context?: CronJobContext | null;
 }

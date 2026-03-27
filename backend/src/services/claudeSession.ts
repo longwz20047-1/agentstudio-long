@@ -21,6 +21,7 @@ export class ClaudeSession {
   private claudeVersionId: string | undefined = undefined;
   private modelId: string | undefined = undefined;
   private sessionTitle: string | null = null;
+  private userId: string | null = null;
 
   // 响应分发器相关 - 简化版本（会话级别的并发控制在 SlackAIService 中处理）
   private responseCallbacks: Map<string, (response: SDKMessage) => void | Promise<void>> = new Map();
@@ -115,6 +116,14 @@ export class ClaudeSession {
    */
   getModelId(): string | undefined {
     return this.modelId;
+  }
+
+  setUserId(userId: string): void {
+    this.userId = userId;
+  }
+
+  getUserId(): string | null {
+    return this.userId;
   }
 
   /**

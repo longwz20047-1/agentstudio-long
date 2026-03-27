@@ -5,7 +5,7 @@
  * used by both the main agents API and Slack integration.
  */
 
-import { Options } from '@anthropic-ai/claude-agent-sdk';
+import type { Options, EffortLevel } from '@anthropic-ai/claude-agent-sdk';
 import { SystemPrompt, PresetSystemPrompt } from '../types/agents.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -240,8 +240,9 @@ export interface BuildQueryOptionsResult {
 export interface BuildQueryExtendedOptions {
   weknoraContext?: WeknoraContext;
   graphitiContext?: GraphitiContext;
-  effort?: 'low' | 'medium' | 'high' | 'max';
+  effort?: EffortLevel;
   opencliContext?: OpenCliContext;
+  taskBudgetTokens?: number;
 }
 
 export async function buildQueryOptions(
@@ -397,11 +398,30 @@ export async function buildQueryOptions(
     ...(finalPermissionMode === 'bypassPermissions' && { allowDangerouslySkipPermissions: true }),
     // Effort 参数：控制 Claude 的推理深度
     ...(extendedOptions?.effort && { effort: extendedOptions.effort }),
+    // Adaptive thinking: Claude decides when/how much to reason (Opus 4.6+, replaces deprecated maxThinkingTokens)
+    thinking: { type: 'adaptive' as const },
+    // Fallback model: SDK auto-retries with haiku if primary model fails (rate limit, unavailable)
+    fallbackModel: 'haiku',
+    // Token budget: per-request override > agent config > no budget (@alpha, SDK auto-injects beta header)
+    ...((extendedOptions?.taskBudgetTokens || agent.taskBudgetTokens) && {
+      taskBudget: { total: extendedOptions?.taskBudgetTokens || agent.taskBudgetTokens }
+    }),
     // 启用子代理进度摘要，生成 system.task_* 事件
     agentProgressSummaries: true,
     // 启用 prompt suggestions，每轮回复后生成建议问题
     promptSuggestions: true,
   };
+
+  // 1M context beta: per-agent opt-in for Sonnet 4.5/4 (Opus 4.6 and Sonnet 4.6 already have 1M natively)
+  if (agent.enableLargeContext) {
+    queryOptions.betas = ['context-1m-2025-08-07'];
+  }
+
+  // Structured output: per-agent schema validation + pass to SDK
+  if (agent.outputFormat) {
+    validateOutputSchema(agent.outputFormat.schema);
+    queryOptions.outputFormat = agent.outputFormat;
+  }
 
   // Only add pathToClaudeCodeExecutable if we have a valid path
   if (executablePath) {
@@ -604,3 +624,33 @@ export async function buildQueryOptions(
   return { queryOptions, askUserSessionRef };
 }
 
+/**
+ * Validate output schema before passing to SDK.
+ * Prevents resource abuse (size/depth) and flags sensitive field names.
+ */
+function validateOutputSchema(schema: Record<string, unknown>): void {
+  const serialized = JSON.stringify(schema);
+  if (serialized.length > 5000) {
+    throw new Error('Output schema exceeds 5KB limit');
+  }
+  if (calculateSchemaDepth(schema) > 10) {
+    throw new Error('Output schema depth exceeds 10 levels');
+  }
+  const sensitiveNames = ['password', 'api_key', 'secret', 'token', 'private_key', 'credential'];
+  const lower = serialized.toLowerCase();
+  for (const name of sensitiveNames) {
+    if (lower.includes(`"${name}"`)) {
+      console.warn(`[validateOutputSchema] Schema contains sensitive field name: ${name}`);
+    }
+  }
+}
+
+function calculateSchemaDepth(obj: unknown, depth = 0): number {
+  if (depth > 10) return depth;
+  if (typeof obj !== 'object' || obj === null) return depth;
+  let maxDepth = depth;
+  for (const val of Object.values(obj)) {
+    maxDepth = Math.max(maxDepth, calculateSchemaDepth(val, depth + 1));
+  }
+  return maxDepth;
+}

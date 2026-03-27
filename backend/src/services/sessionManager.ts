@@ -556,10 +556,12 @@ export class SessionManager {
 
   /**
    * 获取所有会话信息（用于调试和监控）
+   * @param filterUserId 可选，按 userId 过滤（返回该用户的 + userId=null 的公共 session）
    */
-  getSessionsInfo(): Array<{
+  getSessionsInfo(filterUserId?: string): Array<{
     sessionId: string;
     agentId: string;
+    userId: string | null;
     isActive: boolean;
     lastActivity: number;
     idleTimeMs: number;
@@ -575,6 +577,7 @@ export class SessionManager {
     const result: Array<{
       sessionId: string;
       agentId: string;
+      userId: string | null;
       isActive: boolean;
       lastActivity: number;
       idleTimeMs: number;
@@ -593,6 +596,7 @@ export class SessionManager {
       result.push({
         sessionId,
         agentId: session.getAgentId(),
+        userId: session.getUserId(),
         isActive: session.isSessionActive(),
         lastActivity: session.getLastActivity(),
         idleTimeMs: now - session.getLastActivity(),
@@ -611,6 +615,7 @@ export class SessionManager {
       result.push({
         sessionId: tempKey,
         agentId: session.getAgentId(),
+        userId: session.getUserId(),
         isActive: session.isSessionActive(),
         lastActivity: session.getLastActivity(),
         idleTimeMs: now - session.getLastActivity(),
@@ -624,6 +629,9 @@ export class SessionManager {
       });
     }
 
+    if (filterUserId) {
+      return result.filter(s => s.userId === filterUserId || s.userId === null);
+    }
     return result;
   }
 

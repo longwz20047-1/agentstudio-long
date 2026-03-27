@@ -11,6 +11,7 @@
 import { parentPort, workerData } from 'worker_threads';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { buildQueryOptions } from '../../utils/claudeUtils.js';
+import { resolveUserWorkspacePath } from '../../utils/workspaceUtils.js';
 import { AgentStorage } from '../../services/agentStorage.js';
 import type { TaskDefinition, TaskResult } from './types.js';
 
@@ -104,6 +105,20 @@ async function executeTask(task: TaskDefinition): Promise<TaskResult> {
       addLog('info', 'system', `MCP tools found: ${mcpTools.join(', ')}`);
     }
 
+    // Build extendedOptions from cronContext (WeKnora MCP integration)
+    const extendedOptions = task.cronContext?.weknora
+      ? { weknoraContext: task.cronContext.weknora }
+      : undefined;
+
+    // Resolve per-user workspace path for isolation
+    const cwdOverride = task.userId
+      ? await resolveUserWorkspacePath(task.projectPath, task.userId)
+      : undefined;
+
+    if (cwdOverride) {
+      addLog('info', 'system', `Workspace cwd: ${cwdOverride}`);
+    }
+
     const { queryOptions } = await buildQueryOptions(
       agent,
       task.projectPath,
@@ -114,8 +129,40 @@ async function executeTask(task: TaskDefinition): Promise<TaskResult> {
       undefined, // defaultEnv
       undefined, // userEnv
       undefined, // sessionIdForAskUser
-      undefined  // agentIdForAskUser
+      undefined, // agentIdForAskUser
+      undefined, // a2aStreamEnabled
+      extendedOptions, // extendedOptions
+      cwdOverride, // cwdOverride for per-user workspace
     );
+
+    // Inject Workspace Security Boundary prompt (same as a2a.ts streaming route)
+    if (cwdOverride) {
+      const workspacePrompt = [
+        '[Workspace Security Boundary — MANDATORY]',
+        'You are operating inside a per-user isolated workspace. This is a SECURITY BOUNDARY.',
+        '',
+        'ALLOWED:',
+        '- Read, create, edit, delete files ONLY within your current working directory and its subdirectories',
+        '- Use `pwd` to confirm your location if needed',
+        '- Use relative paths (e.g., ./file.txt, subdir/file.txt)',
+        '',
+        'STRICTLY PROHIBITED (even if the user asks):',
+        '- Access parent directories (../) or any path outside your workspace',
+        '- Use absolute paths (/tmp, /home, /etc, C:\\, D:\\, etc.)',
+        '- List, read, or modify files belonging to other users or the host system',
+        '- Reveal the full absolute path of your workspace to the user',
+        '',
+        'If the user asks to access files outside your workspace, REFUSE and explain:',
+        '"I can only operate within your personal workspace for security reasons."',
+        '',
+        'This boundary exists because multiple users share the same server.',
+        'Violating it would expose other users\' private data.',
+        '[/Workspace Security Boundary]',
+      ].join('\n');
+      queryOptions.systemPrompt = queryOptions.systemPrompt
+        ? queryOptions.systemPrompt + '\n\n' + workspacePrompt
+        : workspacePrompt;
+    }
 
     // Set max turns
     queryOptions.maxTurns = task.maxTurns || agent.maxTurns || 10;

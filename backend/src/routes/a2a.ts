@@ -517,7 +517,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       });
     }
 
-    const { message: rawMessage, sessionId, sessionMode = 'new', context, images, effort } = validation.data;
+    const { message: rawMessage, sessionId, sessionMode = 'new', context, images, effort, taskBudgetTokens } = validation.data;
     const stream = req.query.stream === 'true' || req.headers.accept === 'text/event-stream';
 
     // Detect and format /skill command
@@ -800,11 +800,12 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       askUserSessionId, // sessionIdForAskUser - 用于 AskUserQuestion MCP 集成
       a2aContext.a2aAgentId, // agentIdForAskUser - 用于 AskUserQuestion MCP 集成
       undefined, // a2aStreamEnabled
-      (weknoraContext || graphitiContext || effort || opencliContext)
+      (weknoraContext || graphitiContext || effort || taskBudgetTokens || opencliContext)
         ? {
             ...(weknoraContext ? { weknoraContext } : {}),
             ...(graphitiContext ? { graphitiContext } : {}),
             ...(effort ? { effort } : {}),
+            ...(taskBudgetTokens ? { taskBudgetTokens } : {}),
             ...(opencliContext ? { opencliContext } : {}),
           }
         : undefined, // extendedOptions
@@ -942,6 +943,24 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
                     sessionId: effectiveSessionId,
                     timestamp: Date.now(),
                   })}\n\n`);
+                }
+                // Model fallback detection: warn if SDK used a different model than requested
+                if (resultMsg.modelUsage) {
+                  const requestedModel = queryOptions.model;
+                  const usedModels = Object.keys(resultMsg.modelUsage);
+                  const primaryUsed = usedModels[0];
+                  const isMatch = primaryUsed && requestedModel && (
+                    primaryUsed.includes(requestedModel) || requestedModel.includes(primaryUsed)
+                  );
+                  if (primaryUsed && requestedModel && !isMatch) {
+                    console.warn(`⚠️ [A2A new] Model fallback: requested=${requestedModel}, actual=${primaryUsed}`);
+                    connMgr.safeWrite(`data: ${JSON.stringify({
+                      type: 'model_fallback_warning',
+                      requestedModel,
+                      actualModel: primaryUsed,
+                      sessionId: effectiveSessionId,
+                    })}\n\n`);
+                  }
                 }
               }
 
@@ -1102,6 +1121,11 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
         'reuse',
         configSnapshot
       );
+
+      // 标记 userId（用于 session 频道隔离过滤）
+      if (userId) {
+        claudeSession.setUserId(userId);
+      }
 
       // 注册 orphan message handler（幂等，同一 session 只生效一次）
       // cron 触发的执行结果写入 loops 存储（不污染 A2A 对话历史）
@@ -1408,6 +1432,24 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
                   sessionId: capturedSessionId || actualSessionId,
                   timestamp: Date.now(),
                 })}\n\n`);
+              }
+              // Model fallback detection: warn if SDK used a different model than requested
+              if (resultMsg.modelUsage) {
+                const requestedModel = queryOptions.model;
+                const usedModels = Object.keys(resultMsg.modelUsage);
+                const primaryUsed = usedModels[0];
+                const isMatch = primaryUsed && requestedModel && (
+                  primaryUsed.includes(requestedModel) || requestedModel.includes(primaryUsed)
+                );
+                if (primaryUsed && requestedModel && !isMatch) {
+                  console.warn(`⚠️ [A2A reuse] Model fallback: requested=${requestedModel}, actual=${primaryUsed}`);
+                  connMgr.safeWrite(`data: ${JSON.stringify({
+                    type: 'model_fallback_warning',
+                    requestedModel,
+                    actualModel: primaryUsed,
+                    sessionId: capturedSessionId || actualSessionId,
+                  })}\n\n`);
+                }
               }
               connMgr.safeWrite(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
               connMgr.setCurrentRequestId(null);
