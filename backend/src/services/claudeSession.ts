@@ -247,20 +247,21 @@ export class ClaudeSession {
 
     try {
       let messageCount = 0;
+      let assistantMessageCount = 0;
+      let resultReceived = false;
+
       for await (const response of this.queryStream) {
         messageCount++;
-        // 类型安全的消息处理
         const sdkMessage = response as SDKMessage;
 
-        // 详细日志：记录每个消息
-        console.log(`📨 [ClaudeSession] Message #${messageCount} received:`, {
-          type: sdkMessage.type,
-          subtype: (sdkMessage as any).subtype,
-          hasSessionId: !!sdkMessage.session_id,
-          agentId: this.agentId,
-          isProcessing: this.isProcessing,
-          callbacksCount: this.responseCallbacks.size,
-        });
+        // 只记录关键消息类型
+        if (sdkMessage.type === 'assistant') {
+          assistantMessageCount++;
+        }
+        if (sdkMessage.type === 'result') {
+          resultReceived = true;
+          console.log(`✅ [ClaudeSession] Result received: subtype=${(sdkMessage as any).subtype}, total messages=${messageCount}, assistant messages=${assistantMessageCount}`);
+        }
 
         // 计时：第一个响应的时间
         if (!this.firstResponseReceived && this.lastMessageSentAt > 0) {
@@ -285,7 +286,6 @@ export class ClaudeSession {
         if (currentRequestId && this.responseCallbacks.has(currentRequestId)) {
           // 用户消息：分发给注册的 callback
           const callback = this.responseCallbacks.get(currentRequestId)!;
-          console.log(`🔄 [ClaudeSession] Dispatching message #${messageCount} to callback ${currentRequestId}`);
           await callback(sdkMessage);
 
           // 如果是 result 事件，该请求完成，从队列中移除
@@ -298,36 +298,26 @@ export class ClaudeSession {
           }
         } else if (this.orphanMessageCallback) {
           // Orphan 消息：没有 callback，由 cron 触发，写入 A2A 历史
-          console.log(`👻 [ClaudeSession] Orphan message #${messageCount} (no callback registered)`);
           try {
             await this.orphanMessageCallback(sdkMessage);
           } catch (err) {
             console.error(`[ClaudeSession] Orphan message handler error:`, err);
           }
         } else {
-          console.warn(`⚠️ [ClaudeSession] Message #${messageCount} has no handler! (no callback, no orphan handler)`);
+          console.warn(`⚠️ [ClaudeSession] Message has no handler! type=${sdkMessage.type}`);
         }
       }
 
       // Stream 结束后检查状态
-      console.log(`🏁 [ClaudeSession] queryStream ended for agent: ${this.agentId}`, {
-        totalMessages: messageCount,
-        isProcessing: this.isProcessing,
-        pendingCallbacks: this.responseCallbacks.size,
-        isActive: this.isActive,
-      });
+      console.log(`🏁 [ClaudeSession] Stream ended: total=${messageCount}, assistant=${assistantMessageCount}, result=${resultReceived}, isProcessing=${this.isProcessing}`);
 
       // 如果 stream 结束但还有未完成的请求，说明出现异常
       if (this.isProcessing && this.responseCallbacks.size > 0) {
         console.error(`❌ [ClaudeSession] Stream ended unexpectedly! Still processing with ${this.responseCallbacks.size} pending callbacks`);
-        console.error(`   - Agent: ${this.agentId}`);
-        console.error(`   - Session: ${this.claudeSessionId}`);
-        console.error(`   - Total messages received: ${messageCount}`);
-        console.error(`   - Pending request IDs: ${Array.from(this.responseCallbacks.keys()).join(', ')}`);
+        console.error(`   - Total messages: ${messageCount}, Assistant messages: ${assistantMessageCount}, Result received: ${resultReceived}`);
 
         // 通知所有等待的 callback stream 异常结束
         for (const [requestId, callback] of this.responseCallbacks.entries()) {
-          console.error(`   - Notifying callback ${requestId} of stream end`);
           try {
             await callback({
               type: 'result',
@@ -341,7 +331,7 @@ export class ClaudeSession {
 
         this.responseCallbacks.clear();
         this.isProcessing = false;
-        console.log(`🔓 Session force-unlocked after stream end for agent: ${this.agentId}`);
+        console.log(`🔓 Session force-unlocked after stream end`);
       }
     } catch (error) {
       console.error(`Error in background response handler for agent ${this.agentId}:`, error);
