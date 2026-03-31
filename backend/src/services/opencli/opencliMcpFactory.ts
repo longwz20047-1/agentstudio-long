@@ -109,7 +109,13 @@ export async function integrateOpenCliMcpServers(
                   ),
                   new Promise<never>((_, reject) => {
                     timeoutId = setTimeout(
-                      () => reject(new Error('Confirmation timed out (3 min). Please retry the command.')),
+                      () => {
+                        // Cancel the user input request before rejecting
+                        try {
+                          userInputRegistry.cancelUserInput(toolUseId);
+                        } catch {}
+                        reject(new Error('Confirmation timed out (3 min). Please retry the command.'));
+                      },
                       CONFIRM_TIMEOUT
                     );
                   }),
@@ -124,6 +130,7 @@ export async function integrateOpenCliMcpServers(
                 grantSessionApproval(effectiveSessionId, site, args.action);
               } catch (err) {
                 clearTimeout(timeoutId);
+                // Ensure cleanup even if cancelUserInput was already called in timeout
                 try { userInputRegistry.cancelUserInput(toolUseId); } catch {}
                 return formatOpenCliError(site, args.action, (err as Error).message);
               }
@@ -156,12 +163,14 @@ export async function integrateOpenCliMcpServers(
       tools: siteTools,
     });
 
+    // Note: queryOptions is reconstructed for each A2A request, so no risk of duplicate registration
     queryOptions.mcpServers = { ...queryOptions.mcpServers, [serverName]: server };
 
     const toolNames = sites.map(site => `mcp__${serverName}__${site}`);
     if (!queryOptions.allowedTools) {
       queryOptions.allowedTools = [...toolNames];
     } else {
+      // Add tools that aren't already in the allowedTools list
       for (const name of toolNames) {
         if (!queryOptions.allowedTools.includes(name)) {
           queryOptions.allowedTools.push(name);

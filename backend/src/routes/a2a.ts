@@ -695,6 +695,8 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
 
     // Construct OpenCLI context (server-side, not from client request)
     const opencliConfig = loadProjectOpenCliConfig(a2aContext.workingDirectory);
+    // TODO: Add fallback to JWT user_id when JWT is extended with user identity
+    // Currently requires Graphiti to be enabled for OpenCLI to work
     const opencliUserId = graphitiContext?.user_id || undefined;
     const opencliContext = opencliConfig?.enabled && opencliUserId
       ? { enabled: true, enabledDomains: opencliConfig.enabledDomains, projectId: a2aContext.projectId, userId: opencliUserId }
