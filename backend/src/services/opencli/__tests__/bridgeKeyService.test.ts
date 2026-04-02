@@ -64,8 +64,10 @@ describe('BridgeKeyService', () => {
 
     it('validates generated key', async () => {
       const key = await service.generateBridgeKey('alice@example.com', 'Alice-PC', 'b_test');
-      const userId = await service.validateBridgeKey(key);
-      expect(userId).toBe('alice@example.com');
+      const result = await service.validateBridgeKey(key);
+      expect(result).not.toBeNull();
+      expect(result!.userId).toBe('alice@example.com');
+      expect(result!.keyId).toBeDefined();
     });
 
     it('persists keys to disk', async () => {
@@ -80,13 +82,13 @@ describe('BridgeKeyService', () => {
       const key = await service.generateBridgeKey('alice@example.com', 'Alice-PC', 'b_test');
       const keys = service.listBridgeKeys();
       service.revokeBridgeKey(keys[0].id);
-      const userId = await service.validateBridgeKey(key);
-      expect(userId).toBeNull();
+      const result = await service.validateBridgeKey(key);
+      expect(result).toBeNull();
     });
 
     it('rejects invalid key', async () => {
-      const userId = await service.validateBridgeKey('obk_invalid_key_not_registered');
-      expect(userId).toBeNull();
+      const result = await service.validateBridgeKey('obk_invalid_key_not_registered');
+      expect(result).toBeNull();
     });
   });
 });

@@ -7,6 +7,7 @@ export interface BridgeEntry {
   deviceName: string;
   userId: string;
   projectId: string;
+  keyId?: string;
   ws: WebSocket;
   status: 'online' | 'offline';
   connectedAt: Date;
@@ -46,11 +47,12 @@ export interface OpenCliContext {
   enabledDomains: string[];
   projectId: string;
   userId: string;
+  workingDirectory: string;  // For history recording and per-user config
 }
 
 export interface OpenCliProjectConfig {
   enabled: boolean;
-  enabledDomains: string[];
+  // enabledDomains moved to per-user config (.a2a/opencli/u_{safeId}/config.json)
 }
 
 export interface PendingCommand {
@@ -59,6 +61,13 @@ export interface PendingCommand {
   timer: NodeJS.Timeout;
   projectId: string;
   userId: string;
+  startedAt: string;
+  // Optional: populated when history recording is enabled
+  historyContext?: {
+    command: string;          // e.g. "twitter post 'Hello'"
+    workingDirectory: string; // from opencliContext.workingDirectory
+    bridgeId: string;         // from bridgeRegistry entry
+  };
 }
 
 export interface RegisterMessage {

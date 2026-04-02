@@ -11,7 +11,8 @@ export class BridgeCommandProxy {
   async dispatch(
     projectId: string,
     userId: string,
-    command: { site: string; action: string; args: string[]; timeout?: number }
+    command: { site: string; action: string; args: string[]; timeout?: number },
+    historyContext?: { workingDirectory: string; bridgeId: string }
   ): Promise<string> {
     const entry = this.registry.get(projectId, userId);
     if (!entry) {
@@ -26,11 +27,53 @@ export class BridgeCommandProxy {
 
     return new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {
+        const pending = this.pending.get(id);
         this.pending.delete(id);
         reject(new BridgeError('BRIDGE_TIMEOUT'));
+
+        // Fire-and-forget: record timeout in history (after reject, so caller isn't blocked by disk I/O)
+        if (pending?.historyContext) {
+          import('./singletons.js').then(({ bridgeHistoryStore }) => {
+            bridgeHistoryStore.recordExecution(
+              pending.historyContext!.workingDirectory,
+              pending.userId,
+              {
+                id,
+                projectId: pending.projectId,
+                bridgeId: pending.historyContext!.bridgeId,
+                command: pending.historyContext!.command,
+                status: 'timeout',
+                exitCode: -1,
+                stdout: '',
+                stderr: `Command timed out after ${timeout}ms`,
+                executedAt: pending.startedAt,
+                completedAt: new Date().toISOString(),
+                duration: timeout,
+                userId: pending.userId,
+                workingDirectory: pending.historyContext!.workingDirectory,
+              }
+            ).catch(err => console.error('[BridgeHistory] Failed to record timeout:', err));
+          }).catch(() => {});
+        }
       }, timeout);
 
-      this.pending.set(id, { resolve, reject, timer, projectId, userId });
+      this.pending.set(id, {
+        resolve,
+        reject,
+        timer,
+        projectId,
+        userId,
+        startedAt: new Date().toISOString(),
+        historyContext: historyContext
+          ? {
+              // command.args contains CLI arguments (query, --limit, --id, etc.)
+              // action is passed separately and will be inserted by commandRunner
+              command: `${command.site} ${command.action} ${command.args.join(' ')}`,
+              workingDirectory: historyContext.workingDirectory,
+              bridgeId: historyContext.bridgeId,
+            }
+          : undefined,
+      });
 
       entry.ws.send(
         JSON.stringify({
@@ -51,6 +94,32 @@ export class BridgeCommandProxy {
 
     clearTimeout(pending.timer);
     this.pending.delete(msg.id);
+
+    // Fire-and-forget history recording
+    if (pending.historyContext) {
+      // Lazy import to avoid circular dep between bridgeCommandProxy ↔ singletons
+      import('./singletons.js').then(({ bridgeHistoryStore }) => {
+        bridgeHistoryStore.recordExecution(
+          pending.historyContext!.workingDirectory,
+          pending.userId,
+          {
+            id: msg.id,
+            projectId: pending.projectId,
+            bridgeId: pending.historyContext!.bridgeId,
+            command: pending.historyContext!.command,
+            status: msg.success ? 'success' : 'error',
+            exitCode: msg.exitCode,
+            stdout: msg.stdout,
+            stderr: msg.stderr,
+            executedAt: new Date(Date.now() - msg.durationMs).toISOString(),
+            completedAt: new Date().toISOString(),
+            duration: msg.durationMs,
+            userId: pending.userId,
+            workingDirectory: pending.historyContext!.workingDirectory,
+          }
+        ).catch(err => console.error('[BridgeHistory] Failed to record:', err));
+      }).catch(() => {});
+    }
 
     if (msg.success) {
       pending.resolve(msg.stdout);

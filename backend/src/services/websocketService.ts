@@ -17,12 +17,14 @@ interface WSClient {
     userId?: string;
     watchKey: string;
   };
-  subscribedSessions?: { userId?: string };  // undefined = 未订阅
-  subscribedCronDirs: Set<string>; // supports multiple project workingDirectories
+  subscribedSessions?: { userId?: string };
+  subscribedCronDirs: Set<string>;
   subscribedCronAll?: {
     userId: string;
     workDirs: Set<string>;
   };
+  // opencli-bridge: key is "projectId::userId" for per-user filtering
+  subscribedOpenCliBridges?: Set<string>;
 }
 
 let wss: WebSocketServer | null = null;
@@ -250,6 +252,15 @@ async function handleClientMessage(client: WSClient, msg: any): Promise<void> {
       } catch (err) {
         console.warn('[WebSocket] Failed to subscribe cron-all:', err);
       }
+    } else if (msg.channel === 'opencli-bridge'
+      && typeof msg.projectId === 'string'
+      && typeof msg.userId === 'string') {
+      // Per-user subscription key: "projectId::normalizedUserId"
+      if (!client.subscribedOpenCliBridges) {
+        client.subscribedOpenCliBridges = new Set();
+      }
+      const key = `${msg.projectId}::${(msg.userId as string).trim().toLowerCase()}`;
+      client.subscribedOpenCliBridges.add(key);
     }
   } else if (msg.type === 'unsubscribe') {
     if (msg.channel === 'workspace' && client.workspace) {
@@ -261,6 +272,8 @@ async function handleClientMessage(client: WSClient, msg: any): Promise<void> {
       client.subscribedCronDirs.clear();
     } else if (msg.channel === 'cron-all') {
       client.subscribedCronAll = undefined;
+    } else if (msg.channel === 'opencli-bridge') {
+      client.subscribedOpenCliBridges?.clear();
     }
   }
 }
@@ -273,6 +286,7 @@ function cleanupClient(client: WSClient): void {
   client.subscribedSessions = undefined;
   client.subscribedCronDirs.clear();
   client.subscribedCronAll = undefined;
+  client.subscribedOpenCliBridges?.clear();
 }
 
 export function broadcastCronEvent(workingDirectory: string, event: {
@@ -290,6 +304,55 @@ export function broadcastCronEvent(workingDirectory: string, event: {
     }
     // else if 防止同一 client 双推 (per-project 和 cron-all 只收一次)
     else if (client.subscribedCronAll?.workDirs.has(workingDirectory)) {
+      sendSafe(client, message);
+    }
+  }
+}
+
+/**
+ * Broadcast opencli bridge status event to subscribed browser clients.
+ * Filters by projectId + userId — Alice's bridge offline ≠ Bob sees banner.
+ */
+export function broadcastOpenCliBridgeEvent(
+  projectId: string,
+  userId: string,
+  event: {
+    type: 'opencli:online' | 'opencli:offline' | 'opencli:error';
+    projectId: string;
+    userId: string;
+    bridgeId: string;
+    timestamp: number;
+    reason?: string;
+  }
+): void {
+  const message = JSON.stringify(event);
+  const key = `${projectId}::${userId.trim().toLowerCase()}`;
+  for (const client of clients) {
+    if (client.subscribedOpenCliBridges?.has(key)) {
+      sendSafe(client, message);
+    }
+  }
+}
+
+/**
+ * Broadcast opencli config update to subscribed browser clients.
+ * Used when a user changes their domain configuration via PUT /api/opencli/domains.
+ */
+export function broadcastOpenCliConfigUpdate(
+  projectId: string,
+  userId: string,
+  event: {
+    type: 'opencli:config_update';
+    projectId: string;
+    userId: string;
+    domains: Record<string, boolean>;
+    timestamp: number;
+  }
+): void {
+  const message = JSON.stringify(event);
+  const key = `${projectId}::${userId.trim().toLowerCase()}`;
+  for (const client of clients) {
+    if (client.subscribedOpenCliBridges?.has(key)) {
       sendSafe(client, message);
     }
   }

@@ -38,8 +38,10 @@ describe('Pairing Flow (end-to-end)', () => {
     expect(obkKey).toMatch(/^obk_/);
 
     // Step 5: Validate bridge key (subsequent WS connections)
-    const userId = await service.validateBridgeKey(obkKey);
-    expect(userId).toBe('alice@example.com');
+    const validated = await service.validateBridgeKey(obkKey);
+    expect(validated).not.toBeNull();
+    expect(validated!.userId).toBe('alice@example.com');
+    expect(validated!.keyId).toBeDefined();
 
     // Step 6: Token cannot be reused
     expect(service.consumePairingToken(config.t)).toBeNull();
@@ -55,7 +57,9 @@ describe('Pairing Flow (end-to-end)', () => {
 
     // New service instance (simulates restart)
     const service2 = new BridgeKeyService(tmpDir);
-    const userId = await service2.validateBridgeKey(key);
-    expect(userId).toBe('bob@example.com');
+    const validated = await service2.validateBridgeKey(key);
+    expect(validated).not.toBeNull();
+    expect(validated!.userId).toBe('bob@example.com');
+    expect(validated!.keyId).toBeDefined();
   });
 });

@@ -48,7 +48,7 @@ import { handleSessionManagement } from '../utils/sessionUtils.js';
 import { buildQueryOptions } from '../utils/claudeUtils.js';
 import { executeA2AQuery, executeA2AQueryStreaming } from '../services/a2a/a2aQueryService.js';
 import { userInputRegistry } from '../services/askUserQuestion/index.js';
-import { loadProjectOpenCliConfig } from '../services/opencli/opencliConfigStorage.js';
+import { loadProjectOpenCliEnabled, loadUserOpenCliConfig } from '../services/opencli/opencliConfigStorage.js';
 
 // Cursor A2A Service imports
 import {
@@ -694,12 +694,27 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
     }
 
     // Construct OpenCLI context (server-side, not from client request)
-    const opencliConfig = loadProjectOpenCliConfig(a2aContext.workingDirectory);
-    // TODO: Add fallback to JWT user_id when JWT is extended with user identity
-    // Currently requires Graphiti to be enabled for OpenCLI to work
-    const opencliUserId = graphitiContext?.user_id || undefined;
-    const opencliContext = opencliConfig?.enabled && opencliUserId
-      ? { enabled: true, enabledDomains: opencliConfig.enabledDomains, projectId: a2aContext.projectId, userId: opencliUserId }
+    // Two-tier: project-level enabled flag + per-user domain preferences
+    //
+    // userId resolution priority:
+    //   1. graphitiContext.user_id — weknora-ui always sends this when logged in
+    //   2. context.userId          — fallback for programmatic clients without graphiti context
+    //      (programmatic clients can pass { context: { userId: "user@example.com" } })
+    const opencliUserId = graphitiContext?.user_id
+      || (context as Record<string, unknown> | undefined)?.userId as string | undefined
+      || undefined;
+    const projectEnabled = loadProjectOpenCliEnabled(a2aContext.workingDirectory);
+    const userOpenCliConfig = projectEnabled && opencliUserId
+      ? loadUserOpenCliConfig(a2aContext.workingDirectory, opencliUserId)
+      : null;
+    const opencliContext = projectEnabled && opencliUserId && userOpenCliConfig
+      ? {
+          enabled: true,
+          enabledDomains: userOpenCliConfig.enabledDomains,
+          projectId: a2aContext.projectId,
+          userId: opencliUserId,
+          workingDirectory: a2aContext.workingDirectory,
+        }
       : undefined;
 
     // Extract MCP tools from agent configuration

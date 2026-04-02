@@ -110,25 +110,34 @@ describe('BridgeRegistry', () => {
     expect(registry.get('proj-b', 'user@example.com')).toBeUndefined();
   });
 
-  it('device takeover: last WS wins and old WS receives device_replaced', () => {
-    const oldWs = createMockWs();
-    const newWs = createMockWs();
-    const msg = createRegisterMsg();
+  it('device takeover: last WS wins and old WS receives device_replaced then close', () => {
+    vi.useFakeTimers();
+    try {
+      const oldWs = createMockWs();
+      const newWs = createMockWs();
+      const msg = createRegisterMsg();
 
-    registry.register(oldWs, msg);
-    registry.register(newWs, msg);
+      registry.register(oldWs, msg);
+      registry.register(newWs, msg);
 
-    // Old WS should have received device_replaced message
-    expect(oldWs.send).toHaveBeenCalledTimes(1);
-    const sentData = JSON.parse(oldWs.send.mock.calls[0][0]);
-    expect(sentData.type).toBe('device_replaced');
+      // Old WS should have received device_replaced message (without bridgeId/deviceName for security)
+      expect(oldWs.send).toHaveBeenCalledTimes(1);
+      const sentData = JSON.parse(oldWs.send.mock.calls[0][0]);
+      expect(sentData.type).toBe('device_replaced');
+      expect(sentData.bridgeId).toBeUndefined();
+      expect(sentData.deviceName).toBeUndefined();
 
-    // New WS is the active one
-    const entry = registry.get('proj-1', 'user@example.com');
-    expect(entry!.ws).toBe(newWs);
+      // New WS is the active one
+      const entry = registry.get('proj-1', 'user@example.com');
+      expect(entry!.ws).toBe(newWs);
 
-    // Old WS should NOT have been closed (caller handles that)
-    expect(oldWs.close).not.toHaveBeenCalled();
+      // Old WS should be closed after 50ms delay
+      expect(oldWs.close).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(50);
+      expect(oldWs.close).toHaveBeenCalledWith(1000, 'device_replaced');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('get() returns undefined for unknown bridge', () => {

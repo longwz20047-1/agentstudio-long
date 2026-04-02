@@ -77,7 +77,8 @@ export async function integrateOpenCliMcpServers(
           options: z.record(z.string(), z.string()).optional().describe('Additional key-value parameters'),
         },
         async (args) => {
-          const cliArgs: string[] = [args.action];
+          // Build CLI args (action is passed separately in dispatch, not in args array)
+          const cliArgs: string[] = [];
           if (args.query) cliArgs.push(args.query);
           if (args.limit !== undefined) cliArgs.push('--limit', String(args.limit));
           if (args.id) cliArgs.push('--id', args.id);
@@ -139,11 +140,17 @@ export async function integrateOpenCliMcpServers(
 
           try {
             const timeout = isWriteOperation(site, args.action) ? WRITE_COMMAND_TIMEOUT : DEFAULT_COMMAND_TIMEOUT;
+            // Re-fetch current bridge entry to handle reconnections with new bridgeId
+            const currentEntry = bridgeRegistry.get(projectId, userId);
+            const currentBridgeId = currentEntry?.bridgeId || entry.bridgeId;
             const stdout = await commandProxy.dispatch(projectId, userId, {
               site,
               action: args.action,
               args: cliArgs,
               timeout,
+            }, {
+              workingDirectory: opencliContext.workingDirectory,
+              bridgeId: currentBridgeId,
             });
             return formatOpenCliResult(site, args.action, stdout);
           } catch (error) {

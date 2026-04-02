@@ -5,6 +5,9 @@ import os from 'os';
 import {
   loadProjectOpenCliConfig,
   saveProjectOpenCliConfig,
+  loadProjectOpenCliEnabled,
+  loadUserOpenCliConfig,
+  saveUserOpenCliConfig,
 } from '../opencliConfigStorage.js';
 import type { OpenCliProjectConfig } from '../types.js';
 
@@ -21,45 +24,42 @@ describe('opencliConfigStorage', () => {
     }
   });
 
+  // ── Project-level (enabled toggle) ────────────────────────────────────────
+
   it('returns undefined for unconfigured project (no .a2a dir)', () => {
     tmpDir = createTmpDir();
     const result = loadProjectOpenCliConfig(tmpDir);
     expect(result).toBeUndefined();
   });
 
-  it('saves and loads config correctly', () => {
+  it('saves and loads project-level config (enabled only)', () => {
     tmpDir = createTmpDir();
-    const config: OpenCliProjectConfig = {
-      enabled: true,
-      enabledDomains: ['social', 'news'],
-    };
+    const config: OpenCliProjectConfig = { enabled: true };
 
     saveProjectOpenCliConfig(tmpDir, config);
     const loaded = loadProjectOpenCliConfig(tmpDir);
 
     expect(loaded).toBeDefined();
     expect(loaded!.enabled).toBe(true);
-    expect(loaded!.enabledDomains).toEqual(['social', 'news']);
   });
 
-  it('overwrites existing config', () => {
+  it('loadProjectOpenCliEnabled returns false for unconfigured project', () => {
     tmpDir = createTmpDir();
-    const original: OpenCliProjectConfig = {
-      enabled: true,
-      enabledDomains: ['social'],
-    };
-    const updated: OpenCliProjectConfig = {
-      enabled: false,
-      enabledDomains: ['finance', 'media'],
-    };
+    expect(loadProjectOpenCliEnabled(tmpDir)).toBe(false);
+  });
 
-    saveProjectOpenCliConfig(tmpDir, original);
-    saveProjectOpenCliConfig(tmpDir, updated);
+  it('loadProjectOpenCliEnabled returns true after enabling', () => {
+    tmpDir = createTmpDir();
+    saveProjectOpenCliConfig(tmpDir, { enabled: true });
+    expect(loadProjectOpenCliEnabled(tmpDir)).toBe(true);
+  });
+
+  it('overwrites existing project config', () => {
+    tmpDir = createTmpDir();
+    saveProjectOpenCliConfig(tmpDir, { enabled: true });
+    saveProjectOpenCliConfig(tmpDir, { enabled: false });
     const loaded = loadProjectOpenCliConfig(tmpDir);
-
-    expect(loaded).toBeDefined();
     expect(loaded!.enabled).toBe(false);
-    expect(loaded!.enabledDomains).toEqual(['finance', 'media']);
   });
 
   it('returns undefined for corrupted JSON file', () => {
@@ -70,5 +70,43 @@ describe('opencliConfigStorage', () => {
 
     const result = loadProjectOpenCliConfig(tmpDir);
     expect(result).toBeUndefined();
+  });
+
+  // ── Per-user config (enabledDomains) ──────────────────────────────────────
+
+  it('loadUserOpenCliConfig returns all domains by default', () => {
+    tmpDir = createTmpDir();
+    const config = loadUserOpenCliConfig(tmpDir, 'alice@example.com');
+    expect(config.enabledDomains).toEqual(['social', 'media', 'finance', 'news', 'desktop', 'jobs']);
+  });
+
+  it('saves and loads per-user domain config', () => {
+    tmpDir = createTmpDir();
+    saveUserOpenCliConfig(tmpDir, 'alice@example.com', { enabledDomains: ['social', 'news'] });
+    const loaded = loadUserOpenCliConfig(tmpDir, 'alice@example.com');
+    expect(loaded.enabledDomains).toEqual(['social', 'news']);
+  });
+
+  it('different users have independent configs', () => {
+    tmpDir = createTmpDir();
+    saveUserOpenCliConfig(tmpDir, 'alice@example.com', { enabledDomains: ['social'] });
+    saveUserOpenCliConfig(tmpDir, 'bob@example.com', { enabledDomains: ['finance', 'media'] });
+
+    expect(loadUserOpenCliConfig(tmpDir, 'alice@example.com').enabledDomains).toEqual(['social']);
+    expect(loadUserOpenCliConfig(tmpDir, 'bob@example.com').enabledDomains).toEqual(['finance', 'media']);
+  });
+
+  it('userId with special chars is safely encoded in path', () => {
+    tmpDir = createTmpDir();
+    const userId = 'user@example.com';
+    saveUserOpenCliConfig(tmpDir, userId, { enabledDomains: ['desktop'] });
+
+    // File should exist at u_user_example_com/config.json
+    const safeId = userId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const configPath = path.join(tmpDir, '.a2a', 'opencli', `u_${safeId}`, 'config.json');
+    expect(fs.existsSync(configPath)).toBe(true);
+
+    const loaded = loadUserOpenCliConfig(tmpDir, userId);
+    expect(loaded.enabledDomains).toEqual(['desktop']);
   });
 });

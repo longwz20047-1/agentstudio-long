@@ -130,7 +130,7 @@ export class BridgeKeyService {
     return key;
   }
 
-  async validateBridgeKey(key: string): Promise<string | null> {
+  async validateBridgeKey(key: string): Promise<{ userId: string; keyId: string } | null> {
     if (!key.startsWith(OBK_PREFIX)) return null;
     const registry = this.loadRegistry();
     for (const record of registry.keys) {
@@ -143,7 +143,7 @@ export class BridgeKeyService {
             if (r) r.lastUsedAt = new Date().toISOString();
           });
         } catch {}
-        return record.userId;
+        return { userId: record.userId, keyId: record.id };
       }
     }
     return null;

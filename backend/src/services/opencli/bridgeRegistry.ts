@@ -9,7 +9,7 @@ export class BridgeRegistry {
     return `${projectId}||${normalizedUserId}`;
   }
 
-  register(ws: WebSocket, msg: RegisterMessage): void {
+  register(ws: WebSocket, msg: RegisterMessage, keyId?: string): void {
     const normalizedUserId = msg.userId.trim().toLowerCase();
     const now = new Date();
 
@@ -17,17 +17,20 @@ export class BridgeRegistry {
       const key = this.makeKey(project.projectId, normalizedUserId);
       const existing = this.entries.get(key);
 
-      // Device takeover: if entry exists with a different WS, notify old one
+      // Device takeover: if entry exists with a different WS, notify old one then close
       if (existing && existing.ws !== ws) {
         try {
           existing.ws.send(JSON.stringify({
             type: 'device_replaced',
-            bridgeId: msg.bridgeId,
-            deviceName: msg.deviceName,
           }));
         } catch {
           // Old WS may already be dead — ignore send errors
         }
+        // Close old WS after a short delay to allow the message to be delivered
+        const oldWs = existing.ws;
+        setTimeout(() => {
+          try { oldWs.close(1000, 'device_replaced'); } catch {}
+        }, 50);
       }
 
       this.entries.set(key, {
@@ -35,6 +38,7 @@ export class BridgeRegistry {
         deviceName: msg.deviceName,
         userId: normalizedUserId,
         projectId: project.projectId,
+        keyId,
         ws,
         status: 'online',
         connectedAt: now,
@@ -70,6 +74,16 @@ export class BridgeRegistry {
     const results: BridgeEntry[] = [];
     for (const entry of this.entries.values()) {
       if (entry.projectId === projectId) {
+        results.push(entry);
+      }
+    }
+    return results;
+  }
+
+  getAllForKey(keyId: string): BridgeEntry[] {
+    const results: BridgeEntry[] = [];
+    for (const entry of this.entries.values()) {
+      if (entry.keyId === keyId) {
         results.push(entry);
       }
     }

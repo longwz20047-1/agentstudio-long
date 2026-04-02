@@ -48,7 +48,7 @@ export function clearAllApprovals(): void {
 }
 
 export function buildConfirmationPrompt(site: string, action: string, args: string[]): string {
-  const command = `opencli ${site} ${args.join(' ')}`;
+  const command = `opencli ${site} ${action} ${args.join(' ')}`;
   return [
     `OpenCLI Write Operation Confirmation`,
     ``,
