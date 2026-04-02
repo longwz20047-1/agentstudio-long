@@ -184,7 +184,10 @@ export async function integrateFirecrawlMcpServer(
           }
           text += truncated;
 
-          const content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> = [{ type: 'text', text }];
+          const content: Array<
+            | { type: 'text'; text: string }
+            | { type: 'image'; data: string; mimeType: string }
+          > = [{ type: 'text', text }];
 
           // Screenshot from formats
           const screenshotBase64 = result.screenshot;
@@ -321,7 +324,10 @@ export async function integrateFirecrawlMcpServer(
           if (result.metadata?.title) text += `# ${result.metadata.title}\n\n`;
           text += truncated;
 
-          const content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> = [{ type: 'text', text }];
+          const content: Array<
+            | { type: 'text'; text: string }
+            | { type: 'image'; data: string; mimeType: string }
+          > = [{ type: 'text', text }];
 
           // Screenshot from actions (priority) or formats
           const actionScreenshots = result.actions?.screenshots;

@@ -175,6 +175,7 @@ vi.mock('../../sessionManager.js', () => ({
       {
         sessionId: 'session_1',
         agentId: 'claude-code',
+        userId: null,
         isActive: true,
         lastActivity: Date.now(),
         idleTimeMs: 1000,

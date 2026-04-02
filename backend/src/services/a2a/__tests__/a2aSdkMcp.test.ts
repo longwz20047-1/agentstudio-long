@@ -228,9 +228,23 @@ describe('A2A SDK MCP Server', () => {
             }, {});
 
             expect(result.content).toHaveLength(2);
-            expect(result.content[0].text).toBe('Response');
-            expect(result.content[1].text).toContain('Session ID: returned-session-456');
-            expect(result.content[1].text).toContain('To continue this conversation');
+
+            const firstContent = result.content[0];
+            expect(firstContent.type).toBe('text');
+            if (firstContent.type === 'text') {
+                expect(firstContent.text).toBe('Response');
+            } else {
+                throw new Error(`Expected text content, got ${firstContent.type}`);
+            }
+
+            const secondContent = result.content[1];
+            expect(secondContent.type).toBe('text');
+            if (secondContent.type === 'text') {
+                expect(secondContent.text).toContain('Session ID: returned-session-456');
+                expect(secondContent.text).toContain('To continue this conversation');
+            } else {
+                throw new Error(`Expected text content, got ${secondContent.type}`);
+            }
         });
 
         it('should not include session info block if no sessionId returned', async () => {
@@ -253,7 +267,14 @@ describe('A2A SDK MCP Server', () => {
             }, {});
 
             expect(result.content).toHaveLength(1);
-            expect(result.content[0].text).toBe('Response');
+
+            const firstContent = result.content[0];
+            expect(firstContent.type).toBe('text');
+            if (firstContent.type === 'text') {
+                expect(firstContent.text).toBe('Response');
+            } else {
+                throw new Error(`Expected text content, got ${firstContent.type}`);
+            }
         });
     });
 });

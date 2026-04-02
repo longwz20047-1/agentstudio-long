@@ -167,9 +167,17 @@ export class BuiltinTaskExecutor implements ITaskExecutor {
           this.workerHealthChecks.delete(taskId);
         }
 
-        // Terminate worker gracefully
-        await workerInstance.worker.terminate();
+        // Remove from workers map BEFORE terminate to prevent exit handler
+        // from re-entering handleTaskComplete with stale state
         this.workers.delete(taskId);
+
+        // Clear timeout
+        if (workerInstance.timeout) {
+          clearTimeout(workerInstance.timeout);
+        }
+
+        // Terminate worker
+        await workerInstance.worker.terminate();
 
         this.stats.canceledTasks++;
         this.updateStats();
@@ -303,7 +311,7 @@ export class BuiltinTaskExecutor implements ITaskExecutor {
     if (!existsSync(workerPath)) {
       // If not found in current directory, try the dist directory
       // This handles the case when tests run from src/ but need dist/ workers
-      const distPath = _dirname.replace('/src/', '/dist/');
+      const distPath = _dirname.replace(/[/\\]src[/\\]/, path.sep + 'dist' + path.sep);
       workerPath = path.join(distPath, 'taskWorker.js');
 
       if (!existsSync(workerPath)) {
@@ -509,10 +517,10 @@ export class BuiltinTaskExecutor implements ITaskExecutor {
         const scheduledTaskId = task.scheduledTaskId || task.id;
         const executionId = task.id;
 
-        if (scheduledTaskId.startsWith('cron_')) {
+        if (task.cronJobId) {
           // A2A Cron Job → route to a2aCronService
           const { a2aCronService } = await import('../a2a/a2aCronService.js');
-          await a2aCronService.onExecutionComplete(executionId, scheduledTaskId, result);
+          await a2aCronService.onExecutionComplete(executionId, task.cronJobId, result);
         } else {
           // System scheduled task → existing logic
           const {
@@ -521,26 +529,27 @@ export class BuiltinTaskExecutor implements ITaskExecutor {
           } = await import('../scheduledTaskStorage.js');
           const { onScheduledTaskComplete } = await import('../schedulerService.js');
 
-          await updateTaskExecution(scheduledTaskId, executionId, {
-            status: result.status === 'completed' ? 'success' : 'error',
-            completedAt: result.completedAt,
-            responseSummary: result.output?.substring(0, 500),
-            sessionId: result.sessionId,
-            error: result.error,
-            errorStack: result.errorStack,
-            logs: result.logs,
-          });
+          try {
+            await updateTaskExecution(scheduledTaskId, executionId, {
+              status: result.status === 'completed' ? 'success' : 'error',
+              completedAt: result.completedAt,
+              responseSummary: result.output?.substring(0, 500),
+              sessionId: result.sessionId,
+              error: result.error,
+              errorStack: result.errorStack,
+              logs: result.logs,
+            });
 
-          await updateTaskRunStatus(
-            scheduledTaskId,
-            result.status === 'completed' ? 'success' : 'error',
-            result.error
-          );
-
-          // Notify scheduler that task execution is complete
-          // This updates runningTaskCount and runningExecutions tracking
-          // Pass executionId (task.id) because that's what's tracked in runningExecutions
-          onScheduledTaskComplete(executionId);
+            await updateTaskRunStatus(
+              scheduledTaskId,
+              result.status === 'completed' ? 'success' : 'error',
+              result.error
+            );
+          } finally {
+            // Always notify scheduler to decrement runningTaskCount,
+            // even if storage updates failed above
+            onScheduledTaskComplete(executionId);
+          }
         }
       }
     } catch (error) {

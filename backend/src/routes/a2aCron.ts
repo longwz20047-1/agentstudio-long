@@ -5,6 +5,8 @@ import { a2aAuth, type A2ARequest } from '../middleware/a2aAuth.js';
 import { a2aRateLimiter } from '../middleware/rateLimiting.js';
 import { a2aCronService } from '../services/a2a/a2aCronService.js';
 import { a2aCronStorage } from '../services/a2a/a2aCronStorage.js';
+import { maskJobContext } from '../services/a2a/a2aCronUtils.js';
+import type { CronJob } from '../types/a2aCron.js';
 
 const router: Router = express.Router({ mergeParams: true });
 router.use(a2aAuth as any);
@@ -27,6 +29,20 @@ const CronScheduleSchema = z.object({
   { message: 'Missing required field for schedule type' }
 );
 
+const CronContextSchema = z.object({
+  weknora: z.object({
+    api_key: z.string().min(1),
+    kb_ids: z.array(z.string().min(1)).min(1),
+    knowledge_ids: z.array(z.string()).optional(),
+    base_url: z.string().url(),
+  }).optional(),
+  graphiti: z.object({
+    base_url: z.string().url(),
+    user_id: z.string().min(1),
+    group_ids: z.array(z.string()).optional(),
+  }).optional(),
+}).optional().nullable();
+
 const CreateCronJobSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(500).optional(),
@@ -36,6 +52,8 @@ const CreateCronJobSchema = z.object({
   enabled: z.boolean().optional(),
   timeoutMs: z.number().int().min(10000).max(3600000).optional(),
   maxTurns: z.number().int().min(1).max(100).optional(),
+  userId: z.string().max(100).optional(),
+  context: CronContextSchema,
 });
 
 const UpdateCronJobSchema = CreateCronJobSchema.partial();
@@ -48,6 +66,20 @@ function getContext(req: A2ARequest) {
   return ctx;
 }
 
+function extractUserIdFromContext(context?: any): string | undefined {
+  if (context?.graphiti?.user_id) return context.graphiti.user_id;
+  if (context?.weknora?.api_key) {
+    try {
+      const parts = context.weknora.api_key.split('.');
+      if (parts.length === 3) {
+        const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+        if (payload.user_id) return payload.user_id;
+      }
+    } catch { /* ignore */ }
+  }
+  return undefined;
+}
+
 // --- CRUD Endpoints ---
 
 // GET /jobs — List all jobs
@@ -55,7 +87,7 @@ router.get('/jobs', (req: A2ARequest, res: Response) => {
   try {
     const { workingDirectory } = getContext(req);
     const jobs = a2aCronStorage.loadJobs(workingDirectory);
-    res.json({ jobs });
+    res.json({ jobs: jobs.map(maskJobContext) });
   } catch {
     res.status(500).json({ error: 'Failed to list jobs' });
   }
@@ -67,7 +99,7 @@ router.get('/jobs/:jobId', (req: A2ARequest, res: Response) => {
     const { workingDirectory } = getContext(req);
     const job = a2aCronStorage.getJob(workingDirectory, req.params.jobId);
     if (!job) return res.status(404).json({ error: 'Job not found' });
-    res.json({ job });
+    res.json({ job: maskJobContext(job) });
   } catch {
     res.status(500).json({ error: 'Failed to get job' });
   }
@@ -89,7 +121,10 @@ router.post('/jobs', async (req: A2ARequest, res: Response) => {
       }
     }
 
-    const job = a2aCronStorage.createJob(workingDirectory, parsed.data, agentType);
+    // Extract userId: explicit field > context JWT > context graphiti
+    const userId = parsed.data.userId || extractUserIdFromContext(parsed.data.context);
+
+    const job = a2aCronStorage.createJob(workingDirectory, parsed.data, agentType, userId);
 
     // Add workspace to index and register
     await a2aCronStorage.addWorkspaceToIndex(workingDirectory);
@@ -97,7 +132,7 @@ router.post('/jobs', async (req: A2ARequest, res: Response) => {
       a2aCronService.registerJob(job);
     }
 
-    res.status(201).json({ job });
+    res.status(201).json({ job: maskJobContext(job) });
   } catch {
     res.status(500).json({ error: 'Failed to create job' });
   }
@@ -125,7 +160,7 @@ router.put('/jobs/:jobId', (req: A2ARequest, res: Response) => {
     // Reschedule if schedule or enabled changed
     a2aCronService.rescheduleJob(job);
 
-    res.json({ job });
+    res.json({ job: maskJobContext(job) });
   } catch {
     res.status(500).json({ error: 'Failed to update job' });
   }
@@ -156,7 +191,7 @@ router.post('/jobs/:jobId/toggle', (req: A2ARequest, res: Response) => {
     if (!job) return res.status(404).json({ error: 'Job not found' });
 
     a2aCronService.rescheduleJob(job);
-    res.json({ job });
+    res.json({ job: maskJobContext(job) });
   } catch {
     res.status(500).json({ error: 'Failed to toggle job' });
   }

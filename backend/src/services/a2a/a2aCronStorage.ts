@@ -76,7 +76,7 @@ export class A2ACronStorage {
     return this.loadJobs(wd).find(j => j.id === jobId) ?? null;
   }
 
-  createJob(wd: string, req: CreateCronJobRequest, agentType: string): CronJob {
+  createJob(wd: string, req: CreateCronJobRequest, agentType: string, userId?: string): CronJob {
     const jobs = this.loadJobs(wd);
     const now = new Date().toISOString();
     const job: CronJob = {
@@ -91,6 +91,8 @@ export class A2ACronStorage {
       workingDirectory: wd,
       timeoutMs: req.timeoutMs,
       maxTurns: req.maxTurns,
+      userId,
+      context: req.context,
       createdAt: now,
       updatedAt: now,
     };
@@ -112,10 +114,20 @@ export class A2ACronStorage {
     if (req.enabled !== undefined) job.enabled = req.enabled;
     if (req.timeoutMs !== undefined) job.timeoutMs = req.timeoutMs;
     if (req.maxTurns !== undefined) job.maxTurns = req.maxTurns;
+    if (req.context !== undefined) job.context = req.context ?? undefined;
     job.updatedAt = new Date().toISOString();
     jobs[idx] = job;
     this.saveJobs(wd, jobs);
     return job;
+  }
+
+  /** Persist SDK session ID for reuse resume after restart (internal, not exposed to API) */
+  updateJobSdkSessionId(wd: string, jobId: string, sdkSessionId: string): void {
+    const jobs = this.loadJobs(wd);
+    const job = jobs.find(j => j.id === jobId);
+    if (!job) return;
+    job.sdkSessionId = sdkSessionId;
+    this.saveJobs(wd, jobs);
   }
 
   deleteJob(wd: string, jobId: string): boolean {

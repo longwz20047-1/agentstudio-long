@@ -21,6 +21,7 @@ export class ClaudeSession {
   private claudeVersionId: string | undefined = undefined;
   private modelId: string | undefined = undefined;
   private sessionTitle: string | null = null;
+  private userId: string | null = null;
 
   // 响应分发器相关 - 简化版本（会话级别的并发控制在 SlackAIService 中处理）
   private responseCallbacks: Map<string, (response: SDKMessage) => void | Promise<void>> = new Map();
@@ -115,6 +116,14 @@ export class ClaudeSession {
    */
   getModelId(): string | undefined {
     return this.modelId;
+  }
+
+  setUserId(userId: string): void {
+    this.userId = userId;
+  }
+
+  getUserId(): string | null {
+    return this.userId;
   }
 
   /**
@@ -237,9 +246,22 @@ export class ClaudeSession {
     console.log(`🚀 Starting background response handler for agent: ${this.agentId}`);
 
     try {
+      let messageCount = 0;
+      let assistantMessageCount = 0;
+      let resultReceived = false;
+
       for await (const response of this.queryStream) {
-        // 类型安全的消息处理
+        messageCount++;
         const sdkMessage = response as SDKMessage;
+
+        // 只记录关键消息类型
+        if (sdkMessage.type === 'assistant') {
+          assistantMessageCount++;
+        }
+        if (sdkMessage.type === 'result') {
+          resultReceived = true;
+          console.log(`✅ [ClaudeSession] Result received: subtype=${(sdkMessage as any).subtype}, total messages=${messageCount}, assistant messages=${assistantMessageCount}`);
+        }
 
         // 计时：第一个响应的时间
         if (!this.firstResponseReceived && this.lastMessageSentAt > 0) {
@@ -281,7 +303,35 @@ export class ClaudeSession {
           } catch (err) {
             console.error(`[ClaudeSession] Orphan message handler error:`, err);
           }
+        } else {
+          console.warn(`⚠️ [ClaudeSession] Message has no handler! type=${sdkMessage.type}`);
         }
+      }
+
+      // Stream 结束后检查状态
+      console.log(`🏁 [ClaudeSession] Stream ended: total=${messageCount}, assistant=${assistantMessageCount}, result=${resultReceived}, isProcessing=${this.isProcessing}`);
+
+      // 如果 stream 结束但还有未完成的请求，说明出现异常
+      if (this.isProcessing && this.responseCallbacks.size > 0) {
+        console.error(`❌ [ClaudeSession] Stream ended unexpectedly! Still processing with ${this.responseCallbacks.size} pending callbacks`);
+        console.error(`   - Total messages: ${messageCount}, Assistant messages: ${assistantMessageCount}, Result received: ${resultReceived}`);
+
+        // 通知所有等待的 callback stream 异常结束
+        for (const [requestId, callback] of this.responseCallbacks.entries()) {
+          try {
+            await callback({
+              type: 'result',
+              subtype: 'error',
+              errors: ['Stream ended unexpectedly - SDK subprocess may have crashed'],
+            } as any);
+          } catch (err) {
+            console.error(`   - Failed to notify callback ${requestId}:`, err);
+          }
+        }
+
+        this.responseCallbacks.clear();
+        this.isProcessing = false;
+        console.log(`🔓 Session force-unlocked after stream end`);
       }
     } catch (error) {
       console.error(`Error in background response handler for agent ${this.agentId}:`, error);

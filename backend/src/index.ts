@@ -6,6 +6,8 @@ import { join } from 'path';
 import { readFileSync } from 'fs';
 import { createServer } from 'http';
 import { setupWebSocket, shutdownWebSocket } from './services/websocketService.js';
+import { setupOpenCliBridgeWs } from './routes/opencliWs.js';
+import opencliRouter from './routes/opencli.js';
 
 import filesRouter from './routes/files';
 import agentsRouter from './routes/agents';
@@ -565,6 +567,7 @@ const app: express.Express = express();
   });
 
   // Protected routes - Require authentication
+  app.use('/api/opencli', authMiddleware, opencliRouter);
   app.use('/api/files', authMiddleware, filesRouter);
   app.use('/api/agents', authMiddleware, agentsRouter);
   app.use('/api/mcp', authMiddleware, mcpRouter);
@@ -676,6 +679,7 @@ const app: express.Express = express();
   if (require.main === module) {
     const server = createServer(app);
     setupWebSocket(server);
+    setupOpenCliBridgeWs(server);
     server.listen(PORT, HOST, () => {
       console.log(`AI PPT Editor backend running on http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
       console.log(`Serving slides from: ${slidesDir}`);

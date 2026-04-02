@@ -37,6 +37,7 @@ export const A2AMessageRequestSchema = z.object({
   sessionMode: SessionModeSchema.optional().default('reuse'),
   context: z.record(z.string(), z.unknown()).optional(),
   effort: z.enum(['low', 'medium', 'high', 'max']).optional(),
+  taskBudgetTokens: z.number().int().positive().max(1000000).optional(),
 }).refine(
   (data) => data.message.trim().length > 0 || (data.images && data.images.length > 0),
   { message: 'Either message or images must be provided' }

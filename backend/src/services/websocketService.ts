@@ -17,13 +17,29 @@ interface WSClient {
     userId?: string;
     watchKey: string;
   };
-  subscribedSessions: boolean;
-  subscribedCron?: { workingDirectory: string };
+  subscribedSessions?: { userId?: string };
+  subscribedCronDirs: Set<string>;
+  subscribedCronAll?: {
+    userId: string;
+    workDirs: Set<string>;
+  };
+  // opencli-bridge: key is "projectId::userId" for per-user filtering
+  subscribedOpenCliBridges?: Set<string>;
 }
 
 let wss: WebSocketServer | null = null;
 const clients = new Set<WSClient>();
 let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+
+// 模块级懒缓存: ProjectMetadataStorage 实例
+let _cachedProjectStorage: any = null;
+async function getProjectStorage() {
+  if (!_cachedProjectStorage) {
+    const { ProjectMetadataStorage } = await import('./projectMetadataStorage.js');
+    _cachedProjectStorage = new ProjectMetadataStorage();
+  }
+  return _cachedProjectStorage;
+}
 
 async function authenticateToken(token: string): Promise<boolean> {
   if (process.env.NO_AUTH === 'true') return true;
@@ -32,29 +48,23 @@ async function authenticateToken(token: string): Promise<boolean> {
   return payload !== null;
 }
 
-function buildSessionMessage(): string {
-  return JSON.stringify({
-    type: 'session:update',
-    sessions: sessionManager.getSessionsInfo(),
-    activeSessionCount: sessionManager.getActiveSessionCount(),
-    timestamp: Date.now(),
-  });
-}
-
 function sendSafe(client: WSClient, message: string): void {
-  if (client.ws.readyState === WebSocket.OPEN) {
-    client.ws.send(message);
+  try {
+    if (client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(message);
+    }
+  } catch {
+    // Send failure — connection will be cleaned up by heartbeat
   }
 }
 
 export function setupWebSocket(server: Server): void {
-  wss = new WebSocketServer({ noServer: true });
+  wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 }); // 64KB max message size
 
   server.on('upgrade', async (request: IncomingMessage, socket: Duplex, head: Buffer) => {
     try {
       const url = new URL(request.url || '', `http://${request.headers.host}`);
       if (url.pathname !== '/ws') {
-        socket.destroy();
         return;
       }
       const token = url.searchParams.get('token');
@@ -71,7 +81,7 @@ export function setupWebSocket(server: Server): void {
   });
 
   wss.on('connection', (ws: WebSocket, _request: IncomingMessage, token: string) => {
-    const client: WSClient = { ws, apiKey: token, isAlive: true, subscribedSessions: false };
+    const client: WSClient = { ws, apiKey: token, isAlive: true, subscribedCronDirs: new Set() };
     clients.add(client);
 
     ws.on('message', async (raw) => {
@@ -141,11 +151,16 @@ export function setupWebSocket(server: Server): void {
 
   sessionManager.events.on('session:changed', () => {
     try {
-      const message = buildSessionMessage();
       for (const client of clients) {
-        if (client.subscribedSessions) {
-          sendSafe(client, message);
-        }
+        if (!client.subscribedSessions) continue;  // undefined = 未订阅
+        const userId = client.subscribedSessions.userId;
+        const sessions = sessionManager.getSessionsInfo(userId);
+        sendSafe(client, JSON.stringify({
+          type: 'session:update',
+          sessions,
+          activeSessionCount: sessions.filter((s: any) => s.isActive).length,
+          timestamp: Date.now(),
+        }));
       }
     } catch (err) {
       console.error('[WebSocket] Broadcast session error:', err);
@@ -170,33 +185,95 @@ async function handleClientMessage(client: WSClient, msg: any): Promise<void> {
         console.warn('[WebSocket] Failed to subscribe workspace:', err);
       }
     } else if (msg.channel === 'sessions') {
-      if (!client.subscribedSessions) {
-        client.subscribedSessions = true;
-        try { sendSafe(client, buildSessionMessage()); } catch { /* ignore */ }
-      }
+      const userId = msg.userId || undefined;
+      client.subscribedSessions = { userId };
+      // 立即推送 (按 userId 过滤)
+      const sessions = sessionManager.getSessionsInfo(userId);
+      sendSafe(client, JSON.stringify({
+        type: 'session:update',
+        sessions,
+        activeSessionCount: sessions.filter((s: any) => s.isActive).length,
+        timestamp: Date.now(),
+      }));
     } else if (msg.channel === 'cron' && typeof msg.agentId === 'string') {
       try {
         const { resolveA2AId } = await import('./a2a/agentMappingService.js');
         const mapping = await resolveA2AId(msg.agentId);
         if (mapping) {
-          client.subscribedCron = { workingDirectory: mapping.workingDirectory };
-          // Send initial sync
+          client.subscribedCronDirs.add(mapping.workingDirectory);
+          // Send initial sync for this project
           const { a2aCronStorage } = await import('./a2a/a2aCronStorage.js');
+          const { maskJobContext } = await import('./a2a/a2aCronUtils.js');
           const jobs = a2aCronStorage.loadJobs(mapping.workingDirectory);
-          sendSafe(client, JSON.stringify({ type: 'cron:sync', jobs, timestamp: Date.now() }));
+          sendSafe(client, JSON.stringify({ type: 'cron:sync', jobs: jobs.map(maskJobContext), timestamp: Date.now() }));
         }
       } catch (err) {
         console.warn('[WebSocket] Failed to subscribe cron:', err);
       }
+    } else if (msg.channel === 'cron-all' && typeof msg.userId === 'string') {
+      try {
+        const projectMetadataStorage = await getProjectStorage();
+        const { projectUserStorage } = await import('./projectUserStorage.js');
+        const { listAgentMappings } = await import('./a2a/agentMappingService.js');
+        const { listApiKeysWithDecryption } = await import('./a2a/apiKeyService.js');
+        const { a2aCronStorage } = await import('./a2a/a2aCronStorage.js');
+        const { maskJobContext } = await import('./a2a/a2aCronUtils.js');
+
+        const allProjects = projectMetadataStorage.getAllProjects();
+        const allMappings = await listAgentMappings();
+        const workDirs = new Set<string>();
+
+        const projects: any[] = [];
+        for (const project of allProjects) {
+          if (!projectUserStorage.canUserAccessProject(project.id, msg.userId)) continue;
+
+          const mapping = allMappings.find((m: any) => m.workingDirectory === project.path);
+          if (!mapping) continue;
+
+          const keys = await listApiKeysWithDecryption(mapping.workingDirectory);
+          const validKey = keys.find((k: any) => !k.revokedAt && k.decryptedKey);
+          if (!validKey) continue;
+
+          const jobs = a2aCronStorage.loadJobs(mapping.workingDirectory);
+          workDirs.add(mapping.workingDirectory);
+
+          projects.push({
+            projectPath: mapping.workingDirectory,
+            projectName: project.name,
+            agentId: mapping.a2aAgentId,
+            apiKey: validKey.decryptedKey,
+            agentLabel: project.defaultAgentName || project.name,
+            jobs: jobs.map(maskJobContext),
+          });
+        }
+
+        client.subscribedCronAll = { userId: msg.userId, workDirs };
+        sendSafe(client, JSON.stringify({ type: 'cron-all:sync', projects, timestamp: Date.now() }));
+      } catch (err) {
+        console.warn('[WebSocket] Failed to subscribe cron-all:', err);
+      }
+    } else if (msg.channel === 'opencli-bridge'
+      && typeof msg.projectId === 'string'
+      && typeof msg.userId === 'string') {
+      // Per-user subscription key: "projectId::normalizedUserId"
+      if (!client.subscribedOpenCliBridges) {
+        client.subscribedOpenCliBridges = new Set();
+      }
+      const key = `${msg.projectId}::${(msg.userId as string).trim().toLowerCase()}`;
+      client.subscribedOpenCliBridges.add(key);
     }
   } else if (msg.type === 'unsubscribe') {
     if (msg.channel === 'workspace' && client.workspace) {
       workspaceWatcher.unsubscribe(client.workspace.watchKey);
       client.workspace = undefined;
     } else if (msg.channel === 'sessions') {
-      client.subscribedSessions = false;
+      client.subscribedSessions = undefined;
     } else if (msg.channel === 'cron') {
-      client.subscribedCron = undefined;
+      client.subscribedCronDirs.clear();
+    } else if (msg.channel === 'cron-all') {
+      client.subscribedCronAll = undefined;
+    } else if (msg.channel === 'opencli-bridge') {
+      client.subscribedOpenCliBridges?.clear();
     }
   }
 }
@@ -206,8 +283,10 @@ function cleanupClient(client: WSClient): void {
     workspaceWatcher.unsubscribe(client.workspace.watchKey);
     client.workspace = undefined;
   }
-  client.subscribedSessions = false;
-  client.subscribedCron = undefined;
+  client.subscribedSessions = undefined;
+  client.subscribedCronDirs.clear();
+  client.subscribedCronAll = undefined;
+  client.subscribedOpenCliBridges?.clear();
 }
 
 export function broadcastCronEvent(workingDirectory: string, event: {
@@ -220,7 +299,60 @@ export function broadcastCronEvent(workingDirectory: string, event: {
 }): void {
   const message = JSON.stringify(event);
   for (const client of clients) {
-    if (client.subscribedCron?.workingDirectory === workingDirectory) {
+    if (client.subscribedCronDirs.has(workingDirectory)) {
+      sendSafe(client, message);
+    }
+    // else if 防止同一 client 双推 (per-project 和 cron-all 只收一次)
+    else if (client.subscribedCronAll?.workDirs.has(workingDirectory)) {
+      sendSafe(client, message);
+    }
+  }
+}
+
+/**
+ * Broadcast opencli bridge status event to subscribed browser clients.
+ * Filters by projectId + userId — Alice's bridge offline ≠ Bob sees banner.
+ */
+export function broadcastOpenCliBridgeEvent(
+  projectId: string,
+  userId: string,
+  event: {
+    type: 'opencli:online' | 'opencli:offline' | 'opencli:error';
+    projectId: string;
+    userId: string;
+    bridgeId: string;
+    timestamp: number;
+    reason?: string;
+  }
+): void {
+  const message = JSON.stringify(event);
+  const key = `${projectId}::${userId.trim().toLowerCase()}`;
+  for (const client of clients) {
+    if (client.subscribedOpenCliBridges?.has(key)) {
+      sendSafe(client, message);
+    }
+  }
+}
+
+/**
+ * Broadcast opencli config update to subscribed browser clients.
+ * Used when a user changes their domain configuration via PUT /api/opencli/domains.
+ */
+export function broadcastOpenCliConfigUpdate(
+  projectId: string,
+  userId: string,
+  event: {
+    type: 'opencli:config_update';
+    projectId: string;
+    userId: string;
+    domains: Record<string, boolean>;
+    timestamp: number;
+  }
+): void {
+  const message = JSON.stringify(event);
+  const key = `${projectId}::${userId.trim().toLowerCase()}`;
+  for (const client of clients) {
+    if (client.subscribedOpenCliBridges?.has(key)) {
       sendSafe(client, message);
     }
   }

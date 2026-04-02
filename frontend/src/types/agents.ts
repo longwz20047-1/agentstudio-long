@@ -32,6 +32,9 @@ export interface AgentConfig {
   permissionMode: PermissionMode;  // 使用 SDK 类型
   // Note: model field removed - model is now determined by project/provider configuration
   // See backend configResolver.ts for priority chain
+  enableLargeContext?: boolean;  // Enable 1M context beta for Sonnet 4.5/4
+  taskBudgetTokens?: number;    // Per-agent token budget (@alpha)
+  outputFormat?: { type: 'json_schema'; schema: Record<string, unknown> }; // Structured output schema
   
   // Available tools
   allowedTools: AgentTool[];
