@@ -75,16 +75,23 @@ export class BridgeCommandProxy {
           : undefined,
       });
 
-      entry.ws.send(
-        JSON.stringify({
-          type: 'command',
-          id,
-          site: command.site,
-          action: command.action,
-          args: command.args,
-          timeout,
-        })
-      );
+      try {
+        entry.ws.send(
+          JSON.stringify({
+            type: 'command',
+            id,
+            site: command.site,
+            action: command.action,
+            args: command.args,
+            timeout,
+          })
+        );
+      } catch (err) {
+        // ws.send failed (connection closed between readyState check and send)
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(new BridgeError('BRIDGE_DISCONNECTED', `Failed to send command: ${(err as Error).message}`));
+      }
     });
   }
 

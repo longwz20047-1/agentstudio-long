@@ -113,6 +113,7 @@ export class BridgeKeyService {
     const random = crypto.randomBytes(16).toString('hex');
     const key = `${OBK_PREFIX}${random}`;
     const keyHash = await bcrypt.hash(key, SALT_ROUNDS);
+    const keyPrefix = random.slice(0, 12);
     const now = new Date().toISOString();
 
     this.withLockedRegistry(registry => {
@@ -122,6 +123,7 @@ export class BridgeKeyService {
         deviceName,
         bridgeId,
         keyHash,
+        keyPrefix,
         createdAt: now,
         lastUsedAt: now,
         revokedAt: null,
@@ -133,14 +135,26 @@ export class BridgeKeyService {
   async validateBridgeKey(key: string): Promise<{ userId: string; keyId: string } | null> {
     if (!key.startsWith(OBK_PREFIX)) return null;
     const registry = this.loadRegistry();
+
+    // P0 fix: Use key prefix (first 12 chars after obk_) as index to avoid O(n) bcrypt.
+    // Since keys are `obk_` + 32 hex chars, prefix matching narrows candidates to ~1.
+    const keyBody = key.slice(OBK_PREFIX.length);
+    const keyPrefix = keyBody.slice(0, 12);
+
     for (const record of registry.keys) {
       if (record.revokedAt) continue;
+      // Fast prefix check: keyHash is bcrypt, can't prefix-match.
+      // Use keyPrefix stored in record for O(1) filtering.
+      if (record.keyPrefix && record.keyPrefix !== keyPrefix) continue;
       if (await bcrypt.compare(key, record.keyHash)) {
-        // Update lastUsedAt (best-effort, don't fail validation on write error)
+        // Backfill keyPrefix for legacy keys that don't have it
         try {
           this.withLockedRegistry(reg => {
             const r = reg.keys.find(k => k.id === record.id);
-            if (r) r.lastUsedAt = new Date().toISOString();
+            if (r) {
+              r.lastUsedAt = new Date().toISOString();
+              if (!r.keyPrefix) r.keyPrefix = keyPrefix;
+            }
           });
         } catch {}
         return { userId: record.userId, keyId: record.id };

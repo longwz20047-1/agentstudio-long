@@ -6,8 +6,20 @@ const ALL_KNOWN_SITES = new Set(Object.values(DOMAIN_MAPPING).flat());
 const DOWNLOAD_ACTIONS = new Set(['download']);
 const READ_SAFE_ACTIONS = new Set(['export']);
 
-// Session approval cache: Map<sessionId, Set<"site/action">>
-const approvalCache = new Map<string, Set<string>>();
+// Session approval cache: Map<sessionId, { approvals: Set<"site/action">, createdAt: number }>
+const APPROVAL_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const MAX_CACHE_SIZE = 500;
+const approvalCache = new Map<string, { approvals: Set<string>; createdAt: number }>();
+
+// Periodic cleanup every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of approvalCache) {
+    if (now - entry.createdAt > APPROVAL_TTL_MS) {
+      approvalCache.delete(key);
+    }
+  }
+}, 5 * 60 * 1000).unref();
 
 /**
  * Determine if a site/action combination is a write operation.
@@ -29,14 +41,27 @@ export function isWriteOperation(site: string, action: string): boolean {
 }
 
 export function hasSessionApproval(sessionId: string, site: string, action: string): boolean {
-  return approvalCache.get(sessionId)?.has(`${site}/${action}`) ?? false;
+  const entry = approvalCache.get(sessionId);
+  if (!entry) return false;
+  if (Date.now() - entry.createdAt > APPROVAL_TTL_MS) {
+    approvalCache.delete(sessionId);
+    return false;
+  }
+  return entry.approvals.has(`${site}/${action}`);
 }
 
 export function grantSessionApproval(sessionId: string, site: string, action: string): void {
-  if (!approvalCache.has(sessionId)) {
-    approvalCache.set(sessionId, new Set());
+  let entry = approvalCache.get(sessionId);
+  if (!entry) {
+    // Evict oldest if at capacity
+    if (approvalCache.size >= MAX_CACHE_SIZE) {
+      const oldest = approvalCache.keys().next().value;
+      if (oldest) approvalCache.delete(oldest);
+    }
+    entry = { approvals: new Set(), createdAt: Date.now() };
+    approvalCache.set(sessionId, entry);
   }
-  approvalCache.get(sessionId)!.add(`${site}/${action}`);
+  entry.approvals.add(`${site}/${action}`);
 }
 
 export function clearSessionApprovals(sessionId: string): void {
@@ -45,6 +70,10 @@ export function clearSessionApprovals(sessionId: string): void {
 
 export function clearAllApprovals(): void {
   approvalCache.clear();
+}
+
+export function getApprovalCacheSize(): number {
+  return approvalCache.size;
 }
 
 export function buildConfirmationPrompt(site: string, action: string, args: string[]): string {

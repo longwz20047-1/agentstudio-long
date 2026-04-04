@@ -612,7 +612,10 @@ export async function buildQueryOptions(
   // Integrate OpenCLI MCP servers (if bridge connected)
   const opencliContext = extendedOptions?.opencliContext;
   if (opencliContext?.enabled && opencliContext?.enabledDomains?.length > 0) {
-    if (bridgeRegistry.isOnline(opencliContext.projectId, opencliContext.userId)) {
+    const registryKey = opencliContext.workingDirectory || opencliContext.projectId;
+    const isOnline = bridgeRegistry.isOnline(registryKey, opencliContext.userId);
+    // Bridge registers with workingDirectory as projectId, not the internal proj_xxx ID
+    if (isOnline) {
       await integrateOpenCliMcpServers(queryOptions, opencliContext, askUserSessionRef, agentIdForAskUser || '', sessionIdForAskUser);
       console.log(`[OpenCLI] Integrated domains: ${opencliContext.enabledDomains.join(', ')}`);
     } else {

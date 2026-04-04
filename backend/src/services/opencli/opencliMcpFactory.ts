@@ -1,7 +1,7 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
-import { DOMAIN_MAPPING, WRITE_COMMAND_TIMEOUT, DEFAULT_COMMAND_TIMEOUT, CONFIRMATION_TIMEOUT } from './constants.js';
+import { DOMAIN_MAPPING, WRITE_OPERATIONS, WRITE_COMMAND_TIMEOUT, DEFAULT_COMMAND_TIMEOUT, CONFIRMATION_TIMEOUT } from './constants.js';
 import { formatOpenCliResult, formatOpenCliError } from './outputFormatter.js';
 import { isWriteOperation, hasSessionApproval, grantSessionApproval, buildConfirmationPrompt } from './permissionEngine.js';
 import { userInputRegistry } from '../askUserQuestion/userInputRegistry.js';
@@ -25,10 +25,14 @@ export function filterSitesByCapabilities(domain: string, availableSites: string
  * uses to decide when to invoke it.
  */
 export function generateSiteToolDescription(site: string): string {
-  return `Execute an action on ${site}.
+  const writeActions = WRITE_OPERATIONS[site];
+  const writeNote = writeActions
+    ? `\nWrite actions (require confirmation): ${writeActions.join(', ')}`
+    : '';
+  return `Execute an action on ${site}. Common read actions: timeline, search, trending, list, info, read, detail, hot.${writeNote}
 
 Parameters:
-- action (required): The action to perform (e.g. timeline, search, trending, list, info, read, post, comment, like, follow)
+- action (required): The action to perform
 - query: Search query or text content (for search/post/comment actions)
 - limit: Maximum number of results to return
 - id: Target identifier (user ID, post ID, etc.)
@@ -51,14 +55,16 @@ export async function integrateOpenCliMcpServers(
   sessionId?: string
 ): Promise<void> {
   const { projectId, userId, enabledDomains } = opencliContext;
+  // Bridge registers with workingDirectory as projectId
+  const registryProjectId = (opencliContext as any).workingDirectory || projectId;
 
-  const entry = bridgeRegistry.get(projectId, userId);
+  const entry = bridgeRegistry.get(registryProjectId, userId);
   if (!entry) {
-    console.warn('[OpenCLI] No bridge connected for', projectId, userId);
+    console.warn('[OpenCLI] No bridge connected for', registryProjectId, userId);
     return;
   }
 
-  const availableSites = entry.capabilities.availableSites;
+  const availableSites = entry.capabilities?.availableSites || [];
   const integratedDomains: string[] = [];
 
   for (const domain of enabledDomains) {
@@ -141,9 +147,9 @@ export async function integrateOpenCliMcpServers(
           try {
             const timeout = isWriteOperation(site, args.action) ? WRITE_COMMAND_TIMEOUT : DEFAULT_COMMAND_TIMEOUT;
             // Re-fetch current bridge entry to handle reconnections with new bridgeId
-            const currentEntry = bridgeRegistry.get(projectId, userId);
+            const currentEntry = bridgeRegistry.get(registryProjectId, userId);
             const currentBridgeId = currentEntry?.bridgeId || entry.bridgeId;
-            const stdout = await commandProxy.dispatch(projectId, userId, {
+            const stdout = await commandProxy.dispatch(registryProjectId, userId, {
               site,
               action: args.action,
               args: cliArgs,

@@ -114,6 +114,7 @@ export interface BridgeKeyRecord {
   deviceName: string;
   bridgeId: string;
   keyHash: string;         // bcrypt hash of obk_ key
+  keyPrefix?: string;      // first 12 hex chars of key body, for fast filtering
   createdAt: string;       // ISO timestamp
   lastUsedAt: string;      // ISO timestamp
   revokedAt: string | null;

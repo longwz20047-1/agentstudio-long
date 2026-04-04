@@ -1,6 +1,9 @@
 type McpResult = { content: Array<{ type: 'text'; text: string }> };
 
 export function formatOpenCliResult(site: string, action: string, stdout: string): McpResult {
+  if (!stdout || !stdout.trim()) {
+    return { content: [{ type: 'text', text: `## ${site}/${action} completed\n\nCommand executed successfully with no output.` }] };
+  }
   let formatted: string;
   try {
     const data = JSON.parse(stdout);

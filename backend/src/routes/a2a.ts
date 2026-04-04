@@ -537,7 +537,7 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
     // Determine engine type based on agentType
     const engineType = getEngineType(a2aContext.agentType);
 
-    console.info('[A2A] Message received:', {
+    console.log('[A2A] Message received:', {
       a2aAgentId: a2aContext.a2aAgentId,
       projectId: a2aContext.projectId,
       agentType: a2aContext.agentType,
@@ -704,6 +704,9 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       || (context as Record<string, unknown> | undefined)?.userId as string | undefined
       || undefined;
     const projectEnabled = loadProjectOpenCliEnabled(a2aContext.workingDirectory);
+    if (projectEnabled && !opencliUserId) {
+      console.warn(`[A2A] OpenCLI enabled for project ${a2aContext.projectId} but userId is missing — OpenCLI tools will not be available. Pass userId via graphiti context or request context.`);
+    }
     const userOpenCliConfig = projectEnabled && opencliUserId
       ? loadUserOpenCliConfig(a2aContext.workingDirectory, opencliUserId)
       : null;
