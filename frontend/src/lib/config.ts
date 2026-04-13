@@ -48,16 +48,20 @@ const getBasePathPrefix = (): string => {
 // Export as getter functions to ensure they always return the current value
 export const getApiBase = (): string => {
   if (isEmbeddedMode()) {
-    // 嵌入模式：使用 origin + basePath 前缀 + /api
-    // 支持 nginx 子路径部署（如 /as-backend/api）
-    return window.location.origin + getBasePathPrefix() + '/api';
+    const apiBase = import.meta.env.VITE_API_BASE as string;
+    // 如果 VITE_API_BASE 是相对路径（如 /agentstudio/api），拼接 origin 直接使用
+    // 支持前端和后端路径前缀不同的部署（如前端 /agentstudioui/ 后端 /agentstudio/）
+    return window.location.origin + apiBase;
   }
   return getCurrentBackendServiceUrl() + '/api';
 };
 
 export const getMediaBase = (): string => {
   if (isEmbeddedMode()) {
-    return window.location.origin + getBasePathPrefix() + '/media';
+    const apiBase = import.meta.env.VITE_API_BASE as string;
+    // /agentstudio/api → /agentstudio/media
+    const backendBase = apiBase.replace(/\/api\/?$/, '');
+    return window.location.origin + backendBase + '/media';
   }
   return getCurrentBackendServiceUrl() + '/media';
 };
@@ -78,7 +82,9 @@ export const buildApiUrl = (path: string): string => {
 // 嵌入模式下返回 origin + basePath，支持 nginx 子路径部署
 export const getCurrentHost = (): string => {
   if (isEmbeddedMode()) {
-    return window.location.origin + getBasePathPrefix();
+    const apiBase = import.meta.env.VITE_API_BASE as string;
+    const backendBase = apiBase.replace(/\/api\/?$/, '');
+    return window.location.origin + backendBase;
   }
   return getCurrentBackendServiceUrl();
 };

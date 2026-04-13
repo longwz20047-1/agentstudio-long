@@ -25,7 +25,9 @@ export function useApiBase(): string {
       return `${currentService.url}/api`;
     }
 
-    // Default fallback
-    return 'http://127.0.0.1:4936/api';
+    // Default fallback: use current origin for production
+    return import.meta.env.DEV
+      ? 'http://127.0.0.1:4936/api'
+      : `${window.location.origin}/api`;
   }, [currentService?.url]);
 }
