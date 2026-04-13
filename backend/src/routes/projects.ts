@@ -174,11 +174,18 @@ router.put('/claude-md', async (req, res) => {
 });
 
 // GET /api/projects/:dirName - Get specific project
+// Note: dirName is the full project path (URL encoded with %2F for slashes)
 router.get('/:dirName', async (req, res) => {
   try {
-    const { dirName } = req.params;
-    const project = projectStorage.getProject(dirName);
-    
+    const dirName = decodeURIComponent(req.params.dirName);
+    let project = projectStorage.getProject(dirName);
+
+    if (!project) {
+      // Auto-create metadata if not found (project may exist via Claude config but metadata not yet created)
+      const projectName = path.basename(dirName);
+      projectStorage.createProject(dirName, { name: projectName });
+      project = projectStorage.getProject(dirName);
+    }
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
@@ -235,31 +242,38 @@ router.post('/', async (req, res) => {
 });
 
 // PUT /api/projects/:dirName - Update project info
+// Note: dirName is the full project path (URL encoded with %2F for slashes)
 router.put('/:dirName', async (req, res) => {
   try {
-    const { dirName } = req.params;
+    const dirName = decodeURIComponent(req.params.dirName);
     const { name, description, tags, metadata, defaultProviderId, defaultModel } = req.body;
-    
-    const project = projectStorage.getProject(dirName);
+
+    let project = projectStorage.getProject(dirName);
+    if (!project) {
+      // Auto-create metadata if not found (project may exist via Claude config but metadata not yet created)
+      const projectName = path.basename(dirName);
+      projectStorage.createProject(dirName, { name: name || projectName });
+      project = projectStorage.getProject(dirName);
+    }
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
-    
+
     // Update basic info
     if (name !== undefined || description !== undefined) {
       projectStorage.updateProjectInfo(dirName, { name, description });
     }
-    
+
     // Update tags
     if (tags !== undefined) {
       projectStorage.updateProjectTags(dirName, tags);
     }
-    
+
     // Update metadata
     if (metadata !== undefined) {
       projectStorage.updateProjectMetadata(dirName, metadata);
     }
-    
+
     // Update default provider and model
     if (defaultProviderId !== undefined || defaultModel !== undefined) {
       const projectMeta = projectStorage.getProjectMetadata(dirName);
@@ -276,12 +290,12 @@ router.put('/:dirName', async (req, res) => {
         projectStorage.saveProjectMetadata(dirName, projectMeta);
       }
     }
-    
+
     const updatedProject = projectStorage.getProject(dirName);
-    
+
     // Include provider/model settings in response
     const projectMeta = projectStorage.getProjectMetadata(dirName);
-    res.json({ 
+    res.json({
       project: {
         ...updatedProject,
         defaultProviderId: projectMeta?.defaultProviderId,
