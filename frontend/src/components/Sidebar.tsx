@@ -142,11 +142,12 @@ const getNavigationItems = (t: (key: string) => string): NavItem[] => [
         icon: Key,
         // Available for both Claude and Cursor engines
       },
-      {
-        name: t('nav.settingsSubmenu.tunnel'),
-        href: '/settings/tunnel',
-        icon: Globe,
-      },
+      // Tunnel menu hidden — server uses domain+nginx, no tunnel needed
+      // {
+      //   name: t('nav.settingsSubmenu.tunnel'),
+      //   href: '/settings/tunnel',
+      //   icon: Globe,
+      // },
       {
         name: t('nav.settingsSubmenu.voice'),
         href: '/settings/voice',

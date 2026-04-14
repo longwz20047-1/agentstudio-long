@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { API_BASE } from '../lib/config';
+import { authFetch } from '../lib/authFetch';
 
 interface VersionInfo {
   currentVersion: string;
@@ -56,12 +57,7 @@ export function useVersionCheck() {
   } = useQuery<VersionInfo>({
     queryKey: ['version'],
     queryFn: async () => {
-      const token = localStorage.getItem('auth_token');
-      const response = await fetch(`${API_BASE}/version`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
+      const response = await authFetch(`${API_BASE}/version`);
       if (!response.ok) {
         throw new Error('Failed to fetch version info');
       }
@@ -98,12 +94,8 @@ export function useVersionCheck() {
   // Force check mutation
   const forceCheckMutation = useMutation({
     mutationFn: async () => {
-      const token = localStorage.getItem('auth_token');
-      const response = await fetch(`${API_BASE}/version/check`, {
+      const response = await authFetch(`${API_BASE}/version/check`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
       });
       if (!response.ok) {
         throw new Error('Failed to check for updates');
@@ -141,12 +133,7 @@ export function useSystemInfo() {
   } = useQuery<SystemInfo>({
     queryKey: ['systemInfo'],
     queryFn: async () => {
-      const token = localStorage.getItem('auth_token');
-      const response = await fetch(`${API_BASE}/version/info`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
+      const response = await authFetch(`${API_BASE}/version/info`);
       if (!response.ok) {
         throw new Error('Failed to fetch system info');
       }

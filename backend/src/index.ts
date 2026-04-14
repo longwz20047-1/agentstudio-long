@@ -409,12 +409,16 @@ const app: express.Express = express();
   }
 
   // 4. Tunnel Service: Initialize WebSocket tunnel for external access
-  console.info('[Tunnel] Initializing tunnel service...');
-  try {
-    await tunnelService.initialize(PORT);
-    console.info('[Tunnel] Tunnel service initialized');
-  } catch (error) {
-    console.error('[Tunnel] Error initializing tunnel service:', error);
+  if (process.env.ENABLE_TUNNEL !== 'false') {
+    console.info('[Tunnel] Initializing tunnel service...');
+    try {
+      await tunnelService.initialize(PORT);
+      console.info('[Tunnel] Tunnel service initialized');
+    } catch (error) {
+      console.error('[Tunnel] Error initializing tunnel service:', error);
+    }
+  } else {
+    console.info('[Tunnel] Tunnel service disabled (ENABLE_TUNNEL=false)');
   }
 
   // 5. Marketplace Update Service: Initialize background update checker
