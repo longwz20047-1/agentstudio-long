@@ -84,12 +84,6 @@ export const updateBackendService = (state: BackendServicesState, serviceId: str
 };
 
 export const removeBackendService = (state: BackendServicesState, serviceId: string): BackendServicesState => {
-  // Cannot remove the default service
-  const serviceToRemove = state.services.find(s => s.id === serviceId);
-  if (serviceToRemove?.isDefault) {
-    return state;
-  }
-
   const newState = {
     ...state,
     services: state.services.filter(service => service.id !== serviceId),

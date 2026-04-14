@@ -21,6 +21,7 @@ import {
 import { showError, showSuccess } from '../../utils/toast';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { API_BASE } from '../../lib/config';
+import { authFetch } from '../../lib/authFetch';
 import { useConfirm } from '../../hooks/useConfirm';
 
 interface AdminApiKey {
@@ -60,42 +61,29 @@ interface McpAdminTool {
   };
 }
 
-// API functions
+// API functions — use authFetch (auto JWT from Zustand auth store)
 async function fetchStatus(): Promise<McpAdminStatus> {
-  const token = localStorage.getItem('authToken');
-  const response = await fetch(`${API_BASE}/mcp-admin-management/status`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const response = await authFetch(`${API_BASE}/mcp-admin-management/status`);
   if (!response.ok) throw new Error('Failed to fetch status');
   return response.json();
 }
 
 async function fetchKeys(): Promise<{ keys: AdminApiKey[] }> {
-  const token = localStorage.getItem('authToken');
-  const response = await fetch(`${API_BASE}/mcp-admin-management/keys`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const response = await authFetch(`${API_BASE}/mcp-admin-management/keys`);
   if (!response.ok) throw new Error('Failed to fetch keys');
   return response.json();
 }
 
 async function fetchTools(): Promise<{ tools: McpAdminTool[] }> {
-  const token = localStorage.getItem('authToken');
-  const response = await fetch(`${API_BASE}/mcp-admin-management/tools`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const response = await authFetch(`${API_BASE}/mcp-admin-management/tools`);
   if (!response.ok) throw new Error('Failed to fetch tools');
   return response.json();
 }
 
 async function createKey(data: { description: string; permissions: string[]; allowedTools?: string[] }): Promise<{ key: string; id: string }> {
-  const token = localStorage.getItem('authToken');
-  const response = await fetch(`${API_BASE}/mcp-admin-management/keys`, {
+  const response = await authFetch(`${API_BASE}/mcp-admin-management/keys`, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   if (!response.ok) throw new Error('Failed to create key');
@@ -103,45 +91,32 @@ async function createKey(data: { description: string; permissions: string[]; all
 }
 
 async function revokeKey(keyId: string): Promise<void> {
-  const token = localStorage.getItem('authToken');
-  const response = await fetch(`${API_BASE}/mcp-admin-management/keys/${keyId}`, {
+  const response = await authFetch(`${API_BASE}/mcp-admin-management/keys/${keyId}`, {
     method: 'DELETE',
-    headers: { Authorization: `Bearer ${token}` },
   });
   if (!response.ok) throw new Error('Failed to revoke key');
 }
 
 async function updateKey(keyId: string, data: { description?: string; allowedTools?: string[] }): Promise<void> {
-  const token = localStorage.getItem('authToken');
-  const response = await fetch(`${API_BASE}/mcp-admin-management/keys/${keyId}`, {
+  const response = await authFetch(`${API_BASE}/mcp-admin-management/keys/${keyId}`, {
     method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   if (!response.ok) throw new Error('Failed to update key');
 }
 
 async function toggleKey(keyId: string, enabled: boolean): Promise<void> {
-  const token = localStorage.getItem('authToken');
-  const response = await fetch(`${API_BASE}/mcp-admin-management/keys/${keyId}/toggle`, {
+  const response = await authFetch(`${API_BASE}/mcp-admin-management/keys/${keyId}/toggle`, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
   });
   if (!response.ok) throw new Error('Failed to toggle key');
 }
 
 async function fetchConfigSnippet(apiKey: string): Promise<{ cursor: { configString: string; configPath: string }; claudeDesktop: { configString: string; configPath: string } }> {
-  const token = localStorage.getItem('authToken');
-  const response = await fetch(`${API_BASE}/mcp-admin-management/config-snippet?apiKey=${encodeURIComponent(apiKey)}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const response = await authFetch(`${API_BASE}/mcp-admin-management/config-snippet?apiKey=${encodeURIComponent(apiKey)}`);
   if (!response.ok) throw new Error('Failed to fetch config');
   return response.json();
 }

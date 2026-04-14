@@ -546,26 +546,22 @@ export const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({
                           </button>
                         )}
 
-                        {!service.isDefault && (
-                          <>
-                            <button
-                              onClick={() => startEditingService(service)}
-                              className="p-1.5 text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 
-                                       hover:bg-gray-50 dark:hover:bg-gray-700 rounded transition-colors"
-                              title={t('serviceManagementModal.editService')}
-                            >
-                              <Settings className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => handleRemoveService(service.id)}
-                              className="p-1.5 text-gray-500 hover:text-red-600 dark:hover:text-red-400 
-                                       hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors"
-                              title={t('serviceManagementModal.removeService')}
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </>
-                        )}
+                        <button
+                          onClick={() => startEditingService(service)}
+                          className="p-1.5 text-gray-500 hover:text-gray-600 dark:hover:text-gray-300
+                                   hover:bg-gray-50 dark:hover:bg-gray-700 rounded transition-colors"
+                          title={t('serviceManagementModal.editService')}
+                        >
+                          <Settings className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleRemoveService(service.id)}
+                          className="p-1.5 text-gray-500 hover:text-red-600 dark:hover:text-red-400
+                                   hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors"
+                          title={t('serviceManagementModal.removeService')}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
                   )}

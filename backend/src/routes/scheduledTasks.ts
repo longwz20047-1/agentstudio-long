@@ -201,6 +201,21 @@ router.post('/scheduler/disable', (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/scheduled-tasks/running
+ * Get all currently running executions
+ * NOTE: Must be before /:id to avoid being caught by the param route
+ */
+router.get('/running', (req: Request, res: Response) => {
+  try {
+    const running = getRunningExecutions();
+    res.json({ executions: running });
+  } catch (error) {
+    console.error('[ScheduledTasks API] Error getting running executions:', error);
+    res.status(500).json({ error: 'Failed to get running executions' });
+  }
+});
+
+/**
  * GET /api/scheduled-tasks/:id
  * Get a specific scheduled task
  */
@@ -400,20 +415,6 @@ router.post('/executions/:executionId/stop', async (req: Request, res: Response)
   } catch (error) {
     console.error('[ScheduledTasks API] Error stopping execution:', error);
     res.status(500).json({ error: 'Failed to stop execution' });
-  }
-});
-
-/**
- * GET /api/scheduled-tasks/running
- * Get all currently running executions
- */
-router.get('/running', (req: Request, res: Response) => {
-  try {
-    const running = getRunningExecutions();
-    res.json({ executions: running });
-  } catch (error) {
-    console.error('[ScheduledTasks API] Error getting running executions:', error);
-    res.status(500).json({ error: 'Failed to get running executions' });
   }
 });
 
