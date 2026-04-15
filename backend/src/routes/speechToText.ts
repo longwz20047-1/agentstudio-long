@@ -84,8 +84,9 @@ router.get('/status', async (req: Request, res: Response) => {
 /**
  * POST /api/speech-to-text/transcribe
  * 执行语音转文字
+ * body limit 50MB：音频 base64 编码后体积膨胀 33%，需要比全局 10MB 更大
  */
-router.post('/transcribe', async (req: Request, res: Response) => {
+router.post('/transcribe', express.json({ limit: '50mb' }), async (req: Request, res: Response) => {
   try {
     const service = await SpeechToTextService.getInstance();
 
