@@ -243,6 +243,8 @@ export interface BuildQueryExtendedOptions {
   effort?: EffortLevel;
   opencliContext?: OpenCliContext;
   taskBudgetTokens?: number;
+  /** DooTask MCP 集成 — 从 wecom-bot-bridge body.context.dootask 传入的企微原生字段 */
+  dootaskContext?: import('../services/dootask/dootaskMcpIntegration.js').DootaskContext;
 }
 
 export async function buildQueryOptions(
@@ -570,6 +572,13 @@ export async function buildQueryOptions(
     const groupCount = (graphitiContext.group_ids?.length || 0) + 1;
     console.log('✅ [Graphiti] Memory MCP Server + Hooks integrated for user', graphitiContext.user_id, 'with', groupCount, 'groups');
     console.log('🔧 [Graphiti] Hooks configured:', Object.keys(graphitiHooks));
+  }
+
+  // Integrate DooTask SDK MCP server (only when both corp_id + wecom_userid are present)
+  const dootaskContext = extendedOptions?.dootaskContext;
+  if (dootaskContext?.corp_id && dootaskContext?.wecom_userid) {
+    const { integrateDootaskMcpServer } = await import('../services/dootask/dootaskMcpIntegration.js');
+    await integrateDootaskMcpServer(queryOptions, dootaskContext);
   }
 
   // Integrate SearXNG SDK MCP servers (environment variable driven, auto-enabled)

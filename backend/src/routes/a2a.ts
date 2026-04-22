@@ -693,6 +693,10 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       graphitiContext.a2aSessionId = sessionId;
     }
 
+    // Extract DooTask context (from wecom-bot-bridge → body.context.dootask)
+    // 对称 graphitiContext 模式：claudeUtils 内部 integrateDootaskMcpServer 消费
+    const dootaskContext = context?.dootask as import('../services/dootask/dootaskMcpIntegration.js').DootaskContext | undefined;
+
     // Construct OpenCLI context (server-side, not from client request)
     // Two-tier: project-level enabled flag + per-user domain preferences
     //
@@ -820,13 +824,14 @@ router.post('/messages', async (req: A2ARequest, res: Response) => {
       askUserSessionId, // sessionIdForAskUser - 用于 AskUserQuestion MCP 集成
       a2aContext.a2aAgentId, // agentIdForAskUser - 用于 AskUserQuestion MCP 集成
       undefined, // a2aStreamEnabled
-      (weknoraContext || graphitiContext || effort || taskBudgetTokens || opencliContext)
+      (weknoraContext || graphitiContext || effort || taskBudgetTokens || opencliContext || dootaskContext)
         ? {
             ...(weknoraContext ? { weknoraContext } : {}),
             ...(graphitiContext ? { graphitiContext } : {}),
             ...(effort ? { effort } : {}),
             ...(taskBudgetTokens ? { taskBudgetTokens } : {}),
             ...(opencliContext ? { opencliContext } : {}),
+            ...(dootaskContext ? { dootaskContext } : {}),
           }
         : undefined, // extendedOptions
       cwdPath !== projectRoot ? cwdPath : undefined // cwdOverride
