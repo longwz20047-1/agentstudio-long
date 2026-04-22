@@ -24,9 +24,10 @@ export class DootaskApiError extends Error {
 }
 
 function getBaseUrl(): string {
-  const url = process.env.DOOTASK_API_URL;
+  // 与 dootaskTokenExchange.ts 保持同一约定：优先 DOOTASK_BASE_URL，兼容老式 DOOTASK_API_URL
+  const url = process.env.DOOTASK_BASE_URL || process.env.DOOTASK_API_URL;
   if (!url) {
-    throw new Error('DOOTASK_API_URL is not set');
+    throw new Error('DOOTASK_BASE_URL is not set');
   }
   return url.replace(/\/+$/, '');
 }
