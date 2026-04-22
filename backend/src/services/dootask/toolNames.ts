@@ -18,11 +18,13 @@ export const DOOTASK_TOOL_NAMES = [
   'mcp__dootask__create_sub_task',
   'mcp__dootask__get_task_files',
   'mcp__dootask__delete_task',
-  // projects (4)
+  // projects (6)
   'mcp__dootask__list_projects',
   'mcp__dootask__get_project',
   'mcp__dootask__create_project',
   'mcp__dootask__update_project',
+  'mcp__dootask__add_project_members',
+  'mcp__dootask__remove_project_members',
   // dialogs (3)
   'mcp__dootask__search_dialogs',
   'mcp__dootask__send_message',

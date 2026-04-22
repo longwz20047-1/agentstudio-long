@@ -1,5 +1,5 @@
 /**
- * 聚合所有 DooTask 工具（28 个）
+ * 聚合所有 DooTask 工具（30 个）
  */
 
 import { buildUsersTools } from './users.js';
@@ -12,8 +12,9 @@ import { buildSearchTools } from './search.js';
 import type { ToolContext } from './types.js';
 
 /**
- * 构造全部 28 个 tool：
- *   users(2) + tasks(8) + projects(4) + dialogs(3) + reports(6) + files(4) + search(1) = 28
+ * 构造全部 30 个 tool：
+ *   users(2) + tasks(8) + projects(6) + dialogs(3) + reports(6) + files(4) + search(1) = 30
+ *   其中 projects 6 = 原 mcp.js 4 个 + 新增 add_project_members/remove_project_members
  */
 export function buildAllTools(ctx: ToolContext) {
   return [

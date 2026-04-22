@@ -186,5 +186,86 @@ export function buildProjectsTools(ctx: ToolContext) {
     },
   );
 
-  return [listProjects, getProject, createProject, updateProject];
+  const addProjectMembers = tool(
+    'add_project_members',
+    '将一个或多个用户加入项目成员列表（使 update_task 的 owner/assist 分配对这些用户生效）。内部自动读取现有成员并合并，不会误踢其他人。仅项目负责人可调用。',
+    {
+      project_id: z.number().min(1).describe('项目ID'),
+      userids: z.array(z.number().min(1)).min(1).max(100)
+        .describe('要加入的用户ID数组，最多 100 个'),
+    },
+    async (args) => {
+      const token = await ctx.getToken();
+      const project = await makeDootaskRequest(token, 'GET', 'project/one', { project_id: args.project_id });
+      const currentMembers: number[] = (project?.project_user || []).map((u: any) => u.userid).filter(Boolean);
+      const merged = Array.from(new Set<number>([...currentMembers, ...args.userids]));
+      if (merged.length > 100) {
+        throw new Error(`项目成员最多 100 个，合并后将有 ${merged.length} 个`);
+      }
+      const added = args.userids.filter((uid) => !currentMembers.includes(uid));
+
+      // /api/project/user 是全量覆盖语义：传入数组即最终成员列表
+      await makeDootaskRequest(token, 'GET', 'project/user', {
+        project_id: args.project_id,
+        userid: merged,
+      });
+
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({
+            success: true,
+            project_id: args.project_id,
+            added,
+            already_members: args.userids.filter((uid) => currentMembers.includes(uid)),
+            total_members: merged.length,
+          }, null, 2),
+        }],
+      };
+    },
+  );
+
+  const removeProjectMembers = tool(
+    'remove_project_members',
+    '将一个或多个用户从项目成员列表移除。内部自动读取现有成员并去除目标，不会动到其他成员。仅项目负责人可调用；不能移除全部成员（项目至少保留 1 人）。',
+    {
+      project_id: z.number().min(1).describe('项目ID'),
+      userids: z.array(z.number().min(1)).min(1)
+        .describe('要移除的用户ID数组'),
+    },
+    async (args) => {
+      const token = await ctx.getToken();
+      const project = await makeDootaskRequest(token, 'GET', 'project/one', { project_id: args.project_id });
+      const currentMembers: number[] = (project?.project_user || []).map((u: any) => u.userid).filter(Boolean);
+      const toRemove = new Set(args.userids);
+      const remaining = currentMembers.filter((uid) => !toRemove.has(uid));
+
+      if (remaining.length === 0) {
+        throw new Error('不能移除所有成员，项目需要至少保留 1 个成员');
+      }
+
+      const removed = args.userids.filter((uid) => currentMembers.includes(uid));
+      const not_in_project = args.userids.filter((uid) => !currentMembers.includes(uid));
+
+      await makeDootaskRequest(token, 'GET', 'project/user', {
+        project_id: args.project_id,
+        userid: remaining,
+      });
+
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({
+            success: true,
+            project_id: args.project_id,
+            removed,
+            not_in_project,
+            total_members: remaining.length,
+          }, null, 2),
+        }],
+      };
+    },
+  );
+
+  return [listProjects, getProject, createProject, updateProject, addProjectMembers, removeProjectMembers];
 }
