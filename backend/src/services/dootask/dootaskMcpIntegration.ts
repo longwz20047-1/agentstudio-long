@@ -12,6 +12,28 @@ import { createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { DOOTASK_TOOL_NAMES } from './toolNames.js';
 import { getDootaskToken } from './dootaskTokenExchange.js';
 import { buildAllTools } from './tools/index.js';
+import type { SystemPrompt } from '../../types/agents.js';
+
+/**
+ * v2.1 Task 6: 企微通知上下文规则 — 运行时注入到 agent 的 systemPrompt。
+ * 放在集成函数内而非 agent JSON，让 N 个 bot 零手动修改、规则集中版本化。
+ * 参数名（list_tasks / status / pagesize）与 spec v2.1 §7.5 精确对齐。
+ */
+const DOOTASK_WECOM_PROMPT = `
+
+[企微通知上下文规则]
+当用户消息包含明确任务编号（#42 或 任务 42 等格式）时：直接调用对应 MCP 工具操作，不要反问。
+
+当用户发送"完成/拒绝/延期/添加附件"等操作意图但未指定任务编号时：
+1. 不要做任何猜测，不要使用 Redis/缓存/历史等任何旁路状态
+2. 调用 list_tasks 工具，参数：status='uncompleted', pagesize=5
+3. 用列表反问用户："你最近未完成的任务有：[列表]，你想操作哪个？"
+4. 用户明确选择后再调用对应工具
+
+当用户只发送一个文件而无文字说明时（M3 生效）：
+1. 同样不猜测，先调 list_tasks 查询最近任务
+2. 反问"这个文件要附加到哪个任务？"
+`;
 
 /**
  * 从 wecom-bot-bridge 经 A2A body.context.dootask 传入的企微原生字段。
@@ -35,6 +57,9 @@ export async function integrateDootaskMcpServer(
   queryOptions: {
     mcpServers?: Record<string, any>;
     allowedTools?: string[];
+    // v2.1 Task 6 新增 — 兼容 SDK Options.systemPrompt（string | string[] | PresetSystemPrompt）
+    // 注入逻辑只识别 string / PresetSystemPrompt；string[] 走 else 兜底（SDK 罕见用法）
+    systemPrompt?: SystemPrompt | string[];
   },
   dootaskContext?: DootaskContext,
 ): Promise<void> {
@@ -80,6 +105,23 @@ export async function integrateDootaskMcpServer(
           queryOptions.allowedTools.push(n);
         }
       }
+    }
+
+    // 5. v2.1 Task 6: 运行时动态注入企微通知上下文规则（对称 MCP 注入模式）
+    // 【关键】判断用 `type === 'preset'` 而非 `'append' in existing`：
+    // 默认 agent systemPrompt = { type:'preset', preset:'claude_code' }（无 append 键），
+    // 用 `in` 运算会返 false → 走 else 把 preset 替换为字符串 → Claude Agent SDK 的
+    // preset 行为（CLAUDE.md 注入 / CWD context / git status）全部失效。
+    // 参考同模式 claudeUtils.ts:631-632 (OpenCLI 追加)。
+    const existing = queryOptions.systemPrompt;
+    if (typeof existing === 'string') {
+      queryOptions.systemPrompt = existing + '\n\n' + DOOTASK_WECOM_PROMPT;
+    } else if (existing && !Array.isArray(existing) && typeof existing === 'object' && existing.type === 'preset') {
+      existing.append = (existing.append || '') + '\n\n' + DOOTASK_WECOM_PROMPT;
+    } else {
+      // 仅当 queryOptions.systemPrompt 完全未设（undefined / null）时兜底为字符串
+      // 注：若是 string[]（SDK 罕见用法）也会走此分支 — 原数组被替换，属已知 tradeoff
+      queryOptions.systemPrompt = DOOTASK_WECOM_PROMPT;
     }
 
     console.log(`✅ [dootask] MCP Server integrated for ${corpId}:${wecomUserId} (28 tools)`);
