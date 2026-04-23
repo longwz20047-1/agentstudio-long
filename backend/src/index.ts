@@ -22,6 +22,7 @@ import projectsRouter from './routes/projects';
 import authRouter from './routes/auth';
 import configRouter from './routes/config';
 import slackRouter from './routes/slack';
+import wecomPushRouter from './routes/wecomPush';
 import skillsRouter from './routes/skills';
 import pluginsRouter from './routes/plugins';
 import marketplaceSkillsRouter from './routes/marketplaceSkills';
@@ -331,9 +332,9 @@ const app: express.Express = express();
   // X-Request-ID: pass through or generate, set on request and response
   app.use(requestIdMiddleware);
 
-  // JSON parser - skip /api/slack (needs raw body for signature verification)
+  // JSON parser - skip /api/slack and /api/internal/wecom (need raw body for signature verification)
   app.use((req, res, next) => {
-    if (req.path.startsWith('/api/slack')) {
+    if (req.path.startsWith('/api/slack') || req.path.startsWith('/api/internal/wecom')) {
       return next();
     }
     express.json({ limit: '10mb' })(req, res, next);
@@ -499,6 +500,17 @@ const app: express.Express = express();
       }
     }),
     slackRouter
+  );
+
+  // Wecom push (M1) - needs raw body for HMAC verification (spec v2.1 §8.3.3)
+  app.use('/api/internal/wecom',
+    express.json({
+      limit: '10mb',
+      verify: (req: any, res, buf) => {
+        req.rawBody = buf.toString('utf8');
+      },
+    }),
+    wecomPushRouter,
   );
 
   // A2A Workspace file routes - must be before a2aRouter to avoid double middleware execution
