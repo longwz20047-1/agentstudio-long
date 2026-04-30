@@ -1,5 +1,5 @@
 /**
- * 31 个工具名清单（规范: mcp__<server>__<tool>）
+ * 42 个工具名清单（规范: mcp__<server>__<tool>）
  *
  * 必须和 tools/*.ts 的工具注册名保持同步。
  * 因为 allowedTools 注册在 AgentStudio 层（integrateDootaskMcpServer），
@@ -44,6 +44,20 @@ export const DOOTASK_TOOL_NAMES = [
   'mcp__dootask__fetch_file_content',
   // search (1)
   'mcp__dootask__intelligent_search',
+  // taskReports (1) — Sprint 5a 任务级别上报
+  'mcp__dootask__save_task_report',
+  // reportTemplates (6) — Sprint 5a 报告模板
+  'mcp__dootask__list_report_templates',
+  'mcp__dootask__save_report_template',
+  'mcp__dootask__resolve_report_template',
+  'mcp__dootask__delete_report_template',
+  'mcp__dootask__clone_report_template',
+  'mcp__dootask__list_trigger_logs',
+  // reportFields (4) — Sprint 5a 报告字段定义
+  'mcp__dootask__list_report_fields',
+  'mcp__dootask__save_report_field',
+  'mcp__dootask__delete_report_field',
+  'mcp__dootask__build_report_field_index',
 ] as const;
 
 export type DootaskToolName = typeof DOOTASK_TOOL_NAMES[number];

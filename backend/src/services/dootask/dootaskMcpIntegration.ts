@@ -48,7 +48,7 @@ export interface DootaskContext {
 }
 
 /**
- * 把 DooTask 31 工具 in-process 集成到 queryOptions。
+ * 把 DooTask 42 工具 in-process 集成到 queryOptions。
  *
  * 触发条件：dootaskContext 含 corp_id + wecom_userid。
  * 任一字段缺失则跳过集成（对话正常进行，只是没有 dootask 工具）。
@@ -78,7 +78,7 @@ export async function integrateDootaskMcpServer(
       return;
     }
 
-    // 1. 构造 31 个 tool（closure 捕获 getToken 函数，lazy resolve）
+    // 1. 构造 42 个 tool（closure 捕获 getToken 函数，lazy resolve）
     const tools = buildAllTools({
       getToken: () => getDootaskToken(corpId, wecomUserId),
     });
@@ -96,7 +96,7 @@ export async function integrateDootaskMcpServer(
       dootask: server,
     };
 
-    // 4. 注册 31 个工具名到 allowedTools（去重 append）
+    // 4. 注册 42 个工具名到 allowedTools（去重 append）
     if (!queryOptions.allowedTools) {
       queryOptions.allowedTools = [...DOOTASK_TOOL_NAMES];
     } else {
@@ -124,7 +124,7 @@ export async function integrateDootaskMcpServer(
       queryOptions.systemPrompt = DOOTASK_WECOM_PROMPT;
     }
 
-    console.log(`✅ [dootask] MCP Server integrated for ${corpId}:${wecomUserId} (31 tools)`);
+    console.log(`✅ [dootask] MCP Server integrated for ${corpId}:${wecomUserId} (42 tools)`);
   } catch (error) {
     // 集成失败不挂对话（参考 weknoraIntegration.ts:47-50）
     console.error('❌ [dootask] Failed to integrate MCP server:', error);
