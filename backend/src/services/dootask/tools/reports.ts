@@ -1,6 +1,7 @@
 /**
- * DooTask 工作汇报工具（6 个）
+ * DooTask 工作汇报工具（7 个）
  * 迁移源：dootask/electron/lib/mcp.js:1384-1800
+ * + list_pending_reports（v3.22 / Sprint 7-D Pass 3，对接 dootask report__pending_list）
  */
 
 import { tool } from '@anthropic-ai/claude-agent-sdk';
@@ -251,6 +252,48 @@ export function buildReportsTools(ctx: ToolContext) {
     },
   );
 
+  const listPendingReports = tool(
+    'list_pending_reports',
+    '获取我（或指定用户）尚未汇报的任务列表。适用于"我有什么任务还没汇报"类查询。返回任务标题、所属项目、截止时间、紧急标记、我的角色（owner/collaborator）等。',
+    {
+      userid: z.number().optional()
+        .describe('查询目标用户 ID。默认为自己；仅管理员可查他人未汇报任务'),
+      project_id: z.number().optional()
+        .describe('过滤指定项目（限项目成员可调）'),
+      date_from: z.string().optional()
+        .describe('任务创建时间下限 YYYY-MM-DD（默认近 14 天）'),
+      date_to: z.string().optional()
+        .describe('任务创建时间上限 YYYY-MM-DD'),
+      include_archived: z.boolean().optional()
+        .describe('是否包含归档任务，默认 false'),
+      limit: z.number().int().min(1).max(100).optional()
+        .describe('返回条数，默认 50，最大 100'),
+    },
+    async (args) => {
+      const token = await ctx.getToken();
+      const requestData: Record<string, unknown> = {};
+      if (args.userid !== undefined) requestData.userid = args.userid;
+      if (args.project_id !== undefined) requestData.project_id = args.project_id;
+      if (args.date_from) requestData.date_from = args.date_from;
+      if (args.date_to) requestData.date_to = args.date_to;
+      if (args.include_archived !== undefined) requestData.include_archived = args.include_archived;
+      if (args.limit !== undefined) requestData.limit = args.limit;
+
+      const data = await makeDootaskRequest(token, 'GET', 'project/report/pending_list', requestData);
+      const tasks = Array.isArray(data) ? data : [];
+
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({
+            total: tasks.length,
+            tasks,
+          }, null, 2),
+        }],
+      };
+    },
+  );
+
   const markReportsRead = tool(
     'mark_reports_read',
     '批量标记工作汇报为已读或未读状态。支持单个或多个报告的状态管理。',
@@ -287,6 +330,7 @@ export function buildReportsTools(ctx: ToolContext) {
     generateReportTemplate,
     createReport,
     listMyReports,
+    listPendingReports,
     markReportsRead,
   ];
 }

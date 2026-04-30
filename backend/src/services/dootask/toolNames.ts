@@ -1,5 +1,5 @@
 /**
- * 28 个工具名清单（规范: mcp__<server>__<tool>）
+ * 31 个工具名清单（规范: mcp__<server>__<tool>）
  *
  * 必须和 tools/*.ts 的工具注册名保持同步。
  * 因为 allowedTools 注册在 AgentStudio 层（integrateDootaskMcpServer），
@@ -29,12 +29,13 @@ export const DOOTASK_TOOL_NAMES = [
   'mcp__dootask__search_dialogs',
   'mcp__dootask__send_message',
   'mcp__dootask__get_message_list',
-  // reports (6)
+  // reports (7)
   'mcp__dootask__list_received_reports',
   'mcp__dootask__get_report_detail',
   'mcp__dootask__generate_report_template',
   'mcp__dootask__create_report',
   'mcp__dootask__list_my_reports',
+  'mcp__dootask__list_pending_reports',
   'mcp__dootask__mark_reports_read',
   // files (4)
   'mcp__dootask__list_files',
