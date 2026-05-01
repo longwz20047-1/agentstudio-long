@@ -254,10 +254,10 @@ export function buildReportsTools(ctx: ToolContext) {
 
   const listPendingReports = tool(
     'list_pending_reports',
-    '获取我（或指定用户）尚未汇报的任务列表。适用于"我有什么任务还没汇报"类查询。返回任务标题、所属项目、截止时间、紧急标记、我的角色（owner/collaborator）等。',
+    '查询我（或指定用户）的任务汇报列表，支持三种视图：pending（待汇报，默认）/ reported（已汇报历史）/ all（全部相关任务）。适用于"我有什么任务还没汇报"、"我已经汇报过哪些任务"、"我相关的所有任务"等查询。返回任务标题、所属项目、截止时间、紧急标记、我的角色（owner/collaborator）、my_report_count 等。',
     {
       userid: z.number().optional()
-        .describe('查询目标用户 ID。默认为自己；仅管理员可查他人未汇报任务'),
+        .describe('查询目标用户 ID。默认为自己；仅管理员可查他人'),
       project_id: z.number().optional()
         .describe('过滤指定项目（限项目成员可调）'),
       date_from: z.string().optional()
@@ -268,6 +268,8 @@ export function buildReportsTools(ctx: ToolContext) {
         .describe('是否包含归档任务，默认 false'),
       limit: z.number().int().min(1).max(100).optional()
         .describe('返回条数，默认 50，最大 100'),
+      mode: z.enum(['pending', 'reported', 'all']).optional()
+        .describe('视图模式：pending=待汇报（my_report_count<min_count，默认）/ reported=已汇报历史（my_report_count>0）/ all=不做汇报状态过滤'),
     },
     async (args) => {
       const token = await ctx.getToken();
@@ -278,6 +280,7 @@ export function buildReportsTools(ctx: ToolContext) {
       if (args.date_to) requestData.date_to = args.date_to;
       if (args.include_archived !== undefined) requestData.include_archived = args.include_archived;
       if (args.limit !== undefined) requestData.limit = args.limit;
+      if (args.mode) requestData.mode = args.mode;
 
       const data = await makeDootaskRequest(token, 'GET', 'project/report/pending_list', requestData);
       const tasks = Array.isArray(data) ? data : [];
@@ -286,6 +289,7 @@ export function buildReportsTools(ctx: ToolContext) {
         content: [{
           type: 'text' as const,
           text: JSON.stringify({
+            mode: args.mode || 'pending',
             total: tasks.length,
             tasks,
           }, null, 2),
