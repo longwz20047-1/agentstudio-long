@@ -154,14 +154,27 @@ export function buildTasksTools(ctx: ToolContext) {
 
   const createTask = tool(
     'create_task',
-    '在指定项目中创建新任务。',
+    `在指定项目中创建新任务。
+
+【关于 column_id 的智能选择（用户未明确指定时强烈推荐）】
+1. 若用户没指定 column_id：先调 get_project(project_id) 获取该项目的 columns 列表（含 column_id/name/sort）。
+   列名通常代表项目阶段（如售前项目"线索接洽/方案设计/商务报价/合同签订/交付实施"）
+   或工作流状态（"待办/进行中/已完成"）。
+2. 根据用户描述的任务内容推理最匹配的列（例："写报价方案" → 商务报价列）。
+3. 若现有列均无法合理匹配此任务（例如内容是"POC 演示" 但项目仅有线索/合同/交付列），
+   不要擅自落到默认列，应先告知用户："此项目缺少『XX』类列，建议先新增列再创建任务"，
+   征得同意后再调 create_column（待实现）或在现有最近似列中新建。
+4. 仅当用户明确说"放默认列"或"不分类"时，才省略 column_id 走系统 default。`,
     {
       project_id: z.number().min(1).describe('项目ID'),
       name: z.string().min(1).describe('任务名称'),
       content: z.string().optional().describe('任务内容描述（Markdown 格式）'),
       owner: z.array(z.number()).optional().describe('负责人用户ID数组'),
       assist: z.array(z.number()).optional().describe('协助人员用户ID数组'),
-      column_id: z.number().optional().describe('列ID（看板列）'),
+      column_id: z.number().optional().describe(
+        '看板列ID。建议先 get_project 查 columns 后选最匹配的传入；'
+        + '若无合适列应建议用户新增；缺失则落系统 default 列（不推荐）。'
+      ),
       start_at: z.string().optional().describe('开始时间 YYYY-MM-DD HH:mm:ss'),
       end_at: z.string().optional().describe('结束时间 YYYY-MM-DD HH:mm:ss'),
     },
@@ -200,14 +213,22 @@ export function buildTasksTools(ctx: ToolContext) {
 
   const updateTask = tool(
     'update_task',
-    '更新任务属性，只需提供要修改的字段。',
+    `更新任务属性，只需提供要修改的字段。
+
+【移动列（column_id 变更）的最佳实践】
+当用户要把任务移动到某列（如"移到已完成"、"放进商务报价"），先调 get_task 拿当前 task 的 project_id，
+再调 get_project(project_id) 拿 columns 列表，按用户描述的列名推理出目标 column_id。
+若用户提及的列不存在（如"移到 POC 演示列" 但该项目无此列），应告知用户并建议先新增列。`,
     {
       task_id: z.number().min(1).describe('任务ID'),
       name: z.string().optional().describe('任务名称'),
       content: z.string().optional().describe('任务内容描述（Markdown 格式）'),
       owner: z.array(z.number()).optional().describe('负责人用户ID数组'),
       assist: z.array(z.number()).optional().describe('协助人员用户ID数组'),
-      column_id: z.number().optional().describe('移动到指定列ID'),
+      column_id: z.number().optional().describe(
+        '移动到指定列ID。改变列归属前建议先 get_project 拿 columns 找正确 column_id；'
+        + '若用户提及的列不存在应先建议新增列。'
+      ),
       start_at: z.string().optional().describe('开始时间 YYYY-MM-DD HH:mm:ss'),
       end_at: z.string().optional().describe('结束时间 YYYY-MM-DD HH:mm:ss'),
       complete_at: z.union([z.string(), z.boolean()]).optional()
