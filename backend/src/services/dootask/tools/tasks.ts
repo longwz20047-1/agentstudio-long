@@ -12,11 +12,25 @@ import type { ToolContext } from './types.js';
 export function buildTasksTools(ctx: ToolContext) {
   const listTasks = tool(
     'list_tasks',
-    '获取当前用户相关的任务列表（负责/协助/关注），支持按状态、项目、时间范围筛选和搜索。',
+    `获取当前用户相关的任务列表（负责/协助/关注），支持按状态、项目、时间范围、标签筛选和搜索。
+
+【按标签查任务进度（高频场景）】
+当用户问"XX 标签的任务怎么样了"、"YY 模块进度如何"、"金融客户的任务"时，
+调 list_tasks(project_id?, tag='XX')，返回该标签关联的全部任务，
+然后基于响应里的 status/column_name/percent/sub_complete 字段综合分析进度分布。
+
+例：
+- "需求调研的任务完成得怎么样" → list_tasks(project_id=X, tag='需求调研') → 数 status='已完成' 的占比
+- "箱体图纸设计在哪个阶段" → list_tasks(tag='箱体图纸设计') → GROUP BY column_name
+- "金融客户的紧急任务" → list_tasks(tag='金融', status='uncompleted') → 看 p_level
+
+⚠️ tag 入参是**完全匹配 name**（不是模糊搜索），用户描述的标签词应直接传，不要拆词。`,
     {
       status: z.enum(['all', 'completed', 'uncompleted']).optional()
         .describe('任务状态: all(所有), completed(已完成), uncompleted(未完成)'),
       search: z.string().optional().describe('搜索关键词（可搜索任务ID、名称、描述）'),
+      tag: z.string().optional()
+        .describe('按标签名完全匹配过滤（如"需求调研"/"金融"/"核心客户"）。用户问"XX 标签的任务"或某业务维度任务进度时使用'),
       time: z.string().optional()
         .describe('时间范围: today/week/month/year 或自定义 "2025-12-12,2025-12-30"'),
       project_id: z.number().optional().describe('项目ID，只获取指定项目的任务'),
@@ -34,6 +48,7 @@ export function buildTasksTools(ctx: ToolContext) {
       const keys: Record<string, unknown> = {};
       if (args.search) keys.name = args.search;
       if (args.status && args.status !== 'all') keys.status = args.status;
+      if (args.tag) keys.tag = args.tag;
       if (Object.keys(keys).length > 0) requestData.keys = keys;
       if (args.time !== undefined) requestData.time = args.time;
       if (args.project_id !== undefined) requestData.project_id = args.project_id;
