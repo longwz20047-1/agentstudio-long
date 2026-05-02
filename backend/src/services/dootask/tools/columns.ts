@@ -44,6 +44,49 @@ export function buildColumnsTools(ctx: ToolContext) {
         ? args.project_id
         : [args.project_id];
 
+      // 多 project_id 时，优先一次 project/lists 拿全部项目名 + Map 查询
+      // （三层 fallback：project/lists → 缺失 ids 逐个 project/one → 静默 name=''）
+      // 单 project_id 时维持原逻辑（在 per-pid 循环里调一次 project/one，无额外开销）
+      const projectNameMap = new Map<number, string>();
+      if (projectIds.length > 1) {
+        try {
+          const listData = await makeDootaskRequest(token, 'GET', 'project/lists', {
+            pagesize: 100,
+            page: 1,
+          });
+          const projects = (listData as any)?.data || [];
+          for (const p of projects) {
+            if (p?.id && p?.name) projectNameMap.set(p.id, p.name);
+          }
+          const total = (listData as any)?.total || 0;
+
+          // 用户项目数 > 100 → 单页拿不全，对缺失 ids 逐个 project/one 兜底
+          const missingIds = projectIds.filter((pid) => !projectNameMap.has(pid));
+          if (total > 100 && missingIds.length > 0) {
+            console.warn(`[list_project_columns] user has ${total} projects, fallback to per-project /one for ${missingIds.length} missing ids`);
+            await Promise.all(missingIds.map(async (pid) => {
+              try {
+                const proj = await makeDootaskRequest(token, 'GET', 'project/one', { project_id: pid });
+                if (proj?.name) projectNameMap.set(pid, proj.name);
+              } catch {
+                // 静默 → name 仍为空（columns 仍能拉到）
+              }
+            }));
+          }
+        } catch (err: any) {
+          // project/lists 整体失败 → fallback 到原逐个 project/one 路径（与原实现等价）
+          console.warn(`[list_project_columns] project/lists fallback failed, using per-project: ${err?.message}`);
+          await Promise.all(projectIds.map(async (pid) => {
+            try {
+              const proj = await makeDootaskRequest(token, 'GET', 'project/one', { project_id: pid });
+              if (proj?.name) projectNameMap.set(pid, proj.name);
+            } catch {
+              // 静默 → name 仍为空
+            }
+          }));
+        }
+      }
+
       // 并行拉每个项目的列；失败的项目仅记录，不阻塞其他项目
       const results = await Promise.all(
         projectIds.map(async (pid) => {
@@ -51,13 +94,17 @@ export function buildColumnsTools(ctx: ToolContext) {
             const data = await makeDootaskRequest(token, 'GET', 'project/column/lists', {
               project_id: pid,
             });
-            // 取项目名（带数组场景必须；单值场景也保留以提升 label 可读性）
+            // 取项目名：多 pid 走预填的 Map；单 pid 维持原 project/one 调用
             let projectName = '';
-            try {
-              const proj = await makeDootaskRequest(token, 'GET', 'project/one', { project_id: pid });
-              projectName = proj?.name || '';
-            } catch {
-              projectName = '';
+            if (projectIds.length > 1) {
+              projectName = projectNameMap.get(pid) || '';
+            } else {
+              try {
+                const proj = await makeDootaskRequest(token, 'GET', 'project/one', { project_id: pid });
+                projectName = proj?.name || '';
+              } catch {
+                projectName = '';
+              }
             }
             const cols = (data?.data || []).map((c: any) => ({
               column_id: c.id,

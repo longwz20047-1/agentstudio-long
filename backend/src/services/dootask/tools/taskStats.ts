@@ -85,6 +85,22 @@ LLM 用户视角约束：永远以名称回答（项目名/列名/标签名/优�
 - "团队各成员完成率" → 本工具(project_id=X, group_by='owner')
 - 默认 weight_mode=equal；用户说"按重要程度算"才用 priority
 
+【⚠️ tag 过滤 + group_by='tag' 的展开行为】
+当用户传 tag=['金融'] + group_by='tag'：
+- 命中"金融"标签的任务可能还有"紧急"/"客户"等其他标签
+- groups 会包含**所有命中任务的全部标签**（不仅是 filter 里的"金融"）
+- 例：3 个金融任务分别还有标签[紧急]/[客户,V1]/[紧急] → groups = [金融:3, 紧急:2, 客户:1, V1:1]
+
+如何选择正确路径：
+- 想看"金融任务的整体完成率"（单一数字） → group_by='project' + tag=['金融']
+- 想看"金融任务在不同子标签维度的完成率分布"（当前展开行为） → group_by='tag' + tag=['金融']
+- 想看"项目里所有标签维度对比"（不限定 tag filter） → 不传 tag + group_by='tag'
+
+【⚠️ 反模式：不要用 status='completed' + 完成率统计】
+status='completed' 过滤后所有任务 complete_at 非空 → completion=100 → overall_completion_rate 必然 100%。
+统计完成率请不传 status（默认 all）或传 status='uncompleted'（看未完成的进度）。
+若用户想看"已完成的任务列表"，应该用 list_tasks(status='completed') 而不是本工具。
+
 【边界保障】
 - 空任务集 → overall=0, groups=[]
 - 无优先级配置 → priority 模式退化为 equal
@@ -241,6 +257,12 @@ LLM 用户视角约束：永远以名称回答（项目名/列名/标签名/优�
         }
       }
 
+      // 高负载场景告警（仅服务端日志，不影响响应）
+      const totalCombos = combos.length;
+      if (totalCombos >= 10) {
+        console.warn(`[get_task_completion_stats] high combo count: ${totalCombos} (tag×project×column 笛卡尔积)`);
+      }
+
       const responses = await Promise.all(
         combos.map((c) => fetchAllForCombo(c.tag, c.project_id, c.column_id)),
       );
@@ -255,6 +277,10 @@ LLM 用户视角约束：永远以名称回答（项目名/列名/标签名/优�
         }
       }
       const tasks = Array.from(taskMap.values());
+
+      if (tasks.length >= 5000) {
+        console.warn(`[get_task_completion_stats] large task set: ${tasks.length} tasks merged from ${totalCombos} combos, perf may degrade`);
+      }
 
       // ====== Step 5: 拉项目名映射（仅 group_by='project' 或需要展示项目名时）======
       // 即使非 project 分组，filter_summary 里也可能想引用项目名 — 但用户视角只在 group label 里看到，
@@ -276,6 +302,45 @@ LLM 用户视角约束：永远以名称回答（项目名/列名/标签名/优�
           }),
         );
         for (const p of projectInfos) projectMap.set(p.pid, p.name);
+      }
+
+      // ====== Step 5b: 拉 owner 真名映射（仅 group_by='owner' 时执行）======
+      const userNameMap = new Map<number, string>();
+      if (args.group_by === 'owner') {
+        const uniqueOwnerIds = new Set<number>();
+        for (const task of tasks) {
+          const owners = Array.isArray(task.task_user)
+            ? task.task_user.filter((u) => u && u.owner === 1)
+            : [];
+          for (const u of owners) uniqueOwnerIds.add(u.userid);
+        }
+
+        if (uniqueOwnerIds.size > 0) {
+          const ids = Array.from(uniqueOwnerIds);
+          // dootask users/basic 单批最多 50 → 分批 chunk
+          const chunks: number[][] = [];
+          for (let i = 0; i < ids.length; i += 50) chunks.push(ids.slice(i, i + 50));
+
+          await Promise.all(chunks.map(async (chunk) => {
+            try {
+              const data = await makeDootaskRequest(
+                token, 'GET', 'users/basic',
+                { userid: chunk.length === 1 ? chunk[0] : JSON.stringify(chunk) },
+              );
+              const rawList = Array.isArray(data)
+                ? data
+                : (Array.isArray((data as any)?.data) ? (data as any).data : []);
+              for (const user of rawList) {
+                if (user && user.userid && user.nickname) {
+                  userNameMap.set(user.userid, user.nickname);
+                }
+              }
+            } catch (e) {
+              // 静默失败 → fallback 到 "用户 N" label（不抛错）
+              console.warn(`[get_task_completion_stats] users/basic batch failed: ${(e as Error)?.message}`);
+            }
+          }));
+        }
       }
 
       // ====== Step 6: 算 weight + completion ======
@@ -359,7 +424,8 @@ LLM 用户视角约束：永远以名称回答（项目名/列名/标签名/优�
               targets.push({ key: '__no_owner__', label: '无负责人' });
             } else {
               for (const u of owners) {
-                targets.push({ key: String(u.userid), label: `用户 ${u.userid}` });
+                const label = userNameMap.get(u.userid) || `用户 ${u.userid}`;
+                targets.push({ key: String(u.userid), label });
               }
             }
             break;
