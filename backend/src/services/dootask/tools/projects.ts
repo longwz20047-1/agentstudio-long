@@ -11,11 +11,30 @@ import type { ToolContext } from './types.js';
 export function buildProjectsTools(ctx: ToolContext) {
   const listProjects = tool(
     'list_projects',
-    '获取当前用户可访问的项目列表，支持按归档状态筛选、搜索项目名称。',
+    `获取当前用户可访问的项目列表，支持按归档状态筛选、搜索项目名称。
+
+【跨项目语义查询场景（与 list_tasks 配套）】
+
+用户问"售前类项目的任务"、"客户A 相关项目进度"等跨项目分析问题时，应走两步链路：
+1. list_projects(search='关键词')  ← dootask 后端按 name LIKE 模糊匹配返候选
+2. LLM 从候选中**语义识别真正相关的项目**（排除假阳性如名称相近但语义不符的，例如
+   用户问"售前"，候选含"XX 售前"/"YY 售前合同"/"售前归档-2024"，
+   LLM 识别活跃相关 = ["XX 售前", "YY 售前合同"]，过滤归档项目）
+3. 拿识别到的 project_id 数组传给 list_tasks(project_id=array)，一次性跨项目查任务
+
+例：
+- "我所有售前项目目前的任务情况" → list_projects(search='售前') → LLM 选活跃项目 → list_tasks(project_id=[ids])
+- "金融客户的项目都在做什么" → list_projects(search='金融') → 语义识别 → list_tasks(project_id=[ids])
+- 配合标签：→ list_tasks(project_id=[ids], tag=['核心客户','紧急'])
+
+⚠️ search 是 LIKE 模糊（如 search='售前' 命中"售前项目"/"客户售前合同"/"售前归档-2024"），
+   LLM 必须看到候选后做语义筛选，不能盲目把全部候选都传给 list_tasks。`,
     {
       archived: z.enum(['no', 'yes', 'all']).optional()
         .describe('归档状态: no(未归档), yes(已归档), all(全部)，默认 no'),
-      search: z.string().optional().describe('搜索关键词（可搜索项目名称）'),
+      search: z.string().optional().describe(
+        '项目名 LIKE 模糊搜索关键词。配合 LLM 语义识别用于跨项目查询场景。'
+      ),
       page: z.number().optional().describe('页码，默认 1'),
       pagesize: z.number().optional().describe('每页数量，默认 20'),
     },

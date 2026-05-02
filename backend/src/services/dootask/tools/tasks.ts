@@ -14,43 +14,63 @@ export function buildTasksTools(ctx: ToolContext) {
     'list_tasks',
     `获取当前用户相关的任务列表（负责/协助/关注），支持按状态、项目、时间范围、标签筛选和搜索。
 
-【按标签查任务进度（高频场景）— 必须用语义匹配两步链路】
+【两个语义匹配两步链路（项目 + 标签）— LLM 不确定标识符场景必走】
 
-dootask 后端按 name **完全匹配**查询，但 LLM 生成的标签存在同义词不确定性
-（"金融" / "金融行业" / "金融科技" / "金融客户"），单值精确匹配会漏命中。
-**正确链路**：
+dootask 后端按精确匹配查询（tag.name = 单值，project_id = 单值）。但 LLM 生成的标签和
+项目名都存在不确定性（同义词、命名差异）。本工具支持 **tag** 和 **project_id** 都传数组，
+内部对每个组合做笛卡尔积后端调用 → 按 task.id 合并去重。
 
-1. 先调 list_project_tags(project_id) 拿该项目全部已有标签 name 列表
-2. LLM 用自身语义判断从列表中识别与用户问询相关的所有标签
-   （例：用户问"金融"，列表有 ["金融","金融行业","金融科技","制造","医疗"]
-        → LLM 判定相关 = ["金融","金融行业","金融科技"]）
-3. 把识别到的相关名一次性传给 list_tasks(tag=数组)
-   本工具支持 tag: string | string[]，传数组时内部对每项调一次后端，合并任务并按 task.id 去重
-4. 综合返回任务的 status/column_name/percent 字段做进度分析
+(A) 标签语义两步链路：
+1. list_project_tags(project_id) 拿项目全部已有标签 name 列表
+2. LLM 语义识别相关名（"金融" → ["金融","金融行业","金融科技"]）
+3. list_tasks(tag=数组) 一次性查询
+
+(B) 项目语义两步链路：
+1. list_projects(search='关键词') 拿候选项目（dootask LIKE 模糊匹配）
+2. LLM 从候选中识别真正相关的项目（排除假阳性如"售前归档-2024"）
+3. list_tasks(project_id=数组) 跨项目查询
+
+(C) 项目 + 标签组合：两个数组同时传，工具内部做笛卡尔积调用合并去重
+   例 N=2 项目 × M=2 标签 → 4 次后端调用 → 合并
 
 例：
-- "需求调研的任务完成得怎么样" → list_project_tags 找相关 → list_tasks(tag=['需求调研','需求分析'])
-- "金融客户的紧急任务" → list_project_tags 语义匹配 → list_tasks(tag=['金融','金融客户','金融行业'], status='uncompleted')
-- "箱体图纸设计在哪个阶段" → list_project_tags → list_tasks(tag=['箱体图纸设计','图纸设计'])
-- 多任务进度问题，几乎都应该走"先 list_project_tags 拿名 → LLM 语义匹配 → 数组传入"路径
+- "需求调研的任务完成得怎么样" → list_project_tags + 语义识别 → list_tasks(tag=['需求调研','需求分析'])
+- "我所有售前项目的任务" → list_projects(search='售前') + 语义识别 → list_tasks(project_id=[12,15,18])
+- "所有售前项目里金融客户的紧急任务" → 双语义识别 → list_tasks(project_id=[12,15], tag=['金融','金融客户'], status='uncompleted')
 
-【何时可以传单值（不调 list_project_tags）】
-仅当用户明确指定唯一精确名（"叫『金融』的标签的任务，其他都不要"）时直接传字符串。
-否则默认走两步链路保证命中相关同义标签，避免漏数据。`,
+【列维度过滤（client-side 分组）— dootask 后端不支持 column_id 过滤】
+
+dootask task/lists 端点**不接受 column_id 入参**。要按列维度分析任务时：
+1. list_tasks(project_id=X)（不带 column 过滤）拿全部任务
+2. 响应里每个任务自带 column_name 字段，LLM 在结果里 GROUP BY column_name 自己分组
+3. 用户问"调研阶段任务" → 拿到结果后过滤 column_name 含"调研"的任务
+
+例：
+- "项目 X 各阶段任务分布" → list_tasks(project_id=X) → LLM 按 column_name 统计
+- "需求调研列的任务完成情况" → list_tasks(project_id=X) → 过滤 column_name='需求调研'
+
+【何时传单值（不走两步链路）】
+仅当用户明确指定唯一精确名/ID 时直接传字符串/数字。否则默认走两步链路。`,
     {
       status: z.enum(['all', 'completed', 'uncompleted']).optional()
         .describe('任务状态: all(所有), completed(已完成), uncompleted(未完成)'),
       search: z.string().optional().describe('搜索关键词（可搜索任务ID、名称、描述）'),
       tag: z.union([z.string(), z.array(z.string())]).optional()
         .describe(
-          '按标签名过滤（dootask 后端单次精确匹配 = name）。'
-          + '推荐先调 list_project_tags 拿全部名 → LLM 语义识别相关 → 一次性传字符串数组。'
-          + '本工具内部对数组循环多次调用并按 task.id 合并去重。'
+          '按标签名过滤（dootask 后端单次精确匹配）。'
+          + '推荐先 list_project_tags 拿全部名 → LLM 语义识别相关 → 传字符串数组。'
+          + '工具内部对数组每项 + project_id 数组每项做笛卡尔积调用并按 task.id 合并去重。'
           + '单值传 string，多值传 string[]'
         ),
       time: z.string().optional()
         .describe('时间范围: today/week/month/year 或自定义 "2025-12-12,2025-12-30"'),
-      project_id: z.number().optional().describe('项目ID，只获取指定项目的任务'),
+      project_id: z.union([z.number(), z.array(z.number())]).optional()
+        .describe(
+          '项目ID过滤（dootask 后端单次单值）。'
+          + '推荐先 list_projects(search=关键词) 拿候选 → LLM 语义识别相关项目 → 传数字数组跨项目查询。'
+          + '工具内部对每项 + tag 数组每项做笛卡尔积调用并按 task.id 合并去重。'
+          + '单值传 number，多值传 number[]'
+        ),
       parent_id: z.number().optional()
         .describe('主任务ID。>0:获取该主任务的子任务；-1:仅获取主任务；不传:所有任务'),
       page: z.number().optional().describe('页码，默认 1'),
@@ -60,7 +80,7 @@ dootask 后端按 name **完全匹配**查询，但 LLM 生成的标签存在同
       const token = await ctx.getToken();
 
       // 公共过滤构造器（单次后端调用的 requestData）
-      const buildRequest = (tagValue?: string): Record<string, unknown> => {
+      const buildRequest = (tagValue?: string, projectIdValue?: number): Record<string, unknown> => {
         const req: Record<string, unknown> = {
           page: args.page || 1,
           pagesize: args.pagesize || 20,
@@ -71,27 +91,38 @@ dootask 后端按 name **完全匹配**查询，但 LLM 生成的标签存在同
         if (tagValue) keys.tag = tagValue;
         if (Object.keys(keys).length > 0) req.keys = keys;
         if (args.time !== undefined) req.time = args.time;
-        if (args.project_id !== undefined) req.project_id = args.project_id;
+        if (projectIdValue !== undefined) req.project_id = projectIdValue;
         if (args.parent_id !== undefined) req.parent_id = args.parent_id;
         return req;
       };
 
-      // 把 tag 入参规范成数组：
-      // - undefined → [undefined]（单次调用，无 tag 过滤）
-      // - string → [string]（单次调用，与原行为相同）
-      // - string[] → 多次调用 + 合并
+      // 把 tag / project_id 入参规范成数组（undefined→[undefined] 表示该维度不过滤）
       const tagList: (string | undefined)[] = Array.isArray(args.tag)
         ? args.tag
         : args.tag !== undefined ? [args.tag] : [undefined];
+      const projectIdList: (number | undefined)[] = Array.isArray(args.project_id)
+        ? args.project_id
+        : args.project_id !== undefined ? [args.project_id] : [undefined];
 
       const isMultiTag = Array.isArray(args.tag) && args.tag.length > 1;
+      const isMultiProject = Array.isArray(args.project_id) && args.project_id.length > 1;
 
-      // 并行调用所有 tag 分支
+      // 笛卡尔积组合：tag × project_id
+      const combos: Array<{ tag?: string; project_id?: number }> = [];
+      for (const t of tagList) {
+        for (const p of projectIdList) {
+          combos.push({ tag: t, project_id: p });
+        }
+      }
+
+      // 并行调用所有组合
       const responses = await Promise.all(
-        tagList.map((t) => makeDootaskRequest(token, 'GET', 'project/task/lists', buildRequest(t)))
+        combos.map((c) =>
+          makeDootaskRequest(token, 'GET', 'project/task/lists', buildRequest(c.tag, c.project_id))
+        )
       );
 
-      // 合并 + 按 task.id 去重（多 tag 时一个任务可能被多个 tag 命中）
+      // 合并 + 按 task.id 去重（多 tag/多 project 时一个任务可能被多个组合命中）
       const taskMap = new Map<number, any>();
       for (const data of responses) {
         for (const t of data.data || []) {
@@ -100,8 +131,9 @@ dootask 后端按 name **完全匹配**查询，但 LLM 生成的标签存在同
       }
       const mergedTasks = Array.from(taskMap.values());
 
-      // 多 tag 时 total = 去重后数量；单 tag/无 tag 用后端原 total
-      const finalTotal = isMultiTag ? mergedTasks.length : (responses[0]?.total ?? mergedTasks.length);
+      // 多 combo 时 total = 去重后数量；单 combo 用后端原 total
+      const isMultiCombo = isMultiTag || isMultiProject;
+      const finalTotal = isMultiCombo ? mergedTasks.length : (responses[0]?.total ?? mergedTasks.length);
 
       const tasks = mergedTasks.map((t: any) => ({
         task_id: t.id,
@@ -129,8 +161,9 @@ dootask 后端按 name **完全匹配**查询，但 LLM 生成的标签存在同
             total: finalTotal,
             page: responses[0]?.current_page,
             pagesize: responses[0]?.per_page,
-            // 多 tag 时回显本次用了哪些标签做并集查询，方便 LLM 自检
+            // 多值过滤时回显本次用了哪些标签/项目做并集查询，方便 LLM 自检
             ...(isMultiTag ? { tag_filter: args.tag } : {}),
+            ...(isMultiProject ? { project_filter: args.project_id } : {}),
             tasks,
           }, null, 2),
         }],
