@@ -1,12 +1,14 @@
 /**
- * 聚合所有 DooTask 工具（62 个）
+ * 聚合所有 DooTask 工具（67 个）
  */
 
 import { buildUsersTools } from './users.js';
 import { buildTasksTools } from './tasks.js';
 import { buildTaskLifecycleTools } from './taskLifecycle.js';
+import { buildTaskPrioritiesTools } from './taskPriorities.js';
 import { buildProjectsTools } from './projects.js';
 import { buildProjectAdvancedTools } from './projectAdvanced.js';
+import { buildProjectTagsTools } from './projectTags.js';
 import { buildColumnsTools } from './columns.js';
 import { buildDialogsTools } from './dialogs.js';
 import { buildDialogMessagesTools } from './dialogMessages.js';
@@ -20,14 +22,19 @@ import { buildReportDashboardTools } from './reportDashboard.js';
 import type { ToolContext } from './types.js';
 
 /**
- * 构造全部 62 个 tool：
- *   users(2) + tasks(8) + taskLifecycle(3) + projects(6) + projectAdvanced(3)
+ * 构造全部 67 个 tool：
+ *   users(2) + tasks(8) + taskLifecycle(3) + taskPriorities(1)
+ *   + projects(6) + projectAdvanced(3) + projectTags(4)
  *   + columns(5) + dialogs(3) + dialogMessages(6) + reports(7) + files(4) + search(1)
- *   + taskReports(1) + reportTemplates(6) + reportFields(4) + reportDashboard(3) = 62
+ *   + taskReports(1) + reportTemplates(6) + reportFields(4) + reportDashboard(3) = 67
  *
  *   - projects 6 = 原 mcp.js 4 个 + add_project_members / remove_project_members
  *   - projectAdvanced 3 = transfer_project_owner + get_project_permission
  *                  + update_project_permission（项目转让 + 权限矩阵读改；管理员场景）
+ *   - projectTags 4 = list_project_tags + create_project_tag + update_project_tag
+ *                  + delete_project_tag（任务画像三轴模型 5b：多维标签 N:N 自由刻画）
+ *   - taskPriorities 1 = list_task_priorities（任务画像三轴模型 5a：系统级优先级档位查询）
+ *                  与 create_task / update_task 的 p_level/p_name/p_color 三字段闭环
  *   - columns  5 = list_project_columns + create_column + create_columns_batch
  *                  + update_column + delete_column（补齐 column 写操作闭环）
  *   - taskLifecycle 3 = archive_task + move_task + copy_task
@@ -47,8 +54,10 @@ export function buildAllTools(ctx: ToolContext) {
     ...buildUsersTools(ctx),
     ...buildTasksTools(ctx),
     ...buildTaskLifecycleTools(ctx),
+    ...buildTaskPrioritiesTools(ctx),
     ...buildProjectsTools(ctx),
     ...buildProjectAdvancedTools(ctx),
+    ...buildProjectTagsTools(ctx),
     ...buildColumnsTools(ctx),
     ...buildDialogsTools(ctx),
     ...buildDialogMessagesTools(ctx),
