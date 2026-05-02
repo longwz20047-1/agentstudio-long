@@ -1,5 +1,5 @@
 /**
- * 聚合所有 DooTask 工具（53 个）
+ * 聚合所有 DooTask 工具（59 个）
  */
 
 import { buildUsersTools } from './users.js';
@@ -9,6 +9,7 @@ import { buildProjectsTools } from './projects.js';
 import { buildProjectAdvancedTools } from './projectAdvanced.js';
 import { buildColumnsTools } from './columns.js';
 import { buildDialogsTools } from './dialogs.js';
+import { buildDialogMessagesTools } from './dialogMessages.js';
 import { buildReportsTools } from './reports.js';
 import { buildFilesTools } from './files.js';
 import { buildSearchTools } from './search.js';
@@ -18,10 +19,10 @@ import { buildReportFieldsTools } from './reportFields.js';
 import type { ToolContext } from './types.js';
 
 /**
- * 构造全部 53 个 tool：
+ * 构造全部 59 个 tool：
  *   users(2) + tasks(8) + taskLifecycle(3) + projects(6) + projectAdvanced(3)
- *   + columns(5) + dialogs(3) + reports(7) + files(4) + search(1)
- *   + taskReports(1) + reportTemplates(6) + reportFields(4) = 53
+ *   + columns(5) + dialogs(3) + dialogMessages(6) + reports(7) + files(4) + search(1)
+ *   + taskReports(1) + reportTemplates(6) + reportFields(4) = 59
  *
  *   - projects 6 = 原 mcp.js 4 个 + add_project_members / remove_project_members
  *   - projectAdvanced 3 = transfer_project_owner + get_project_permission
@@ -30,6 +31,9 @@ import type { ToolContext } from './types.js';
  *                  + update_column + delete_column（补齐 column 写操作闭环）
  *   - taskLifecycle 3 = archive_task + move_task + copy_task
  *                  （归档/还原 + 跨项目跨列复合移动 + 复制；与 column 体系强耦合）
+ *   - dialogMessages 6 = send_file_message + send_task_card + send_location_message
+ *                  + withdraw_message + forward_message + mark_messages_read
+ *                  （富消息发送 + 消息管理；与 dialogs.ts 文本通道互补）
  *   - reports  7 = 原 mcp.js 6 个 + Sprint 7-D Pass 3 list_pending_reports
  *   - taskReports(1) + reportTemplates(6) + reportFields(4) = Sprint 5a 11 个新增
  *     对接 dootask 报告通道 Sprint 1-7-B 全部 endpoint
@@ -44,6 +48,7 @@ export function buildAllTools(ctx: ToolContext) {
     ...buildProjectAdvancedTools(ctx),
     ...buildColumnsTools(ctx),
     ...buildDialogsTools(ctx),
+    ...buildDialogMessagesTools(ctx),
     ...buildReportsTools(ctx),
     ...buildFilesTools(ctx),
     ...buildSearchTools(ctx),
