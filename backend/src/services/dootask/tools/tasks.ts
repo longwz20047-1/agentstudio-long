@@ -38,16 +38,19 @@ dootask 后端按精确匹配查询（tag.name = 单值，project_id = 单值）
 - "我所有售前项目的任务" → list_projects(search='售前') + 语义识别 → list_tasks(project_id=[12,15,18])
 - "所有售前项目里金融客户的紧急任务" → 双语义识别 → list_tasks(project_id=[12,15], tag=['金融','金融客户'], status='uncompleted')
 
-【列维度过滤（client-side 分组）— dootask 后端不支持 column_id 过滤】
+【列维度过滤（原生支持）】
 
-dootask task/lists 端点**不接受 column_id 入参**。要按列维度分析任务时：
-1. list_tasks(project_id=X)（不带 column 过滤）拿全部任务
-2. 响应里每个任务自带 column_name 字段，LLM 在结果里 GROUP BY column_name 自己分组
-3. 用户问"调研阶段任务" → 拿到结果后过滤 column_name 含"调研"的任务
+dootask 后端现已支持按 column_id 单值或数组过滤。配合 list_project_columns
+（或 get_project 嵌套 columns）的语义匹配两步链路：
+
+1. list_project_columns(project_id) 或 get_project(project_id) 拿项目全部 columns
+2. LLM 用列名语义识别相关列（如"调研阶段" → ["客户调研","需求调研"] → [18, 22]）
+3. list_tasks(project_id=X, column_id=[18, 22]) 一次性精确过滤，无需 client-side filter
 
 例：
-- "项目 X 各阶段任务分布" → list_tasks(project_id=X) → LLM 按 column_name 统计
-- "需求调研列的任务完成情况" → list_tasks(project_id=X) → 过滤 column_name='需求调研'
+- "调研阶段的任务" → list_project_columns + 语义识别 → list_tasks(column_id=[18,22])
+- "需求调研列的进度" → list_tasks(column_id=18) → 看 status 字段
+- "项目 X 商务报价列的核心客户任务" → 三维语义识别 → list_tasks(project_id=X, column_id=[Y], tag=['核心客户'])
 
 【何时传单值（不走两步链路）】
 仅当用户明确指定唯一精确名/ID 时直接传字符串/数字。否则默认走两步链路。`,
@@ -71,6 +74,12 @@ dootask task/lists 端点**不接受 column_id 入参**。要按列维度分析�
           + '工具内部对每项 + tag 数组每项做笛卡尔积调用并按 task.id 合并去重。'
           + '单值传 number，多值传 number[]'
         ),
+      column_id: z.union([z.number(), z.array(z.number())]).optional()
+        .describe(
+          '按看板列ID过滤（dootask 后端 keys.column_id 支持单值/数组，本工具内部 wrap 数组并行调用合并去重）。'
+          + '推荐先调 list_project_columns 或 get_project 拿 column_id（基于用户描述的列名做语义匹配后传入）。'
+          + '单值传 number，多值传 number[]'
+        ),
       parent_id: z.number().optional()
         .describe('主任务ID。>0:获取该主任务的子任务；-1:仅获取主任务；不传:所有任务'),
       page: z.number().optional().describe('页码，默认 1'),
@@ -80,7 +89,7 @@ dootask task/lists 端点**不接受 column_id 入参**。要按列维度分析�
       const token = await ctx.getToken();
 
       // 公共过滤构造器（单次后端调用的 requestData）
-      const buildRequest = (tagValue?: string, projectIdValue?: number): Record<string, unknown> => {
+      const buildRequest = (tagValue?: string, projectIdValue?: number, columnIdValue?: number): Record<string, unknown> => {
         const req: Record<string, unknown> = {
           page: args.page || 1,
           pagesize: args.pagesize || 20,
@@ -89,6 +98,7 @@ dootask task/lists 端点**不接受 column_id 入参**。要按列维度分析�
         if (args.search) keys.name = args.search;
         if (args.status && args.status !== 'all') keys.status = args.status;
         if (tagValue) keys.tag = tagValue;
+        if (columnIdValue !== undefined) keys.column_id = columnIdValue;
         if (Object.keys(keys).length > 0) req.keys = keys;
         if (args.time !== undefined) req.time = args.time;
         if (projectIdValue !== undefined) req.project_id = projectIdValue;
@@ -96,29 +106,35 @@ dootask task/lists 端点**不接受 column_id 入参**。要按列维度分析�
         return req;
       };
 
-      // 把 tag / project_id 入参规范成数组（undefined→[undefined] 表示该维度不过滤）
+      // 把 tag / project_id / column_id 入参规范成数组（undefined→[undefined] 表示该维度不过滤）
       const tagList: (string | undefined)[] = Array.isArray(args.tag)
         ? args.tag
         : args.tag !== undefined ? [args.tag] : [undefined];
       const projectIdList: (number | undefined)[] = Array.isArray(args.project_id)
         ? args.project_id
         : args.project_id !== undefined ? [args.project_id] : [undefined];
+      const columnIdList: (number | undefined)[] = Array.isArray(args.column_id)
+        ? args.column_id
+        : args.column_id !== undefined ? [args.column_id] : [undefined];
 
       const isMultiTag = Array.isArray(args.tag) && args.tag.length > 1;
       const isMultiProject = Array.isArray(args.project_id) && args.project_id.length > 1;
+      const isMultiColumn = Array.isArray(args.column_id) && args.column_id.length > 1;
 
-      // 笛卡尔积组合：tag × project_id
-      const combos: Array<{ tag?: string; project_id?: number }> = [];
+      // 三维笛卡尔积：tag × project_id × column_id
+      const combos: Array<{ tag?: string; project_id?: number; column_id?: number }> = [];
       for (const t of tagList) {
         for (const p of projectIdList) {
-          combos.push({ tag: t, project_id: p });
+          for (const c of columnIdList) {
+            combos.push({ tag: t, project_id: p, column_id: c });
+          }
         }
       }
 
       // 并行调用所有组合
       const responses = await Promise.all(
         combos.map((c) =>
-          makeDootaskRequest(token, 'GET', 'project/task/lists', buildRequest(c.tag, c.project_id))
+          makeDootaskRequest(token, 'GET', 'project/task/lists', buildRequest(c.tag, c.project_id, c.column_id))
         )
       );
 
@@ -132,7 +148,7 @@ dootask task/lists 端点**不接受 column_id 入参**。要按列维度分析�
       const mergedTasks = Array.from(taskMap.values());
 
       // 多 combo 时 total = 去重后数量；单 combo 用后端原 total
-      const isMultiCombo = isMultiTag || isMultiProject;
+      const isMultiCombo = isMultiTag || isMultiProject || isMultiColumn;
       const finalTotal = isMultiCombo ? mergedTasks.length : (responses[0]?.total ?? mergedTasks.length);
 
       const tasks = mergedTasks.map((t: any) => ({
@@ -161,9 +177,10 @@ dootask task/lists 端点**不接受 column_id 入参**。要按列维度分析�
             total: finalTotal,
             page: responses[0]?.current_page,
             pagesize: responses[0]?.per_page,
-            // 多值过滤时回显本次用了哪些标签/项目做并集查询，方便 LLM 自检
+            // 多值过滤时回显本次用了哪些标签/项目/列做并集查询，方便 LLM 自检
             ...(isMultiTag ? { tag_filter: args.tag } : {}),
             ...(isMultiProject ? { project_filter: args.project_id } : {}),
+            ...(isMultiColumn ? { column_filter: args.column_id } : {}),
             tasks,
           }, null, 2),
         }],
