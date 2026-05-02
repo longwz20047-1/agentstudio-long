@@ -24,29 +24,79 @@ const MAX_BATCH_COLUMNS = 20;
 export function buildColumnsTools(ctx: ToolContext) {
   const listProjectColumns = tool(
     'list_project_columns',
-    '获取指定项目的所有看板列（column）。列名通常代表项目阶段或工作流状态（如售前项目「线索接洽/方案设计/商务报价/合同签订/交付实施」或通用「待办/进行中/已完成」）。配合 create_task / update_task 做内容→列匹配时的首选查询工具，比 get_project 更轻量（只返回列信息）。',
-    { project_id: z.number().min(1).describe('项目ID') },
+    `获取指定项目的所有看板列（column）。列名通常代表项目阶段或工作流状态（如售前项目「线索接洽/方案设计/商务报价/合同签订/交付实施」或通用「待办/进行中/已完成」）。配合 create_task / update_task 做内容→列匹配时的首选查询工具，比 get_project 更轻量（只返回列信息）。
+
+支持单/多 project_id（数组时每列响应含 project_id + project_name，便于跨项目区分）。
+
+【跨项目列查询场景】
+用户问"调研列任务怎么样"、"售前项目商务报价阶段进度"等跨项目场景：
+1. list_projects(search='关键词') 拿候选项目
+2. list_project_columns(project_id=数组) 一次性拿全部列
+3. LLM 语义识别相关列名 → 传 column_id 数组给 list_tasks 或 get_task_completion_stats`,
+    {
+      project_id: z.union([z.number(), z.array(z.number())])
+        .describe('项目ID（单值或数组）。传数组时返回所有项目列的合集，每项含 project_id + project_name。'),
+    },
     async (args) => {
       const token = await ctx.getToken();
-      const data = await makeDootaskRequest(token, 'GET', 'project/column/lists', {
-        project_id: args.project_id,
-      });
 
-      const columns = (data?.data || []).map((c: any) => ({
-        column_id: c.id,
-        name: c.name,
-        color: c.color || '',
-        sort: c.sort,
-      }));
+      const projectIds: number[] = Array.isArray(args.project_id)
+        ? args.project_id
+        : [args.project_id];
+
+      // 并行拉每个项目的列；失败的项目仅记录，不阻塞其他项目
+      const results = await Promise.all(
+        projectIds.map(async (pid) => {
+          try {
+            const data = await makeDootaskRequest(token, 'GET', 'project/column/lists', {
+              project_id: pid,
+            });
+            // 取项目名（带数组场景必须；单值场景也保留以提升 label 可读性）
+            let projectName = '';
+            try {
+              const proj = await makeDootaskRequest(token, 'GET', 'project/one', { project_id: pid });
+              projectName = proj?.name || '';
+            } catch {
+              projectName = '';
+            }
+            const cols = (data?.data || []).map((c: any) => ({
+              column_id: c.id,
+              name: c.name,
+              color: c.color || '',
+              sort: c.sort,
+              project_id: pid,
+              project_name: projectName,
+            }));
+            return { pid, ok: true as const, cols };
+          } catch (err: any) {
+            return { pid, ok: false as const, error: err?.message || String(err) };
+          }
+        }),
+      );
+
+      const allColumns = results.filter((r) => r.ok).flatMap((r) => r.cols);
+      const failedProjects = results.filter((r) => !r.ok).map((r) => ({ project_id: r.pid, error: r.error }));
+
+      const isMulti = projectIds.length > 1;
+      const responsePayload: Record<string, unknown> = {
+        total: allColumns.length,
+        columns: allColumns,
+      };
+      if (isMulti) {
+        responsePayload.project_ids = projectIds;
+        responsePayload.project_count = projectIds.length;
+        if (failedProjects.length > 0) {
+          responsePayload.failed_count = failedProjects.length;
+          responsePayload.failed_hint = `${failedProjects.length} 个项目您可能无访问权限`;
+        }
+      } else {
+        responsePayload.project_id = projectIds[0];
+      }
 
       return {
         content: [{
           type: 'text' as const,
-          text: JSON.stringify({
-            project_id: args.project_id,
-            total: columns.length,
-            columns,
-          }, null, 2),
+          text: JSON.stringify(responsePayload, null, 2),
         }],
       };
     },

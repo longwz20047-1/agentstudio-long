@@ -1,11 +1,12 @@
 /**
- * 聚合所有 DooTask 工具（67 个）
+ * 聚合所有 DooTask 工具（68 个）
  */
 
 import { buildUsersTools } from './users.js';
 import { buildTasksTools } from './tasks.js';
 import { buildTaskLifecycleTools } from './taskLifecycle.js';
 import { buildTaskPrioritiesTools } from './taskPriorities.js';
+import { buildTaskStatsTools } from './taskStats.js';
 import { buildProjectsTools } from './projects.js';
 import { buildProjectAdvancedTools } from './projectAdvanced.js';
 import { buildProjectTagsTools } from './projectTags.js';
@@ -22,11 +23,11 @@ import { buildReportDashboardTools } from './reportDashboard.js';
 import type { ToolContext } from './types.js';
 
 /**
- * 构造全部 67 个 tool：
- *   users(2) + tasks(8) + taskLifecycle(3) + taskPriorities(1)
+ * 构造全部 68 个 tool：
+ *   users(2) + tasks(8) + taskLifecycle(3) + taskPriorities(1) + taskStats(1)
  *   + projects(6) + projectAdvanced(3) + projectTags(4)
  *   + columns(5) + dialogs(3) + dialogMessages(6) + reports(7) + files(4) + search(1)
- *   + taskReports(1) + reportTemplates(6) + reportFields(4) + reportDashboard(3) = 67
+ *   + taskReports(1) + reportTemplates(6) + reportFields(4) + reportDashboard(3) = 68
  *
  *   - projects 6 = 原 mcp.js 4 个 + add_project_members / remove_project_members
  *   - projectAdvanced 3 = transfer_project_owner + get_project_permission
@@ -35,6 +36,8 @@ import type { ToolContext } from './types.js';
  *                  + delete_project_tag（任务画像三轴模型 5b：多维标签 N:N 自由刻画）
  *   - taskPriorities 1 = list_task_priorities（任务画像三轴模型 5a：系统级优先级档位查询）
  *                  与 create_task / update_task 的 p_level/p_name/p_color 三字段闭环
+ *   - taskStats 1 = get_task_completion_stats（5 维度任务完成率统计 + equal/priority 加权）
+ *                  支持自然语言完成率追问：项目/列/标签/优先级/负责人 任意分组维度
  *   - columns  5 = list_project_columns + create_column + create_columns_batch
  *                  + update_column + delete_column（补齐 column 写操作闭环）
  *   - taskLifecycle 3 = archive_task + move_task + copy_task
@@ -55,6 +58,7 @@ export function buildAllTools(ctx: ToolContext) {
     ...buildTasksTools(ctx),
     ...buildTaskLifecycleTools(ctx),
     ...buildTaskPrioritiesTools(ctx),
+    ...buildTaskStatsTools(ctx),
     ...buildProjectsTools(ctx),
     ...buildProjectAdvancedTools(ctx),
     ...buildProjectTagsTools(ctx),
