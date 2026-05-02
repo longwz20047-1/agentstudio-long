@@ -200,6 +200,13 @@ export function buildTasksTools(ctx: ToolContext) {
 - 找不到合适的现有标签时主动 create_project_tag 新建（先告知用户拟新建什么标签）
 - 子任务不支持 task_tag，调前先 get_task 看 parent_id
 
+【关于 task_tag 的传参格式】
+每项标签必须是完整对象 {name: string, color: string}，不是单纯的 name 字符串。
+- 推荐链路：list_project_tags(project_id) 拿现有标签 → 选合适的 {name, color}
+- 没有合适的现有标签时：先 create_project_tag 新建（color 由用户选或合理默认如 #5470c6）
+- 把完整对象数组传给 task_tag，例：[{name:"紧急", color:"#f56c6c"}, {name:"金融", color:"#5470c6"}]
+- 不要拆分成 string 数组（dootask 后端会拒绝）
+
 【❌ 不该用标签的场景（与已有字段冲突）】
 - 紧急度/优先级（紧急/高/普通）→ 用 task.p_level（list_task_priorities）
 - 进行中/已完成/待办 → 用看板列（column_id）或 complete_at
@@ -222,8 +229,16 @@ export function buildTasksTools(ctx: ToolContext) {
       ),
       p_name: z.string().optional().describe('优先级名称，与 p_level 一致（如"紧急"/"重要"/"普通"）'),
       p_color: z.string().optional().describe('优先级颜色 hex（如 #f56c6c），与 p_level 一致'),
-      task_tag: z.array(z.string()).optional().describe(
-        '任务标签数组（按 tag name 字符串），多维画像。建议先 list_project_tags 看项目现有标签，找不到合适的可 create_project_tag 新建后再传入。⚠️ dootask 子任务不支持 task_tag。'
+      task_tag: z.array(
+        z.object({
+          name: z.string().min(1).describe('标签名'),
+          color: z.string().min(1).describe('标签颜色 hex（如 #f56c6c），需与项目中已存在的同名标签 color 一致；新建标签的 color 由 create_project_tag 决定'),
+        })
+      ).optional().describe(
+        '任务画像标签数组，每项 {name, color}。' +
+        '推荐流程：先 list_project_tags(project_id) 拿现有标签的 name+color → 选合适的（或先 create_project_tag 新建）→ 把完整 {name, color} 对象数组传入。' +
+        '⚠️ update_task 时为全量覆盖（不传=清空，与 owner/assist 同模式）。' +
+        '⚠️ dootask 子任务不支持 task_tag。'
       ),
     },
     async (args) => {
@@ -306,8 +321,15 @@ export function buildTasksTools(ctx: ToolContext) {
 - 找不到合适的现有标签时主动 create_project_tag 新建（先告知用户拟新建什么标签）
 - ⚠️ **task_tag 全量覆盖陷阱**：update_task(task_tag=...) 与 owner/assist 同模式，不传=清空（后端没有"保留原值"的语义）。
   正确流程：先 get_task 拿当前 tags → 用户意图是"加 X 标签"或"换成 Y" → 在内存中合并/替换 → 把完整数组回写。
-  反例：用户说"再加个紧急标签"，直接 update_task(task_tag=["紧急"]) 会把原有标签全部清空。
+  反例：用户说"再加个紧急标签"，直接 update_task(task_tag=[{name:"紧急",color:"#f56c6c"}]) 会把原有标签全部清空。
 - 子任务不支持 task_tag，调前先 get_task 看 parent_id
+
+【关于 task_tag 的传参格式】
+每项标签必须是完整对象 {name: string, color: string}，不是单纯的 name 字符串。
+- 推荐链路：list_project_tags(project_id) 拿现有标签 → 选合适的 {name, color}
+- 没有合适的现有标签时：先 create_project_tag 新建（color 由用户选或合理默认如 #5470c6）
+- 把完整对象数组传给 task_tag，例：[{name:"紧急", color:"#f56c6c"}, {name:"金融", color:"#5470c6"}]
+- 不要拆分成 string 数组（dootask 后端会拒绝）
 
 【❌ 不该用标签的场景（与已有字段冲突）】
 - 紧急度/优先级（紧急/高/普通）→ 用 task.p_level（list_task_priorities）
@@ -333,8 +355,16 @@ export function buildTasksTools(ctx: ToolContext) {
       ),
       p_name: z.string().optional().describe('优先级名称，与 p_level 一致（如"紧急"/"重要"/"普通"）'),
       p_color: z.string().optional().describe('优先级颜色 hex（如 #f56c6c），与 p_level 一致'),
-      task_tag: z.array(z.string()).optional().describe(
-        '任务标签数组（按 tag name 字符串），多维画像。⚠️ update_task 时为全量覆盖（不传=清空，与 owner/assist 同模式）。先 get_task 拿当前 tags → 在内存中增量/替换 → 完整数组回写。⚠️ dootask 子任务不支持 task_tag。'
+      task_tag: z.array(
+        z.object({
+          name: z.string().min(1).describe('标签名'),
+          color: z.string().min(1).describe('标签颜色 hex（如 #f56c6c），需与项目中已存在的同名标签 color 一致；新建标签的 color 由 create_project_tag 决定'),
+        })
+      ).optional().describe(
+        '任务画像标签数组，每项 {name, color}。' +
+        '推荐流程：先 list_project_tags(project_id) 拿现有标签的 name+color → 选合适的（或先 create_project_tag 新建）→ 把完整 {name, color} 对象数组传入。' +
+        '⚠️ update_task 时为全量覆盖（不传=清空，与 owner/assist 同模式）。' +
+        '⚠️ dootask 子任务不支持 task_tag。'
       ),
     },
     async (args) => {
