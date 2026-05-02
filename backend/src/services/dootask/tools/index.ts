@@ -1,5 +1,5 @@
 /**
- * 聚合所有 DooTask 工具（59 个）
+ * 聚合所有 DooTask 工具（62 个）
  */
 
 import { buildUsersTools } from './users.js';
@@ -16,13 +16,14 @@ import { buildSearchTools } from './search.js';
 import { buildTaskReportsTools } from './taskReports.js';
 import { buildReportTemplatesTools } from './reportTemplates.js';
 import { buildReportFieldsTools } from './reportFields.js';
+import { buildReportDashboardTools } from './reportDashboard.js';
 import type { ToolContext } from './types.js';
 
 /**
- * 构造全部 59 个 tool：
+ * 构造全部 62 个 tool：
  *   users(2) + tasks(8) + taskLifecycle(3) + projects(6) + projectAdvanced(3)
  *   + columns(5) + dialogs(3) + dialogMessages(6) + reports(7) + files(4) + search(1)
- *   + taskReports(1) + reportTemplates(6) + reportFields(4) = 59
+ *   + taskReports(1) + reportTemplates(6) + reportFields(4) + reportDashboard(3) = 62
  *
  *   - projects 6 = 原 mcp.js 4 个 + add_project_members / remove_project_members
  *   - projectAdvanced 3 = transfer_project_owner + get_project_permission
@@ -38,6 +39,8 @@ import type { ToolContext } from './types.js';
  *   - taskReports(1) + reportTemplates(6) + reportFields(4) = Sprint 5a 11 个新增
  *     对接 dootask 报告通道 Sprint 1-7-B 全部 endpoint
  *     注：upload_report_attachment（multipart）暂跳过 — Sprint 8/9 前端 UI 实施
+ *   - reportDashboard 3 = Sprint 7-B Pass 2 闭环统计层（query/drill/export）
+ *     注：charts/save_chart/delete_chart 占位端点跳过（dootask 后端 retError，Sprint 9 落表）
  */
 export function buildAllTools(ctx: ToolContext) {
   return [
@@ -55,5 +58,6 @@ export function buildAllTools(ctx: ToolContext) {
     ...buildTaskReportsTools(ctx),
     ...buildReportTemplatesTools(ctx),
     ...buildReportFieldsTools(ctx),
+    ...buildReportDashboardTools(ctx),
   ];
 }
