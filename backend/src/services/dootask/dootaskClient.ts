@@ -17,7 +17,11 @@ import axios, { AxiosError } from 'axios';
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 export class DootaskApiError extends Error {
-  constructor(public readonly msg: string, public readonly ret = 0) {
+  constructor(
+    public readonly msg: string,
+    public readonly ret = 0,
+    public readonly data?: any, // 保留后端 response.data 让上层 tool 识别业务错误（如 -4001 + template_block）
+  ) {
     super(msg);
     this.name = 'DootaskApiError';
   }
@@ -74,7 +78,11 @@ export async function makeDootaskRequest(
       );
     }
     if (payload.ret !== 1) {
-      throw new DootaskApiError(payload.msg || `Dootask API error at ${path}`, payload.ret ?? 0);
+      throw new DootaskApiError(
+        payload.msg || `Dootask API error at ${path}`,
+        payload.ret ?? 0,
+        payload.data,
+      );
     }
     return payload.data;
   } catch (err) {
