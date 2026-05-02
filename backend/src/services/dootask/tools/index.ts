@@ -1,11 +1,12 @@
 /**
- * 聚合所有 DooTask 工具（50 个）
+ * 聚合所有 DooTask 工具（53 个）
  */
 
 import { buildUsersTools } from './users.js';
 import { buildTasksTools } from './tasks.js';
 import { buildTaskLifecycleTools } from './taskLifecycle.js';
 import { buildProjectsTools } from './projects.js';
+import { buildProjectAdvancedTools } from './projectAdvanced.js';
 import { buildColumnsTools } from './columns.js';
 import { buildDialogsTools } from './dialogs.js';
 import { buildReportsTools } from './reports.js';
@@ -17,11 +18,14 @@ import { buildReportFieldsTools } from './reportFields.js';
 import type { ToolContext } from './types.js';
 
 /**
- * 构造全部 50 个 tool：
- *   users(2) + tasks(8) + taskLifecycle(3) + projects(6) + columns(5) + dialogs(3)
- *   + reports(7) + files(4) + search(1) + taskReports(1) + reportTemplates(6) + reportFields(4) = 50
+ * 构造全部 53 个 tool：
+ *   users(2) + tasks(8) + taskLifecycle(3) + projects(6) + projectAdvanced(3)
+ *   + columns(5) + dialogs(3) + reports(7) + files(4) + search(1)
+ *   + taskReports(1) + reportTemplates(6) + reportFields(4) = 53
  *
  *   - projects 6 = 原 mcp.js 4 个 + add_project_members / remove_project_members
+ *   - projectAdvanced 3 = transfer_project_owner + get_project_permission
+ *                  + update_project_permission（项目转让 + 权限矩阵读改；管理员场景）
  *   - columns  5 = list_project_columns + create_column + create_columns_batch
  *                  + update_column + delete_column（补齐 column 写操作闭环）
  *   - taskLifecycle 3 = archive_task + move_task + copy_task
@@ -37,6 +41,7 @@ export function buildAllTools(ctx: ToolContext) {
     ...buildTasksTools(ctx),
     ...buildTaskLifecycleTools(ctx),
     ...buildProjectsTools(ctx),
+    ...buildProjectAdvancedTools(ctx),
     ...buildColumnsTools(ctx),
     ...buildDialogsTools(ctx),
     ...buildReportsTools(ctx),
