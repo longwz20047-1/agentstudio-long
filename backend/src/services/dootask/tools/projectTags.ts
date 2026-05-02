@@ -26,25 +26,31 @@ import type { ToolContext } from './types.js';
 export function buildProjectTagsTools(ctx: ToolContext) {
   const listProjectTags = tool(
     'list_project_tags',
-    '获取指定项目的全部标签列表。返回数组，每项含 id/name/color/desc/sort/userid/project_id。'
-    + '在 create_task / update_task 设置 task_tag 前应先调本工具，看现有标签是否覆盖用户语义；'
-    + '若现有标签都不贴切，再调 create_project_tag 新建（建议先告知用户拟新建的标签名+颜色，征得同意）。'
-    + '在 update_project_tag 前也必须先调本工具拿到 project_id+name+color 的当前值（dootask 后端要求三字段全传非空）。',
+    '获取项目内**实际在用**的标签列表（按 name+color GROUP BY），按使用次数降序。\n\n'
+    + '【数据来源】\n'
+    + '- 数据源是 ProjectTaskTag 关联表（每条任务挂的标签），不是 ProjectTag 定义表\n'
+    + '- 即使用户从未在前端维护 ProjectTag 标签库，只要任务上挂了 task_tag，就能在这里查到\n'
+    + '- 与 LLM 直写 task_tag 模式完全配套：LLM 写到任务上的标签 → 通过此工具被发现 → 后续做语义匹配\n\n'
+    + '【与 task_tag 语义匹配的关系】\n'
+    + '此工具是 list_tasks 标签语义两步链路的第一步：\n'
+    + '1. list_project_tags(project_id) 拿现有 name+color\n'
+    + '2. LLM 语义识别相关名（"金融"→["金融","金融行业","金融科技"]）\n'
+    + '3. list_tasks(tag=数组) 一次性查询\n\n'
+    + '【返回字段】\n'
+    + '- name: 标签名\n'
+    + '- color: hex 颜色\n'
+    + '- task_count: 该标签关联的任务数（按降序排）',
     { project_id: z.number().min(1).describe('项目ID') },
     async (args) => {
       const token = await ctx.getToken();
-      const data = await makeDootaskRequest(token, 'GET', 'project/tag/list', {
+      const data = await makeDootaskRequest(token, 'GET', 'project/tag/used', {
         project_id: args.project_id,
       });
 
       const tags = (Array.isArray(data) ? data : []).map((t: any) => ({
-        id: t.id,
         name: t.name,
         color: t.color || '',
-        desc: t.desc || '',
-        sort: t.sort,
-        userid: t.userid,
-        project_id: t.project_id,
+        task_count: Number(t.task_count) || 0,
       }));
 
       return {
