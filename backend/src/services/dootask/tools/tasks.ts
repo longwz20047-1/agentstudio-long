@@ -194,18 +194,25 @@ export function buildTasksTools(ctx: ToolContext) {
 • 风险注解（待跟进 / 阻塞中 / 文档缺失）
 • 关键词标记 / 重点关注 / 等等
 
-【LLM 工作原则】
-- 用户提到任何能为任务"贴属性"的描述，都可识别为标签候选
-- 默认开放：先 list_project_tags 看项目现有标签，按用户描述匹配
-- 找不到合适的现有标签时主动 create_project_tag 新建（先告知用户拟新建什么标签）
+【LLM 工作原则（轻量直写模式）】
+- 用户描述任务时，LLM 自动从内容推理画像标签 {name, color} 直接写入 task_tag，无需先维护项目标签库
+- dootask 后端 API 接受任何 {name, color}，无需先调 create_project_tag 注册
+- list_project_tags / create_project_tag 等工具仅在用户**明确要管理项目标签库**时才用
+  （如"看下这个项目的标签库"、"给这个项目加个『核心客户』标签做标签库选项"）
 - 子任务不支持 task_tag，调前先 get_task 看 parent_id
 
 【关于 task_tag 的传参格式】
 每项标签必须是完整对象 {name: string, color: string}，不是单纯的 name 字符串。
-- 推荐链路：list_project_tags(project_id) 拿现有标签 → 选合适的 {name, color}
-- 没有合适的现有标签时：先 create_project_tag 新建（color 由用户选或合理默认如 #5470c6）
-- 把完整对象数组传给 task_tag，例：[{name:"紧急", color:"#f56c6c"}, {name:"金融", color:"#5470c6"}]
+- 直接传 LLM 推理的对象数组即可，例：[{name:"紧急客户",color:"#f56c6c"},{name:"金融",color:"#5470c6"}]
 - 不要拆分成 string 数组（dootask 后端会拒绝）
+
+【color 推理建议（无外部上下文时）】
+- 紧急/警告类（Red 系）#f56c6c
+- 信息/中性类（Blue 系）#5470c6
+- 业务/客户类（Orange 系）#E6A23C
+- 安全/通过类（Green 系）#19be6b
+- 一般维度（Grey 系）#909399
+若用户多次提到同一标签名，复用相同 color 保持视觉一致（可选 list_project_tags 查复用）。
 
 【❌ 不该用标签的场景（与已有字段冲突）】
 - 紧急度/优先级（紧急/高/普通）→ 用 task.p_level（list_task_priorities）
@@ -231,14 +238,11 @@ export function buildTasksTools(ctx: ToolContext) {
       p_color: z.string().optional().describe('优先级颜色 hex（如 #f56c6c），与 p_level 一致'),
       task_tag: z.array(
         z.object({
-          name: z.string().min(1).describe('标签名'),
-          color: z.string().min(1).describe('标签颜色 hex（如 #f56c6c），需与项目中已存在的同名标签 color 一致；新建标签的 color 由 create_project_tag 决定'),
+          name: z.string().min(1).describe('标签名（LLM 从用户描述自由推理，如"金融"/"核心客户"/"待跟进"）'),
+          color: z.string().min(1).describe('标签颜色 hex（如 #f56c6c）。LLM 按维度自由分配（红/橙/蓝/绿/灰系），同名标签复用同色'),
         })
       ).optional().describe(
-        '任务画像标签数组，每项 {name, color}。' +
-        '推荐流程：先 list_project_tags(project_id) 拿现有标签的 name+color → 选合适的（或先 create_project_tag 新建）→ 把完整 {name, color} 对象数组传入。' +
-        '⚠️ update_task 时为全量覆盖（不传=清空，与 owner/assist 同模式）。' +
-        '⚠️ dootask 子任务不支持 task_tag。'
+        '任务画像标签数组，每项 {name, color}。LLM 从任务内容自由推理生成，直写即可（dootask 后端无需先注册）。⚠️ dootask 子任务不支持 task_tag。'
       ),
     },
     async (args) => {
@@ -315,21 +319,29 @@ export function buildTasksTools(ctx: ToolContext) {
 • 风险注解（待跟进 / 阻塞中 / 文档缺失）
 • 关键词标记 / 重点关注 / 等等
 
-【LLM 工作原则】
-- 用户提到任何能为任务"贴属性"的描述，都可识别为标签候选
-- 默认开放：先 list_project_tags 看项目现有标签，按用户描述匹配
-- 找不到合适的现有标签时主动 create_project_tag 新建（先告知用户拟新建什么标签）
-- ⚠️ **task_tag 全量覆盖陷阱**：update_task(task_tag=...) 与 owner/assist 同模式，不传=清空（后端没有"保留原值"的语义）。
-  正确流程：先 get_task 拿当前 tags → 用户意图是"加 X 标签"或"换成 Y" → 在内存中合并/替换 → 把完整数组回写。
-  反例：用户说"再加个紧急标签"，直接 update_task(task_tag=[{name:"紧急",color:"#f56c6c"}]) 会把原有标签全部清空。
+【LLM 工作原则（轻量直写模式 + 全量覆盖陷阱）】
+- 用户用自然语言修改标签时（如"加个紧急客户标签"、"删掉过时标签"、"改成金融+高优"），
+  LLM 从任务内容/用户意图直接推理 {name, color} 数组写入 task_tag，无需先维护项目标签库
+- ⚠️ **task_tag 全量覆盖陷阱**：update_task(task_tag=...) 与 owner/assist 同模式，不传=清空（后端没有"保留原值"语义）。
+  正确流程：
+    - 用户说"加 X 标签" → 先 get_task 拿当前 tags → 在内存中合并 [...current, new] → 回写完整数组
+    - 用户说"删除 X 标签" → 先 get_task → filter 掉 X → 回写
+    - 用户说"改成 X+Y" → 直接传新数组覆盖（无需 get_task）
+    - 用户说"清空标签" → 传空数组 []
+  反例：用户说"再加个紧急客户标签"，直接 update_task(task_tag=[{name:"紧急客户"}]) 会把其他原标签全部清空
+- list_project_tags / create_project_tag 等工具仅在用户**明确要管理项目标签库**时才用
 - 子任务不支持 task_tag，调前先 get_task 看 parent_id
 
 【关于 task_tag 的传参格式】
 每项标签必须是完整对象 {name: string, color: string}，不是单纯的 name 字符串。
-- 推荐链路：list_project_tags(project_id) 拿现有标签 → 选合适的 {name, color}
-- 没有合适的现有标签时：先 create_project_tag 新建（color 由用户选或合理默认如 #5470c6）
-- 把完整对象数组传给 task_tag，例：[{name:"紧急", color:"#f56c6c"}, {name:"金融", color:"#5470c6"}]
+- 直接传 LLM 推理的对象数组即可，例：[{name:"金融",color:"#5470c6"},{name:"待跟进",color:"#909399"}]
 - 不要拆分成 string 数组（dootask 后端会拒绝）
+
+【color 推理建议】
+- 紧急/警告类 #f56c6c   信息/中性类 #5470c6
+- 业务/客户类 #E6A23C   安全/通过类 #19be6b
+- 一般维度   #909399
+若用户多次提到同一标签名，复用相同 color 保持视觉一致（同名 dootask 后端会按 name 去重）。
 
 【❌ 不该用标签的场景（与已有字段冲突）】
 - 紧急度/优先级（紧急/高/普通）→ 用 task.p_level（list_task_priorities）
@@ -357,14 +369,11 @@ export function buildTasksTools(ctx: ToolContext) {
       p_color: z.string().optional().describe('优先级颜色 hex（如 #f56c6c），与 p_level 一致'),
       task_tag: z.array(
         z.object({
-          name: z.string().min(1).describe('标签名'),
-          color: z.string().min(1).describe('标签颜色 hex（如 #f56c6c），需与项目中已存在的同名标签 color 一致；新建标签的 color 由 create_project_tag 决定'),
+          name: z.string().min(1).describe('标签名（LLM 从用户描述自由推理，如"金融"/"核心客户"/"待跟进"）'),
+          color: z.string().min(1).describe('标签颜色 hex（如 #f56c6c）。LLM 按维度自由分配（红/橙/蓝/绿/灰系），同名标签复用同色'),
         })
       ).optional().describe(
-        '任务画像标签数组，每项 {name, color}。' +
-        '推荐流程：先 list_project_tags(project_id) 拿现有标签的 name+color → 选合适的（或先 create_project_tag 新建）→ 把完整 {name, color} 对象数组传入。' +
-        '⚠️ update_task 时为全量覆盖（不传=清空，与 owner/assist 同模式）。' +
-        '⚠️ dootask 子任务不支持 task_tag。'
+        '任务画像标签数组，每项 {name, color}。⚠️ **全量覆盖**（不传=清空）。增量改动需先 get_task 拿当前 tags 后回写完整数组。⚠️ dootask 子任务不支持 task_tag。'
       ),
     },
     async (args) => {
