@@ -14,23 +14,40 @@ export function buildTasksTools(ctx: ToolContext) {
     'list_tasks',
     `获取当前用户相关的任务列表（负责/协助/关注），支持按状态、项目、时间范围、标签筛选和搜索。
 
-【按标签查任务进度（高频场景）】
-当用户问"XX 标签的任务怎么样了"、"YY 模块进度如何"、"金融客户的任务"时，
-调 list_tasks(project_id?, tag='XX')，返回该标签关联的全部任务，
-然后基于响应里的 status/column_name/percent/sub_complete 字段综合分析进度分布。
+【按标签查任务进度（高频场景）— 必须用语义匹配两步链路】
+
+dootask 后端按 name **完全匹配**查询，但 LLM 生成的标签存在同义词不确定性
+（"金融" / "金融行业" / "金融科技" / "金融客户"），单值精确匹配会漏命中。
+**正确链路**：
+
+1. 先调 list_project_tags(project_id) 拿该项目全部已有标签 name 列表
+2. LLM 用自身语义判断从列表中识别与用户问询相关的所有标签
+   （例：用户问"金融"，列表有 ["金融","金融行业","金融科技","制造","医疗"]
+        → LLM 判定相关 = ["金融","金融行业","金融科技"]）
+3. 把识别到的相关名一次性传给 list_tasks(tag=数组)
+   本工具支持 tag: string | string[]，传数组时内部对每项调一次后端，合并任务并按 task.id 去重
+4. 综合返回任务的 status/column_name/percent 字段做进度分析
 
 例：
-- "需求调研的任务完成得怎么样" → list_tasks(project_id=X, tag='需求调研') → 数 status='已完成' 的占比
-- "箱体图纸设计在哪个阶段" → list_tasks(tag='箱体图纸设计') → GROUP BY column_name
-- "金融客户的紧急任务" → list_tasks(tag='金融', status='uncompleted') → 看 p_level
+- "需求调研的任务完成得怎么样" → list_project_tags 找相关 → list_tasks(tag=['需求调研','需求分析'])
+- "金融客户的紧急任务" → list_project_tags 语义匹配 → list_tasks(tag=['金融','金融客户','金融行业'], status='uncompleted')
+- "箱体图纸设计在哪个阶段" → list_project_tags → list_tasks(tag=['箱体图纸设计','图纸设计'])
+- 多任务进度问题，几乎都应该走"先 list_project_tags 拿名 → LLM 语义匹配 → 数组传入"路径
 
-⚠️ tag 入参是**完全匹配 name**（不是模糊搜索），用户描述的标签词应直接传，不要拆词。`,
+【何时可以传单值（不调 list_project_tags）】
+仅当用户明确指定唯一精确名（"叫『金融』的标签的任务，其他都不要"）时直接传字符串。
+否则默认走两步链路保证命中相关同义标签，避免漏数据。`,
     {
       status: z.enum(['all', 'completed', 'uncompleted']).optional()
         .describe('任务状态: all(所有), completed(已完成), uncompleted(未完成)'),
       search: z.string().optional().describe('搜索关键词（可搜索任务ID、名称、描述）'),
-      tag: z.string().optional()
-        .describe('按标签名完全匹配过滤（如"需求调研"/"金融"/"核心客户"）。用户问"XX 标签的任务"或某业务维度任务进度时使用'),
+      tag: z.union([z.string(), z.array(z.string())]).optional()
+        .describe(
+          '按标签名过滤（dootask 后端单次精确匹配 = name）。'
+          + '推荐先调 list_project_tags 拿全部名 → LLM 语义识别相关 → 一次性传字符串数组。'
+          + '本工具内部对数组循环多次调用并按 task.id 合并去重。'
+          + '单值传 string，多值传 string[]'
+        ),
       time: z.string().optional()
         .describe('时间范围: today/week/month/year 或自定义 "2025-12-12,2025-12-30"'),
       project_id: z.number().optional().describe('项目ID，只获取指定项目的任务'),
@@ -41,22 +58,52 @@ export function buildTasksTools(ctx: ToolContext) {
     },
     async (args) => {
       const token = await ctx.getToken();
-      const requestData: Record<string, unknown> = {
-        page: args.page || 1,
-        pagesize: args.pagesize || 20,
+
+      // 公共过滤构造器（单次后端调用的 requestData）
+      const buildRequest = (tagValue?: string): Record<string, unknown> => {
+        const req: Record<string, unknown> = {
+          page: args.page || 1,
+          pagesize: args.pagesize || 20,
+        };
+        const keys: Record<string, unknown> = {};
+        if (args.search) keys.name = args.search;
+        if (args.status && args.status !== 'all') keys.status = args.status;
+        if (tagValue) keys.tag = tagValue;
+        if (Object.keys(keys).length > 0) req.keys = keys;
+        if (args.time !== undefined) req.time = args.time;
+        if (args.project_id !== undefined) req.project_id = args.project_id;
+        if (args.parent_id !== undefined) req.parent_id = args.parent_id;
+        return req;
       };
-      const keys: Record<string, unknown> = {};
-      if (args.search) keys.name = args.search;
-      if (args.status && args.status !== 'all') keys.status = args.status;
-      if (args.tag) keys.tag = args.tag;
-      if (Object.keys(keys).length > 0) requestData.keys = keys;
-      if (args.time !== undefined) requestData.time = args.time;
-      if (args.project_id !== undefined) requestData.project_id = args.project_id;
-      if (args.parent_id !== undefined) requestData.parent_id = args.parent_id;
 
-      const data = await makeDootaskRequest(token, 'GET', 'project/task/lists', requestData);
+      // 把 tag 入参规范成数组：
+      // - undefined → [undefined]（单次调用，无 tag 过滤）
+      // - string → [string]（单次调用，与原行为相同）
+      // - string[] → 多次调用 + 合并
+      const tagList: (string | undefined)[] = Array.isArray(args.tag)
+        ? args.tag
+        : args.tag !== undefined ? [args.tag] : [undefined];
 
-      const tasks = (data.data || []).map((t: any) => ({
+      const isMultiTag = Array.isArray(args.tag) && args.tag.length > 1;
+
+      // 并行调用所有 tag 分支
+      const responses = await Promise.all(
+        tagList.map((t) => makeDootaskRequest(token, 'GET', 'project/task/lists', buildRequest(t)))
+      );
+
+      // 合并 + 按 task.id 去重（多 tag 时一个任务可能被多个 tag 命中）
+      const taskMap = new Map<number, any>();
+      for (const data of responses) {
+        for (const t of data.data || []) {
+          if (!taskMap.has(t.id)) taskMap.set(t.id, t);
+        }
+      }
+      const mergedTasks = Array.from(taskMap.values());
+
+      // 多 tag 时 total = 去重后数量；单 tag/无 tag 用后端原 total
+      const finalTotal = isMultiTag ? mergedTasks.length : (responses[0]?.total ?? mergedTasks.length);
+
+      const tasks = mergedTasks.map((t: any) => ({
         task_id: t.id,
         name: t.name,
         desc: t.desc || '无描述',
@@ -79,9 +126,11 @@ export function buildTasksTools(ctx: ToolContext) {
         content: [{
           type: 'text' as const,
           text: JSON.stringify({
-            total: data.total,
-            page: data.current_page,
-            pagesize: data.per_page,
+            total: finalTotal,
+            page: responses[0]?.current_page,
+            pagesize: responses[0]?.per_page,
+            // 多 tag 时回显本次用了哪些标签做并集查询，方便 LLM 自检
+            ...(isMultiTag ? { tag_filter: args.tag } : {}),
             tasks,
           }, null, 2),
         }],
