@@ -32,6 +32,9 @@ interface RawTask {
   name: string;
   complete_at?: string | null;
   percent?: number;
+  parent_id?: number;
+  sub_num?: number;
+  sub_complete?: number;
   project_id: number;
   project_name?: string;
   column_id?: number;
@@ -101,12 +104,35 @@ status='completed' 过滤后所有任务 complete_at 非空 → completion=100 �
 统计完成率请不传 status（默认 all）或传 status='uncompleted'（看未完成的进度）。
 若用户想看"已完成的任务列表"，应该用 list_tasks(status='completed') 而不是本工具。
 
+【关于 include_subtasks（默认 false）】
+
+dootask 数据模型：主任务可以有 N 个子任务。主任务的 percent 字段已经按 sub_complete/sub_num 自动汇总了子任务完成情况。
+
+默认 false（向前兼容）：
+- 仅统计主任务（parent_id=-1）
+- 子任务完成度通过主任务 percent 间接体现
+- 主任务 weight 用主任务自己的 p_level
+- ⚠️ 子任务自身的 p_level / owner 不参与统计
+
+true（细粒度模式）：
+- 拉全部任务（含子任务），但**有子任务的主任务自动跳过**避免双计
+- "叶子任务"（子任务 + 无子的主任务）独立计 weight × completion
+- 子任务的 p_level / owner 直接计入
+- 适合 group_by='owner'/'priority' 想看子任务级别贡献的场景
+
+【何时启用 include_subtasks=true】
+- ✅ "团队成员的工作量分布（含子任务负责人）" → group_by='owner' + true
+- ✅ "高优 vs 低优任务完成率（含子任务级别）" → group_by='priority' + true
+- ❌ group_by='tag' 时不建议（dootask 子任务不能挂 tag，会全进"无标签"组让分布失真）
+- ❌ group_by='project'/'column' 默认 false 即可（主任务粒度更直观）
+- ⚠️ true 时数据量比 false 大（含所有子任务），跨多项目时注意性能
+
 【边界保障】
 - 空任务集 → overall=0, groups=[]
 - 无优先级配置 → priority 模式退化为 equal
 - 任务无 p_level → weight=1（最低权）
 - 任务多 tag/多 owner → 在 tag/owner 分组里独立计入（一个任务可能进多组）
-- 仅统计主任务（parent_id=-1），避免子任务重复计入`,
+- 默认仅统计主任务（parent_id=-1）；include_subtasks=true 时改拉全部并通过"叶子任务过滤"避免双计`,
     {
       // === 过滤维度（与 list_tasks 同款，限定统计范围）===
       project_id: z.union([z.number(), z.array(z.number())]).optional()
@@ -125,6 +151,17 @@ status='completed' 过滤后所有任务 complete_at 非空 → completion=100 �
       // === 权重模式 ===
       weight_mode: z.enum(['equal', 'priority']).optional()
         .describe('权重模式（默认 equal）。equal=每任务权重 1；priority=按 p_level 反向加权（紧急任务权重大）。'),
+
+      // === 是否含子任务 ===
+      include_subtasks: z.boolean().optional()
+        .describe(
+          '是否含子任务参与统计（默认 false 仅算主任务，子任务通过主任务 percent 已间接体现）。'
+          + 'true 时：拉全部任务（含子任务），但**有子任务的主任务自动跳过**避免双计——'
+          + '即"叶子任务"（子任务 + 无子的主任务）才独立计 weight × completion。'
+          + "何时启用：group_by='owner'/'priority' 想细粒度反映子任务级别贡献时；"
+          + "group_by='tag' 不建议（子任务无 tag 会进\"无标签\"组让分布失真）；"
+          + "默认场景（group_by='project'/'column'）保持 false 即可（行为不变）",
+        ),
     },
     async (args) => {
       const token = await ctx.getToken();
@@ -212,8 +249,12 @@ status='completed' 过滤后所有任务 complete_at 非空 → completion=100 �
         const req: Record<string, unknown> = {
           page,
           pagesize: MAX_PAGESIZE,
-          parent_id: -1, // 仅主任务，避免子任务重复计入
         };
+        // 默认 parent_id=-1 仅主任务（向前兼容当前行为）
+        // include_subtasks=true 时不传 parent_id → dootask 后端拉全部（主+子任务）
+        if (!args.include_subtasks) {
+          req.parent_id = -1;
+        }
         const keys: Record<string, unknown> = {};
         if (args.status && args.status !== 'all') keys.status = args.status;
         if (tagValue) keys.tag = tagValue;
@@ -276,10 +317,30 @@ status='completed' 过滤后所有任务 complete_at 非空 → completion=100 �
           }
         }
       }
-      const tasks = Array.from(taskMap.values());
+      const mergedTasks = Array.from(taskMap.values());
 
-      if (tasks.length >= 5000) {
-        console.warn(`[get_task_completion_stats] large task set: ${tasks.length} tasks merged from ${totalCombos} combos, perf may degrade`);
+      // ====== Step 4b: 防双计过滤（仅 include_subtasks=true 时启用）======
+      // 规则：keep iff 子任务（parent_id > 0） OR 叶子主任务（parent_id === 0 && sub_num === 0）
+      // 跳过有子任务的主任务，避免主任务和它的子任务同时计入导致 weight × completion 双计
+      let effectiveTasks = mergedTasks;
+      if (args.include_subtasks) {
+        const before = mergedTasks.length;
+        effectiveTasks = mergedTasks.filter((t: RawTask) => {
+          const parentId = t.parent_id ?? 0;
+          const subNum = t.sub_num ?? 0;
+          // 子任务一定计入
+          if (parentId > 0) return true;
+          // 主任务仅当无子任务时计入（叶子主任务）
+          return subNum === 0;
+        });
+        const skipped = before - effectiveTasks.length;
+        if (skipped > 0) {
+          console.warn(`[get_task_completion_stats] include_subtasks=true: skipped ${skipped} parent tasks (sub_num>0) to avoid double-count`);
+        }
+      }
+
+      if (effectiveTasks.length >= 5000) {
+        console.warn(`[get_task_completion_stats] large task set: ${effectiveTasks.length} tasks merged from ${totalCombos} combos, perf may degrade`);
       }
 
       // ====== Step 5: 拉项目名映射（仅 group_by='project' 或需要展示项目名时）======
@@ -287,11 +348,11 @@ status='completed' 过滤后所有任务 complete_at 非空 → completion=100 �
       // 所以只在 group_by='project' 时拉。
       const projectMap = new Map<number, string>();
       if (args.group_by === 'project') {
-        const projectIds = Array.from(new Set(tasks.map((t) => t.project_id).filter((id) => typeof id === 'number')));
+        const projectIds = Array.from(new Set(effectiveTasks.map((t) => t.project_id).filter((id) => typeof id === 'number')));
         const projectInfos = await Promise.all(
           projectIds.map(async (pid) => {
             // 优先用 task 自带的 project_name 避免重复请求
-            const fromTask = tasks.find((t) => t.project_id === pid && t.project_name)?.project_name;
+            const fromTask = effectiveTasks.find((t) => t.project_id === pid && t.project_name)?.project_name;
             if (fromTask) return { pid, name: fromTask };
             try {
               const proj = await makeDootaskRequest(token, 'GET', 'project/one', { project_id: pid });
@@ -308,7 +369,7 @@ status='completed' 过滤后所有任务 complete_at 非空 → completion=100 �
       const userNameMap = new Map<number, string>();
       if (args.group_by === 'owner') {
         const uniqueOwnerIds = new Set<number>();
-        for (const task of tasks) {
+        for (const task of effectiveTasks) {
           const owners = Array.isArray(task.task_user)
             ? task.task_user.filter((u) => u && u.owner === 1)
             : [];
@@ -371,7 +432,7 @@ status='completed' 过滤后所有任务 complete_at 非空 → completion=100 �
       let overallTotalWeight = 0;
       let overallTotalWeighted = 0;
 
-      for (const task of tasks) {
+      for (const task of effectiveTasks) {
         const weight = computeWeight(task);
         const completion = computeCompletion(task);
         const isCompleted = !!task.complete_at;
@@ -483,7 +544,7 @@ status='completed' 过滤后所有任务 complete_at 非空 → completion=100 �
         filter_summary: filterSummary,
         group_by: args.group_by,
         weight_mode: effectiveWeightMode,
-        total_tasks: tasks.length,
+        total_tasks: effectiveTasks.length,
         overall_completion_rate: overall,
         groups: groupArr,
       };
