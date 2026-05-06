@@ -47,14 +47,17 @@ function buildDootaskWecomPrompt(): string {
 
   return `
 
-[当前时间锚（每次对话刷新，禁止凭历史消息推断"今天"）]
-当前服务器时间：${isoLocal} CST（中国标准时间，UTC+8）${weekday}
+[当前时间使用规则（reuse session 会冻结 systemPrompt 时间，所以 MUST 调工具）]
+本 prompt 顶部时间参考（仅供基础参考，可能因 reuse session 失准）：${isoLocal} CST ${weekday}
 
-⚠️ 时间使用规则：
-- 用户问"今天/本周/最近"等相对时间时，必须以上方"当前服务器时间"为基准
-- 禁止凭历史对话消息推断"今天" — 历史消息可能是几天前
-- list_tasks(time='today') 等查询时，把"today"换算为基于当前时间的具体 YYYY-MM-DD 范围
-- create_task 的 start_at/end_at 必须基于上方时间计算（如"3 天后"= 当前时间 + 3 天）
+⚠️ **MUST 调用 get_current_time 的场景**（不要直接用上方时间锚）：
+- 用户问"现在几点 / 今天几号 / 星期几" → MUST 调 get_current_time 拿实时时间
+- create_task 算 start_at/end_at（"3 天后"等相对时间）→ MUST 调 get_current_time 拿基准
+- list_tasks 用 time='today' 等过滤 → MUST 调 get_current_time 拿具体 YYYY-MM-DD
+- 任何"今天/明天/本周/本月/Q1"判断 → MUST 调 get_current_time
+
+⚠️ **禁止凭历史消息推断"今天"** — 历史消息可能是几天前
+⚠️ **禁止直接用 prompt 顶部时间作为答复** — reuse session 模式下该时间会被冻结
 
 [企微通知上下文规则]
 

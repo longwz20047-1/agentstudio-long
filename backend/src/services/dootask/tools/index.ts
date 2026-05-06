@@ -20,6 +20,7 @@ import { buildTaskReportsTools } from './taskReports.js';
 import { buildReportTemplatesTools } from './reportTemplates.js';
 import { buildReportFieldsTools } from './reportFields.js';
 import { buildReportDashboardTools } from './reportDashboard.js';
+import { buildCurrentTimeTools } from './currentTime.js';
 import type { ToolContext } from './types.js';
 
 /**
@@ -72,5 +73,6 @@ export function buildAllTools(ctx: ToolContext) {
     ...buildReportTemplatesTools(ctx),
     ...buildReportFieldsTools(ctx),
     ...buildReportDashboardTools(ctx),
+    ...buildCurrentTimeTools(ctx),
   ];
 }

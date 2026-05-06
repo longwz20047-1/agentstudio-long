@@ -92,6 +92,8 @@ export const DOOTASK_TOOL_NAMES = [
   'mcp__dootask__query_report_dashboard_data',
   'mcp__dootask__drill_report_dashboard',
   'mcp__dootask__export_report_dashboard_csv',
+  // currentTime (1) — 实时当前时间（绕过 reuse session systemPrompt 缓存）
+  'mcp__dootask__get_current_time',
 ] as const;
 
 export type DootaskToolName = typeof DOOTASK_TOOL_NAMES[number];
