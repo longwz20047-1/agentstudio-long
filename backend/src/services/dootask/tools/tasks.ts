@@ -270,15 +270,19 @@ dootask 后端现已支持按 column_id 单值或数组过滤。配合 list_proj
     'create_task',
     `在指定项目中创建新任务。
 
-【关于 column_id 的智能选择（用户未明确指定时强烈推荐）】
-1. 若用户没指定 column_id：先调 get_project(project_id) 获取该项目的 columns 列表（含 column_id/name/sort）。
+【关于 column_id 的智能选择（强制流程，禁止 skip）】
+⚠️ **MUST**：调本工具前必须先确定 column_id。完整流程：
+1. 必先调 list_project_columns(project_id) 获取该项目的 columns 列表（比 get_project 更轻量）。
    列名通常代表项目阶段（如售前项目"线索接洽/方案设计/商务报价/合同签订/交付实施"）
    或工作流状态（"待办/进行中/已完成"）。
-2. 根据用户描述的任务内容推理最匹配的列（例："写报价方案" → 商务报价列）。
+2. 根据用户描述的任务内容推理最匹配的列（例："写报价方案" → 商务报价列；
+   "性能优化任务" → "进行中"或"待办"列；"消息推送系统升级" → 现有"开发"或"进行中"列）。
 3. 若现有列均无法合理匹配此任务（例如内容是"POC 演示" 但项目仅有线索/合同/交付列），
    不要擅自落到默认列，应先告知用户："此项目缺少『XX』类列，建议先新增列再创建任务"，
-   征得同意后再调 create_column（待实现）或在现有最近似列中新建。
+   征得同意后调 **create_column**（单列）或 **create_columns_batch**（批量）新建。
 4. 仅当用户明确说"放默认列"或"不分类"时，才省略 column_id 走系统 default。
+5. ❌ **禁止行为**：跳过 list_project_columns 直接 create_task（任务会落到 default 列，
+   破坏看板可视化），除非用户明确豁免。
 
 【关于优先级 p_level/p_name/p_color（用户提到紧急度时强烈推荐）】
 1. 用户说"紧急"/"重要"/"高优先级"等紧急度词汇时，先调 list_task_priorities 拿系统档位
@@ -308,9 +312,30 @@ dootask 后端现已支持按 column_id 单值或数组过滤。配合 list_proj
 • 风险注解（待跟进 / 阻塞中 / 文档缺失）
 • 关键词标记 / 重点关注 / 等等
 
-【LLM 工作原则（轻量直写模式）】
-- 用户描述任务时，LLM 自动从内容推理画像标签 {name, color} 直接写入 task_tag，无需先维护项目标签库
-- dootask 后端 API 接受任何 {name, color}，无需先调 create_project_tag 注册
+【LLM 工作原则（强制画像生成）】
+⚠️ **MUST**：当 content 含 ≥2 个画像信号词（业务领域/技术栈/模块/客户/环境/紧急性等）时，
+   **必须** 主动从 content 推理 task_tag（至少 2 项），直接写入 task_tag 字段。
+   ❌ 不传 task_tag 视为放弃任务画像 → 后续 list_tasks(tag=) 检索时无法命中此任务。
+
+例 1：content="消息推送系统优化与升级，提高实时性，分类机制，重试机制，并发处理，日志监控"
+  → MUST 推理 task_tag = [
+       {name:"消息推送", color:"#5470c6"},
+       {name:"性能优化", color:"#E6A23C"},
+       {name:"后端", color:"#5470c6"},
+       {name:"高可用", color:"#67C23A"}
+     ]
+
+例 2：content="跟进招商银行 POC 项目，BI 系统演示"
+  → MUST 推理 task_tag = [
+       {name:"金融", color:"#5470c6"},
+       {name:"招商银行", color:"#E6A23C"},
+       {name:"POC", color:"#E6A23C"},
+       {name:"BI 系统", color:"#5470c6"}
+     ]
+
+仅当 content 完全无画像信号（如"测试"、"随机内容"、"占位任务"）时才允许 task_tag 留空。
+
+- dootask 后端 API 接受任何 {name, color}，无需先调 create_project_tag 注册（轻量直写）
 - list_project_tags / create_project_tag 等工具仅在用户**明确要管理项目标签库**时才用
   （如"看下这个项目的标签库"、"给这个项目加个『核心客户』标签做标签库选项"）
 - 子任务不支持 task_tag，调前先 get_task 看 parent_id
@@ -340,8 +365,9 @@ dootask 后端现已支持按 column_id 单值或数组过滤。配合 list_proj
       owner: z.array(z.number()).optional().describe('负责人用户ID数组'),
       assist: z.array(z.number()).optional().describe('协助人员用户ID数组'),
       column_id: z.number().optional().describe(
-        '看板列ID。建议先 get_project 查 columns 后选最匹配的传入；'
-        + '若无合适列应建议用户新增；缺失则落系统 default 列（不推荐）。'
+        '看板列ID。⚠️ MUST 流程：先 list_project_columns(project_id) → 推理最匹配的列名 → 传 column_id。'
+        + '若无合适列调 create_column 或 create_columns_batch 新建后再传。'
+        + '禁止 skip（缺失则落系统 default 列，破坏看板可视化）。'
       ),
       start_at: z.string().optional().describe('开始时间 YYYY-MM-DD HH:mm:ss'),
       end_at: z.string().optional().describe('结束时间 YYYY-MM-DD HH:mm:ss'),
@@ -356,7 +382,9 @@ dootask 后端现已支持按 column_id 单值或数组过滤。配合 list_proj
           color: z.string().min(1).describe('标签颜色 hex（如 #f56c6c）。LLM 按维度自由分配（红/橙/蓝/绿/灰系），同名标签复用同色'),
         })
       ).optional().describe(
-        '任务画像标签数组，每项 {name, color}。LLM 从任务内容自由推理生成，直写即可（dootask 后端无需先注册）。⚠️ dootask 子任务不支持 task_tag。'
+        '任务画像标签数组，每项 {name, color}。⚠️ MUST：当 content 含画像信号（业务/技术栈/模块/客户/环境）时必须生成 ≥2 项；'
+        + '只有 content 完全无信号（"测试"/"占位"等）才允许留空。LLM 从任务内容自由推理生成，直写即可（dootask 后端无需先注册）。'
+        + '⚠️ dootask 子任务不支持 task_tag。'
       ),
     },
     async (args) => {
