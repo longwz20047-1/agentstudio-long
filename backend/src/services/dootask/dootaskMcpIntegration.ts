@@ -25,18 +25,30 @@ import type { SystemPrompt } from '../../types/agents.js';
  * LLM 凭历史消息推断"今天"造成日期偏差）。
  */
 function buildDootaskWecomPrompt(): string {
-  // 服务器时区（容器内通常是 UTC+8 中国时区）
+  // 强制使用中国时区（Asia/Shanghai = UTC+8），不依赖容器 TZ 配置
+  // 因为 Docker 容器默认 UTC，会导致"今天"等日期相对概念偏差 8 小时
   const now = new Date();
-  const tzOffset = -now.getTimezoneOffset() / 60;
-  const tzLabel = tzOffset >= 0 ? `UTC+${tzOffset}` : `UTC${tzOffset}`;
-  const isoLocal = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
-    .toISOString().slice(0, 19).replace('T', ' ');
-  const weekday = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][now.getDay()];
+  const tz = 'Asia/Shanghai';
+  // 用 Intl 格式化为 YYYY-MM-DD HH:mm:ss（CN）
+  const fmt = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: tz,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(now).reduce<Record<string, string>>((acc, p) => {
+    if (p.type !== 'literal') acc[p.type] = p.value;
+    return acc;
+  }, {});
+  const isoLocal = `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+  // 中国时区 weekday（用 zh-CN 格式化拿 long 名称）
+  const weekdayFmt = new Intl.DateTimeFormat('zh-CN', { timeZone: tz, weekday: 'long' });
+  const weekday = weekdayFmt.format(now); // "星期三"
 
   return `
 
 [当前时间锚（每次对话刷新，禁止凭历史消息推断"今天"）]
-当前服务器时间：${isoLocal} ${tzLabel}（${weekday}）
+当前服务器时间：${isoLocal} CST（中国标准时间，UTC+8）${weekday}
 
 ⚠️ 时间使用规则：
 - 用户问"今天/本周/最近"等相对时间时，必须以上方"当前服务器时间"为基准
