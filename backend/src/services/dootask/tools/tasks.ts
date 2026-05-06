@@ -278,19 +278,47 @@ dootask 后端现已支持按 column_id 单值或数组过滤。配合 list_proj
 - 不管什么类型的项目，**一定有项目阶段** → 一定有看板列
 
 ⚠️ **MUST 流程（任何创建任务前必跑）**：
-1. 必先调 list_project_columns(project_id) 看现有阶段列。
-2. 评估列状态分 4 种情况：
-   ① **仅 1 个 Default 列**（项目阶段未规划）→ ❌ 禁止直接落 Default！
-      必须先引导用户："这个项目还没规划阶段（仅有 Default 列），
-      请问这是什么类型的项目？（软件/销售/产品研发/咨询/其他）"
-      → 用户答 → 给阶段方案让用户确认 → create_columns_batch 一次性建列
-      → 然后选最匹配的列做 column_id。
-   ② **有阶段列且任务能匹配**（推荐场景）→ 选最近列做 column_id。
-   ③ **有阶段列但任务不匹配**（如项目阶段是"线索/合同/交付"
-      但任务是"POC 演示"）→ 告知用户"此项目缺少『XX』阶段列，
-      建议先新增"，征得同意后 create_column / create_columns_batch 新建。
-   ④ **现有列含 Default + 阶段列**（项目阶段不全）→ 视情况补全或选近似列。
-3. 仅当用户**明确**说"暂时不分阶段"/"先丢 Default"/"占位先放着" 才允许 column_id=Default 列 id。
+
+【Step 1】list_project_columns(project_id) 看现有阶段列。
+
+【Step 2】根据**任务内容**评估和现有列的匹配度（这是关键判断）：
+
+  ① 高匹配（任务名/内容直接命中某列语义）：
+     例：项目阶段=[需求,设计,开发,测试,上线]
+        任务="用户中心 UI 设计" → 直接命中"设计"列（高匹配）
+        任务="登录模块开发" → 直接命中"开发"列（高匹配）
+     → 选这个列做 column_id，无需追问
+
+  ② 中匹配（任务勉强能放某列但语义不直接）：
+     例：项目阶段=[需求,设计,开发,测试,上线]
+        任务="撰写 API 文档" → "开发"也行但单独"文档"列更合适
+     → ❌ 不要硬塞！主动追问用户：
+        "任务『撰写 API 文档』可以放到现有『开发』列，
+          也可以新增『文档』列单独管理。建议新增列以便追踪文档进度。
+          您选哪种？(a) 放现有列 (b) 新增『文档』列"
+
+  ③ 低匹配（任务明显不属于任何现有列）：
+     例：项目阶段=[线索,合同,交付]（销售流程）
+        任务="POC 演示" → 销售流程没有"演示"或"POC"阶段
+     → ❌ 必须建议新增列：
+        "任务『POC 演示』和现有列（线索/合同/交付）匹配度低。
+          建议新增『POC』列。是否同意？"
+
+  ④ 仅 1 个 Default 列（项目阶段未规划）：
+     → ❌ 禁止直接落 Default！必须先引导用户规划阶段：
+        "这个项目还没规划阶段（仅有 Default 列），
+          请问这是什么类型的项目？（软件/销售/产品研发/咨询/其他）"
+        → 用户答 → 给阶段方案让用户确认 → create_columns_batch 建列
+        → 选最匹配的新列做 column_id
+
+【Step 3】当 ②/③/④ 用户同意建新列时，**必须 chain call**：
+  a) create_column(project_id, name='新列名')  或  create_columns_batch(...)
+     → 工具返回的 response 含新列的 column_id
+  b) ⚠️ 把上一步返回的 column_id **真的传给** create_task！
+     不要在新建列后又 skip column_id 落 Default → 那是 bug 行为
+
+【Step 4】仅当用户**明确**说"暂时不分阶段"/"先丢 Default"/"占位先放着"
+  才允许 column_id=Default 列 id。沉默不算同意，必须用户主动豁免。
 
 ⚠️ **常见项目类型阶段模板**（无外部上下文时引导用户用）：
 - 软件开发：需求分析 / 设计 / 开发 / 测试 / 上线
@@ -303,9 +331,38 @@ dootask 后端现已支持按 column_id 单值或数组过滤。配合 list_proj
 ❌ **禁止行为**：
 - 直接 create_task 不传 column_id（任务落 Default 破坏看板可视化）
 - 看到只有 Default 列就直接选 → 必须先引导规划阶段
+- 任务和现有列匹配度低还硬塞 → 必须建议新增列
+- 建了新列却没把新列 column_id 传给 create_task（chain call 断裂）
 - 用 task_tag 替代项目阶段（task_tag 是任务画像维度，不是阶段）
 
-【对话样例 1：项目仅 Default 列】
+【对话样例 1：高匹配 → 直接选】
+User: "测试产品开发项目加个任务：登录模块开发"
+LLM: [list_project_columns(9)] → [需求,设计,开发,测试,上线]
+LLM: → create_task(column_id=开发列id, task_tag=[...])（无需追问，高匹配直接选）
+
+【对话样例 2：中匹配 → 追问让用户选】
+User: "测试产品开发项目加个任务：撰写用户手册"
+LLM: [list_project_columns(9)] → [需求,设计,开发,测试,上线]
+LLM: "任务『撰写用户手册』可以放到现有『上线』列（视为发布前准备），
+      也可以新增『文档』列单独管理。建议新增列以便追踪文档进度。您选哪种？
+      (a) 放『上线』列  (b) 新增『文档』列"
+User: "新增"
+LLM: → create_column(project_id=9, name='文档') → 拿到新列 column_id=N
+     → create_task(column_id=N, task_tag=[...])  ← MUST 用新列 id
+
+【对话样例 3：低匹配 → 必须建议新增】
+User: "招商客户项目加任务：POC 演示"
+LLM: [list_project_columns(X)] → [线索,合同,交付]
+LLM: "任务『POC 演示』和现有阶段（线索/合同/交付）匹配度低，
+      销售流程通常 POC 演示属于"方案设计→商务报价"之间。
+      建议新增『方案设计』和『商务报价』两列。是否同意？"
+User: "同意"
+LLM: → create_columns_batch(project_id=X, columns=[
+        {name:'方案设计'}, {name:'商务报价'}
+      ]) → 拿到新列 column_id 数组
+     → create_task(column_id=方案设计列id, task_tag=[...])
+
+【对话样例 4：仅 Default 列 → 引导规划阶段】
 User: "测试产品开发项目加个任务：消息推送系统优化"
 LLM: [list_project_columns(9)] → 仅 [Default]
 LLM: "这个项目还没规划阶段（仅有 Default 列）。请问这是什么类型的项目？
@@ -313,14 +370,11 @@ LLM: "这个项目还没规划阶段（仅有 Default 列）。请问这是什�
 User: "软件开发"
 LLM: "建议为该项目建立 5 个阶段：需求/设计/开发/测试/上线。是否确认？"
 User: "可以"
-LLM: → create_columns_batch(project_id=9, columns=[...]) → 5 列建好
+LLM: → create_columns_batch(project_id=9, columns=[
+        {name:'需求'},{name:'设计'},{name:'开发'},{name:'测试'},{name:'上线'}
+      ]) → 5 列建好，拿到新列 column_id 数组
      → 推理"消息推送系统优化"匹配"开发"列
      → create_task(column_id=新开发列id, task_tag=[...])
-
-【对话样例 2：项目阶段已规划】
-User: "测试产品开发项目加个任务：消息推送系统优化"
-LLM: [list_project_columns(9)] → [需求,设计,开发,测试,上线]
-LLM: → create_task(column_id=开发列id, task_tag=[...])（无需追问）
 
 【关于优先级 p_level/p_name/p_color（用户提到紧急度时强烈推荐）】
 1. 用户说"紧急"/"重要"/"高优先级"等紧急度词汇时，先调 list_task_priorities 拿系统档位
