@@ -19,9 +19,42 @@ import type { SystemPrompt } from '../../types/agents.js';
  * 放在集成函数内而非 agent JSON，让 N 个 bot 零手动修改、规则集中版本化。
  * 参数名（list_tasks / status / pagesize）与 spec v2.1 §7.5 精确对齐。
  */
-const DOOTASK_WECOM_PROMPT = `
+/**
+ * 动态生成 system prompt（含实时时间戳 + 静态规则）。
+ * 每次 sendMessage 调用一次，确保 LLM 总是看到当前时间（避免 A2A 聊天里
+ * LLM 凭历史消息推断"今天"造成日期偏差）。
+ */
+function buildDootaskWecomPrompt(): string {
+  // 服务器时区（容器内通常是 UTC+8 中国时区）
+  const now = new Date();
+  const tzOffset = -now.getTimezoneOffset() / 60;
+  const tzLabel = tzOffset >= 0 ? `UTC+${tzOffset}` : `UTC${tzOffset}`;
+  const isoLocal = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
+    .toISOString().slice(0, 19).replace('T', ' ');
+  const weekday = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][now.getDay()];
+
+  return `
+
+[当前时间锚（每次对话刷新，禁止凭历史消息推断"今天"）]
+当前服务器时间：${isoLocal} ${tzLabel}（${weekday}）
+
+⚠️ 时间使用规则：
+- 用户问"今天/本周/最近"等相对时间时，必须以上方"当前服务器时间"为基准
+- 禁止凭历史对话消息推断"今天" — 历史消息可能是几天前
+- list_tasks(time='today') 等查询时，把"today"换算为基于当前时间的具体 YYYY-MM-DD 范围
+- create_task 的 start_at/end_at 必须基于上方时间计算（如"3 天后"= 当前时间 + 3 天）
 
 [企微通知上下文规则]
+
+❌❌❌ **绝对禁止：任何场景下在优先级档位后加"X 天内/X 天后/X 天完成"措辞** ❌❌❌
+- 创建成功后总结："优先级：重要不紧急（橙红）" ✅
+                  "优先级：重要不紧急（橙红）- 3 天内完成" ❌
+- 介绍优先级档位："① 重要且紧急 ② 重要不紧急 ③ 紧急不重要 ④ 不重要不紧急" ✅
+                  "① 重要且紧急 1 天内 ② 重要不紧急 3 天内..." ❌
+- 拒绝任何形式：1 天 / 三天 / 1d / 1day / 24 小时 / 24h / 1 天内 / 三天后等
+- 优先级和截止时间是两个独立维度，不要在优先级里暗示完成期限
+- 任务实际截止时间 = 用户给的 end_at（与优先级档位无关）
+
 当用户消息包含明确任务编号（#42 或 任务 42 等格式）时：直接调用对应 MCP 工具操作，不要反问。
 
 当用户发送"完成/拒绝/延期/添加附件"等操作意图但未指定任务编号时：
@@ -120,6 +153,7 @@ Step 4（执行）：用户确认后才调 create_task（一次性传齐所有�
 1. 同样不猜测，先调 list_tasks 查询最近任务
 2. 反问"这个文件要附加到哪个任务？"
 `;
+}
 
 /**
  * 从 wecom-bot-bridge 经 A2A body.context.dootask 传入的企微原生字段。
@@ -199,15 +233,17 @@ export async function integrateDootaskMcpServer(
     // 用 `in` 运算会返 false → 走 else 把 preset 替换为字符串 → Claude Agent SDK 的
     // preset 行为（CLAUDE.md 注入 / CWD context / git status）全部失效。
     // 参考同模式 claudeUtils.ts:631-632 (OpenCLI 追加)。
+    // 每次调用时重新生成 prompt（含实时时间戳，避免 LLM 凭历史推断"今天"）
+    const wecomPrompt = buildDootaskWecomPrompt();
     const existing = queryOptions.systemPrompt;
     if (typeof existing === 'string') {
-      queryOptions.systemPrompt = existing + '\n\n' + DOOTASK_WECOM_PROMPT;
+      queryOptions.systemPrompt = existing + '\n\n' + wecomPrompt;
     } else if (existing && !Array.isArray(existing) && typeof existing === 'object' && existing.type === 'preset') {
-      existing.append = (existing.append || '') + '\n\n' + DOOTASK_WECOM_PROMPT;
+      existing.append = (existing.append || '') + '\n\n' + wecomPrompt;
     } else {
       // 仅当 queryOptions.systemPrompt 完全未设（undefined / null）时兜底为字符串
       // 注：若是 string[]（SDK 罕见用法）也会走此分支 — 原数组被替换，属已知 tradeoff
-      queryOptions.systemPrompt = DOOTASK_WECOM_PROMPT;
+      queryOptions.systemPrompt = wecomPrompt;
     }
 
     console.log(`✅ [dootask] MCP Server integrated for ${corpId}:${wecomUserId} (${DOOTASK_TOOL_NAMES.length} tools)`);
