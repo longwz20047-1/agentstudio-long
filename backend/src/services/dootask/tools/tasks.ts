@@ -270,19 +270,57 @@ dootask 后端现已支持按 column_id 单值或数组过滤。配合 list_proj
     'create_task',
     `在指定项目中创建新任务。
 
-【关于 column_id 的智能选择（强制流程，禁止 skip）】
-⚠️ **MUST**：调本工具前必须先确定 column_id。完整流程：
-1. 必先调 list_project_columns(project_id) 获取该项目的 columns 列表（比 get_project 更轻量）。
-   列名通常代表项目阶段（如售前项目"线索接洽/方案设计/商务报价/合同签订/交付实施"）
-   或工作流状态（"待办/进行中/已完成"）。
-2. 根据用户描述的任务内容推理最匹配的列（例："写报价方案" → 商务报价列；
-   "性能优化任务" → "进行中"或"待办"列；"消息推送系统升级" → 现有"开发"或"进行中"列）。
-3. 若现有列均无法合理匹配此任务（例如内容是"POC 演示" 但项目仅有线索/合同/交付列），
-   不要擅自落到默认列，应先告知用户："此项目缺少『XX』类列，建议先新增列再创建任务"，
-   征得同意后调 **create_column**（单列）或 **create_columns_batch**（批量）新建。
-4. 仅当用户明确说"放默认列"或"不分类"时，才省略 column_id 走系统 default。
-5. ❌ **禁止行为**：跳过 list_project_columns 直接 create_task（任务会落到 default 列，
-   破坏看板可视化），除非用户明确豁免。
+【关于 column_id 的智能选择（强制流程，禁止落 Default）】
+
+⚠️ **看板列严格定义** = 项目阶段（Kanban 列）
+- 不是任务状态、不是优先级、不是分类
+- 是"项目走到哪一步"（需求→设计→开发→测试→上线 这种）
+- 不管什么类型的项目，**一定有项目阶段** → 一定有看板列
+
+⚠️ **MUST 流程（任何创建任务前必跑）**：
+1. 必先调 list_project_columns(project_id) 看现有阶段列。
+2. 评估列状态分 4 种情况：
+   ① **仅 1 个 Default 列**（项目阶段未规划）→ ❌ 禁止直接落 Default！
+      必须先引导用户："这个项目还没规划阶段（仅有 Default 列），
+      请问这是什么类型的项目？（软件/销售/产品研发/咨询/其他）"
+      → 用户答 → 给阶段方案让用户确认 → create_columns_batch 一次性建列
+      → 然后选最匹配的列做 column_id。
+   ② **有阶段列且任务能匹配**（推荐场景）→ 选最近列做 column_id。
+   ③ **有阶段列但任务不匹配**（如项目阶段是"线索/合同/交付"
+      但任务是"POC 演示"）→ 告知用户"此项目缺少『XX』阶段列，
+      建议先新增"，征得同意后 create_column / create_columns_batch 新建。
+   ④ **现有列含 Default + 阶段列**（项目阶段不全）→ 视情况补全或选近似列。
+3. 仅当用户**明确**说"暂时不分阶段"/"先丢 Default"/"占位先放着" 才允许 column_id=Default 列 id。
+
+⚠️ **常见项目类型阶段模板**（无外部上下文时引导用户用）：
+- 软件开发：需求分析 / 设计 / 开发 / 测试 / 上线
+- 销售流程：线索接洽 / 需求调研 / 方案设计 / 商务报价 / 合同签订 / 交付实施
+- 产品研发：调研 / 设计 / 开发 / 灰度 / 正式发布
+- 咨询服务：需求洽谈 / 方案撰写 / 评审 / 实施 / 复盘
+- 内容运营：选题 / 撰稿 / 审核 / 发布 / 效果评估
+- 招聘：JD 撰写 / 简历筛选 / 初面 / 复试 / Offer / 入职
+
+❌ **禁止行为**：
+- 直接 create_task 不传 column_id（任务落 Default 破坏看板可视化）
+- 看到只有 Default 列就直接选 → 必须先引导规划阶段
+- 用 task_tag 替代项目阶段（task_tag 是任务画像维度，不是阶段）
+
+【对话样例 1：项目仅 Default 列】
+User: "测试产品开发项目加个任务：消息推送系统优化"
+LLM: [list_project_columns(9)] → 仅 [Default]
+LLM: "这个项目还没规划阶段（仅有 Default 列）。请问这是什么类型的项目？
+      软件开发？产品研发？我会根据类型为您规划项目阶段列。"
+User: "软件开发"
+LLM: "建议为该项目建立 5 个阶段：需求/设计/开发/测试/上线。是否确认？"
+User: "可以"
+LLM: → create_columns_batch(project_id=9, columns=[...]) → 5 列建好
+     → 推理"消息推送系统优化"匹配"开发"列
+     → create_task(column_id=新开发列id, task_tag=[...])
+
+【对话样例 2：项目阶段已规划】
+User: "测试产品开发项目加个任务：消息推送系统优化"
+LLM: [list_project_columns(9)] → [需求,设计,开发,测试,上线]
+LLM: → create_task(column_id=开发列id, task_tag=[...])（无需追问）
 
 【关于优先级 p_level/p_name/p_color（用户提到紧急度时强烈推荐）】
 1. 用户说"紧急"/"重要"/"高优先级"等紧急度词汇时，先调 list_task_priorities 拿系统档位
@@ -365,9 +403,11 @@ dootask 后端现已支持按 column_id 单值或数组过滤。配合 list_proj
       owner: z.array(z.number()).optional().describe('负责人用户ID数组'),
       assist: z.array(z.number()).optional().describe('协助人员用户ID数组'),
       column_id: z.number().optional().describe(
-        '看板列ID。⚠️ MUST 流程：先 list_project_columns(project_id) → 推理最匹配的列名 → 传 column_id。'
-        + '若无合适列调 create_column 或 create_columns_batch 新建后再传。'
-        + '禁止 skip（缺失则落系统 default 列，破坏看板可视化）。'
+        '看板列ID = 项目阶段（不是任务状态/优先级/分类）。⚠️ MUST 流程：'
+        + '① 先 list_project_columns(project_id) → ② 评估列状态 → ③ '
+        + '若仅 Default 列必须先引导规划阶段+create_columns_batch 建列，'
+        + '若现有阶段匹配则选最近列，若不匹配则建议新增列。'
+        + '❌ 禁止落 Default（除非用户明确豁免）。'
       ),
       start_at: z.string().optional().describe('开始时间 YYYY-MM-DD HH:mm:ss'),
       end_at: z.string().optional().describe('结束时间 YYYY-MM-DD HH:mm:ss'),
