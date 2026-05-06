@@ -494,10 +494,16 @@ LLM: → create_columns_batch(project_id=9, columns=[
 - LLM 必须**从字典实际返回值**里选档位，不要自己假设档位名
 
 ⚠️ **典型字典示例（艾森豪威尔四象限，本系统当前值）**：
-  priority=1  name="重要且紧急"     color=#ED4014  days=1  ← is_default
-  priority=2  name="重要不紧急"     color=#F16B62  days=3
-  priority=3  name="紧急不重要"     color=#19C919  days=5
-  priority=4  name="不重要不紧急"   color=#2D8CF0  days=0
+  priority=1  name="重要且紧急"     color=#ED4014  ← is_default
+  priority=2  name="重要不紧急"     color=#F16B62
+  priority=3  name="紧急不重要"     color=#19C919
+  priority=4  name="不重要不紧急"   color=#2D8CF0
+
+⚠️ **关于字典里的 days 字段**：
+  - days 是字典的"系统建议天数"参考值（不同档位的默认 SLA 概念）
+  - **❌ 不要把 days 用作任务实际截止时间**
+  - **❌ 不要在草稿里说"建议 X 天完成"** —— 容易误导用户以为这是硬性截止
+  - 任务真实的开始/截止时间走 start_at + end_at 字段（见下方"截止时间"段）
 
 ⚠️ **判断维度（这个矩阵需要 2 维评估，不是简单 4 档）**：
   · 重要性：任务是否影响业务关键目标 / 是否无法跳过
@@ -513,9 +519,9 @@ Step 2：基于任务内容做"重要 + 紧急"二维评估：
   · "临时帮同事查个数据 / 临时会议纪要" → 紧急不重要（priority=3）
   · "可有可无的优化 / 内部演示装饰" → 不重要不紧急（priority=4）
 
-Step 3：草稿展示推理结果让用户确认/调整：
-  "我评估这个任务为『重要且紧急』（priority=1，红色，
-    建议 1 天完成）— 影响完成率加权统计。请确认或调整。"
+Step 3：草稿展示推理结果让用户确认/调整（不要带"X 天完成"措辞）：
+  "我评估这个任务为『重要且紧急』（priority=1，红色）— 影响完成率
+    加权统计。请确认或调整。"
 
 Step 4：用户没说紧急度时（最常见）：MUST 主动追问，列出字典实际档位
   让用户选，禁止默默用 is_default 档位
@@ -594,15 +600,25 @@ Step 5：用户确认后传 p_level + p_name + p_color 三字段（**必须从�
 - task_tag：dootask UI 不渲染子任务 tag（API 可写但 UI 看不到，慎用）
 - p_level：可省（继承父任务的紧急度语义）
 
-═══ owner / 时间字段 ═══
+═══ owner / 截止时间字段 ═══
 
 owner：
 - 用户提到 "@xxx"/具体人名 → search_users 找 userid → 传 owner
 - 用户说"我自己"/没提 → 用 caller userid（默认）
 
-start_at / end_at：
-- 用户提到时间词（"明天/下周/X 月底"）→ 推理具体时间传
-- 没提 → 留空（dootask 后端不强制）
+start_at / end_at（⚠️ MUST 问，不能留空）：
+- 任务必须有截止时间（end_at）— 这是任务管理的基础信息
+- 用户提到时间词（"明天 / 下周三 / 5 月底 / Q1 内"）→ 推理具体时间传
+- 用户没提 → ⚠️ MUST 在草稿里追问："请问任务的截止时间？比如：
+   · 具体日期（5 月 15 日下班前）
+   · 相对时间（3 天后 / 下周三 / 月底）
+   · 阶段周期（本季度内 / Q1 末）"
+- 优先级字典里的 days 字段**不是默认截止时间**，禁止用 today + days 自动填
+- start_at 用户没说时可默认 = 今天创建时间，但 end_at 必须用户给
+
+❌ 禁止：用户没说截止时间就 skip end_at（任务无截止 = 永远不会过期 → 浪费）
+❌ 禁止：基于 priority days 自动算 end_at（如 priority=1 days=1 → 明天）
+       这是字典 SLA 概念，不是用户实际承诺时间
 
 ═══════════════════════════════════════════════════════════════
 【Phase 2 草稿卡片格式（用户确认模板）】
@@ -616,9 +632,10 @@ Phase 1 信息收敛完成后，用以下格式呈现草稿等用户确认：
 │  📋 内容：[content 丰富版本]               │
 │  🎯 阶段：[列名]（[匹配度说明]）             │
 │  🏷️ 画像：[tag1 / tag2 / tag3 / ...]       │
-│  ⚡ 优先级：[档位名]（权重 N，[颜色]）       │
+│  ⚡ 优先级：[档位名]（[颜色]）               │
+│  📅 截止时间：[end_at]（⚠️ 必填）            │
+│  📅 开始时间：[start_at]（可省，默认今天）    │
 │  👤 负责人：[名字]                          │
-│  📅 时间：[start ~ end]（如有）              │
 │                                             │
 │  [可选] 额外建议：可分解为 N 个子任务        │
 │                                             │
@@ -710,8 +727,12 @@ LLM:
         + '若现有阶段匹配则选最近列，若不匹配则建议新增列。'
         + '❌ 禁止落 Default（除非用户明确豁免）。'
       ),
-      start_at: z.string().optional().describe('开始时间 YYYY-MM-DD HH:mm:ss'),
-      end_at: z.string().optional().describe('结束时间 YYYY-MM-DD HH:mm:ss'),
+      start_at: z.string().optional().describe('开始时间 YYYY-MM-DD HH:mm:ss。可省，默认任务创建时刻。'),
+      end_at: z.string().optional().describe(
+        '截止时间 YYYY-MM-DD HH:mm:ss。⚠️ MUST 必问：任务管理基础信息，'
+        + '不能留空（任务无截止 = 永远不过期 = 失去管理意义）。'
+        + '用户没说时草稿里主动追问。❌ 禁止用 priority 字典 days 字段自动算（那是 SLA 不是承诺）。'
+      ),
       p_level: z.number().int().optional().describe(
         '⚠️ 优先级 priority 值（系统字典维护，不是 LLM 假设）。MUST 流程：'
         + '① list_task_priorities 拿真实字典 → ② 基于"重要 + 紧急"二维评估 → '
