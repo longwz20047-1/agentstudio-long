@@ -430,31 +430,55 @@ LLM: → create_columns_batch(project_id=9, columns=[
      → 推理"消息推送系统优化"匹配"开发"列
      → create_task(column_id=新开发列id, task_tag=[...])
 
-═══ p_level（优先级 · MUST 引导，不可全部默认）═══
+═══ p_level（优先级 · 系统字典 + MUST 引导）═══
 
 ⚠️ **优先级是任务管理的核心属性，不是装饰品**：
 - get_task_completion_stats 工具用 p_level 做**加权完成率统计**
 - 全部默认 = 统计失真 = "项目完成率"无业务意义
-- 不能 skip，不能默认填"普通"
+- 不能 skip，不能默认按 dootask 后端 is_default 档位
 
-⚠️ **MUST 流程**：
+⚠️ **优先级是系统字典**（管理员可配置，不是 LLM 假设）：
+- 调 list_task_priorities → 返回 Array<{priority, name, color, days, is_default}>
+- 不同租户可能配置不同档位（4 档/5 档/自定义名称）
+- LLM 必须**从字典实际返回值**里选档位，不要自己假设档位名
 
-【场景 1】用户提到紧急度词（"紧急"/"重要"/"高优"/"普通"/"低"）：
-  1. list_task_priorities 拿系统档位（priority/name/color 三字段）
-  2. 推理用户语义对应档位（"紧急"→红色档；"重要"→橙档；"普通"→中档；"低"→灰档）
-  3. 草稿展示："您说『紧急』，对应系统档位『高优』（权重 1，红色）。请确认或调整。"
-  4. 用户确认后传 p_level + p_name + p_color 三字段（必须一致，全从 priorities 列表选）
+⚠️ **典型字典示例（艾森豪威尔四象限，本系统当前值）**：
+  priority=1  name="重要且紧急"     color=#ED4014  days=1  ← is_default
+  priority=2  name="重要不紧急"     color=#F16B62  days=3
+  priority=3  name="紧急不重要"     color=#19C919  days=5
+  priority=4  name="不重要不紧急"   color=#2D8CF0  days=0
 
-【场景 2】用户没提紧急度（最常见）：
-  1. list_task_priorities 拿档位
-  2. **MUST** 主动追问："这个任务的优先级是？我们有 [紧急/高/普通/低] 几档，
-                       会影响完成率统计权重。"
-  3. 等用户回复 → 同场景 1
+⚠️ **判断维度（这个矩阵需要 2 维评估，不是简单 4 档）**：
+  · 重要性：任务是否影响业务关键目标 / 是否无法跳过
+  · 紧急性：是否有明确截止时间 / 是否阻塞下游
 
-❌ 禁止：用户没说就默认填"普通"——破坏完成率加权统计
-❌ 禁止：拿用户描述当 p_name 直接传（如"紧急"但系统档位叫"高优"，应传"高优"）
-❌ 禁止：把"紧急/高/普通"做成 task_tag——那是 p_level
-❌ 禁止：单独传 p_level 不传 p_name/p_color（三字段必须一致）
+【MUST 流程】
+
+Step 1：list_task_priorities 拿真实字典（不假设档位名）
+
+Step 2：基于任务内容做"重要 + 紧急"二维评估：
+  · "线上 P0 故障 / 客户投诉立刻处理" → 重要且紧急（priority=1）
+  · "下季度战略规划 / 架构重构" → 重要不紧急（priority=2）
+  · "临时帮同事查个数据 / 临时会议纪要" → 紧急不重要（priority=3）
+  · "可有可无的优化 / 内部演示装饰" → 不重要不紧急（priority=4）
+
+Step 3：草稿展示推理结果让用户确认/调整：
+  "我评估这个任务为『重要且紧急』（priority=1，红色，
+    建议 1 天完成）— 影响完成率加权统计。请确认或调整。"
+
+Step 4：用户没说紧急度时（最常见）：MUST 主动追问，列出字典实际档位
+  让用户选，禁止默默用 is_default 档位
+  "字典中可选档位：① 重要且紧急 ② 重要不紧急 ③ 紧急不重要 ④ 不重要不紧急。
+    您选哪个？"
+
+Step 5：用户确认后传 p_level + p_name + p_color 三字段（**必须从字典原样取**，
+  不能拿用户口语化描述当 p_name）
+
+❌ 禁止：跳过 list_task_priorities 凭"我以为有 紧急/高/普通/低 4 档"硬编码
+❌ 禁止：用用户原话当 p_name（用户说"紧急"但字典叫"重要且紧急"，传"重要且紧急"）
+❌ 禁止：单独传 p_level 不传 p_name/p_color（三字段必须从字典同一项原样取）
+❌ 禁止：把"紧急/重要"做成 task_tag——那是 p_level 维度
+❌ 禁止：用户没说就静默用 is_default 档位（破坏完成率加权统计）
 
 ═══ task_tag（任务画像 · 内容丰富后画 + 用户确认）═══
 
@@ -588,12 +612,13 @@ LLM:
      额外建议：可分解为 4 个子任务（信息展示/资料编辑/头像/密码），
               是否一并创建？
      请调整或确认。"
-User: "优先级普通，分解子任务"
+User: "我评估为重要不紧急吧，分解子任务"
 LLM:
   Phase 3：
     - create_task(project_id=1, name="用户中心", content="...",
-                  column_id=开发列id, task_tag=[...],
-                  p_level=普通档.priority, p_name="普通", p_color="#909399")
+                  column_id=开发列id, task_tag=[用户中心,前端,用户管理],
+                  p_level=2, p_name="重要不紧急", p_color="#F16B62"
+                  ← 三字段从 list_task_priorities 字典 priority=2 项原样取)
     - 循环 4 次 create_sub_task
 
 ═══════════════════════════════════════════════════════════════
@@ -637,12 +662,20 @@ LLM:
       start_at: z.string().optional().describe('开始时间 YYYY-MM-DD HH:mm:ss'),
       end_at: z.string().optional().describe('结束时间 YYYY-MM-DD HH:mm:ss'),
       p_level: z.number().int().optional().describe(
-        '⚠️ 优先级档位 priority 值（数值越小越紧急）。MUST：影响 get_task_completion_stats 加权统计，'
-        + '不能默认。流程：list_task_priorities 拿档位 → 用户确认/选择 → 三字段一致传。'
-        + '禁止用户没说就填"普通"（破坏统计加权）。'
+        '⚠️ 优先级 priority 值（系统字典维护，不是 LLM 假设）。MUST 流程：'
+        + '① list_task_priorities 拿真实字典 → ② 基于"重要 + 紧急"二维评估 → '
+        + '③ 草稿确认 → ④ 三字段从字典同一项原样取（不能用用户口语化词当 p_name）。'
+        + '影响 get_task_completion_stats 加权统计，不能默认。'
       ),
-      p_name: z.string().optional().describe('优先级名称，必须从 list_task_priorities 返回的档位 name 原样取（不能用用户描述当 name）'),
-      p_color: z.string().optional().describe('优先级颜色 hex，必须从 list_task_priorities 返回的档位 color 原样取'),
+      p_name: z.string().optional().describe(
+        '优先级名称，⚠️ MUST 从 list_task_priorities 返回字典中某项 name 原样取。'
+        + '当前系统典型字典："重要且紧急"/"重要不紧急"/"紧急不重要"/"不重要不紧急"（艾森豪威尔四象限）。'
+        + '禁止用用户口语化词（如"紧急"/"高"）当 p_name 直接传——必须用字典中真实 name。'
+      ),
+      p_color: z.string().optional().describe(
+        '优先级颜色 hex，必须和 p_level/p_name 来自字典同一项（如 priority=1 项的 color 是 #ED4014）。'
+        + '不能 LLM 自己生成颜色。'
+      ),
       task_tag: z.array(
         z.object({
           name: z.string().min(1).describe('标签名（LLM 推理画像维度，如"金融"/"核心客户"/"待跟进"）'),
