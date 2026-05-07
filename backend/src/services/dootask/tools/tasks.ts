@@ -14,6 +14,13 @@ export function buildTasksTools(ctx: ToolContext) {
     'list_tasks',
     `获取当前用户相关的任务列表（负责/协助/关注），支持按状态、项目、时间范围、标签筛选和搜索。
 
+【任务汇报关联】
+列表项不含 reports 数据（避免 N+1 + context 爆）。需要看某任务的汇报记录时：
+- 单个任务深查 → 调 get_task(task_id)（详情自动并行嵌入最近 50 条 reports）
+- 列表批量看 → 用户选定 task_id 后调 list_task_reports(task_id, include_children?)
+- 汇总仪表盘 → 调 query_report_dashboard_data / drill_report_dashboard
+
+
 【两个语义匹配两步链路（项目 + 标签）— LLM 不确定标识符场景必走】
 
 dootask 后端按精确匹配查询（tag.name = 单值，project_id = 单值）。但 LLM 生成的标签和
@@ -190,27 +197,49 @@ dootask 后端现已支持按 column_id 单值或数组过滤。配合 list_proj
 
   const getTask = tool(
     'get_task',
-    '获取任务的完整详情，包括描述、内容、负责人、协助人、标签等。',
+    '获取任务的完整详情，包括描述、内容、负责人、协助人、标签和**任务汇报记录**（reports 字段，最近 50 条）。汇报数据通过 dootask `project/report/list_by_task` 自动并行加载嵌入；若需更多/含子任务汇报，调用 `list_task_reports` 工具。',
     { task_id: z.number().min(1).describe('任务ID') },
     async (args) => {
       const token = await ctx.getToken();
-      const task = await makeDootaskRequest(token, 'GET', 'project/task/one', { task_id: args.task_id });
+      // 三路并行：基本信息 / 富内容 / 任务汇报（list_by_task）
+      const [task, contentResult, reportsResult] = await Promise.all([
+        makeDootaskRequest(token, 'GET', 'project/task/one', { task_id: args.task_id }),
+        makeDootaskRequest(token, 'GET', 'project/task/content', { task_id: args.task_id })
+          .catch((err: any) => {
+            console.warn(`[dootask/get_task] Failed to get content: ${err?.message}`);
+            return null;
+          }),
+        makeDootaskRequest(token, 'POST', 'project/report/list_by_task', {
+          task_id: args.task_id,
+          page: 1,
+          pagesize: 50,
+        }).catch((err: any) => {
+          // 不挂任务详情（汇报为辅助信息），但保留 error 让 LLM 知道
+          console.warn(`[dootask/get_task] Failed to load reports: ${err?.message}`);
+          return null;
+        }),
+      ]);
 
       let fullContent: string = task.desc || '无描述';
-      try {
-        const content = await makeDootaskRequest(token, 'GET', 'project/task/content', { task_id: args.task_id });
-        if (content) {
-          if (typeof content === 'object' && content.content) {
-            fullContent = content.content;
-          } else if (typeof content === 'string') {
-            fullContent = content;
-          }
+      if (contentResult) {
+        if (typeof contentResult === 'object' && contentResult.content) {
+          fullContent = contentResult.content;
+        } else if (typeof contentResult === 'string') {
+          fullContent = contentResult;
         }
-      } catch (err: any) {
-        console.warn(`[dootask/get_task] Failed to get content: ${err?.message}`);
       }
-
       fullContent = htmlToMarkdown(fullContent);
+
+      // reports 数据简化（reportsResult 为 null 时给空 + error_hint）
+      const reports = reportsResult && Array.isArray(reportsResult.reports)
+        ? {
+            total: reportsResult.total ?? reportsResult.reports.length,
+            list: reportsResult.reports,
+            note: (reportsResult.total ?? 0) > (reportsResult.reports.length)
+              ? `仅返回前 ${reportsResult.reports.length} 条，共 ${reportsResult.total} 条。如需全部或含子任务汇报，调用 list_task_reports(task_id, include_children?, page?, pagesize?)`
+              : undefined,
+          }
+        : { total: 0, list: [], error_hint: '汇报加载失败或当前任务无可见汇报' };
 
       const detail = {
         task_id: task.id,
@@ -233,6 +262,7 @@ dootask 后端现已支持按 column_id 单值或数组过滤。配合 list_proj
         owners: task.task_user?.filter((u: any) => u.owner === 1).map((u: any) => ({ userid: u.userid })) || [],
         assistants: task.task_user?.filter((u: any) => u.owner === 0).map((u: any) => ({ userid: u.userid })) || [],
         tags: task.task_tag?.map((t: any) => t.name) || [],
+        reports,
         created_at: task.created_at,
         updated_at: task.updated_at,
       };
