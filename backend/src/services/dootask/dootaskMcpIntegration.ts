@@ -20,44 +20,30 @@ import type { SystemPrompt } from '../../types/agents.js';
  * 参数名（list_tasks / status / pagesize）与 spec v2.1 §7.5 精确对齐。
  */
 /**
- * 动态生成 system prompt（含实时时间戳 + 静态规则）。
- * 每次 sendMessage 调用一次，确保 LLM 总是看到当前时间（避免 A2A 聊天里
- * LLM 凭历史消息推断"今天"造成日期偏差）。
+ * 静态 system prompt（不再注入时间戳）。
+ *
+ * 设计变更（2026-05-07）：取消 prompt 顶部时间锚 — 故意不在 prompt 中提供
+ * 当前时间。让 LLM **必须**主动调 get_current_time 工具拿真实时间。
+ *
+ * 为什么去掉？
+ *   旧版在 prompt 顶部塞了 "本 prompt 顶部时间参考: <isoLocal>"，导致 LLM
+ *   把这个时间当成"事实数据"直接用，即使后面写"MUST 调工具"也不调（这是
+ *   Anthropic 官方 prompt-engineering 共识：当 system 已含可直接答的事实，
+ *   工具调用率会大幅下降）。
+ *
+ * 旧逻辑（含 Intl.DateTimeFormat + isoLocal 时间生成）保留在 git 历史。
  */
 function buildDootaskWecomPrompt(): string {
-  // 强制使用中国时区（Asia/Shanghai = UTC+8），不依赖容器 TZ 配置
-  // 因为 Docker 容器默认 UTC，会导致"今天"等日期相对概念偏差 8 小时
-  const now = new Date();
-  const tz = 'Asia/Shanghai';
-  // 用 Intl 格式化为 YYYY-MM-DD HH:mm:ss（CN）
-  const fmt = new Intl.DateTimeFormat('zh-CN', {
-    timeZone: tz,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false,
-  });
-  const parts = fmt.formatToParts(now).reduce<Record<string, string>>((acc, p) => {
-    if (p.type !== 'literal') acc[p.type] = p.value;
-    return acc;
-  }, {});
-  const isoLocal = `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
-  // 中国时区 weekday（用 zh-CN 格式化拿 long 名称）
-  const weekdayFmt = new Intl.DateTimeFormat('zh-CN', { timeZone: tz, weekday: 'long' });
-  const weekday = weekdayFmt.format(now); // "星期三"
-
   return `
 
-[当前时间使用规则（reuse session 会冻结 systemPrompt 时间，所以 MUST 调工具）]
-本 prompt 顶部时间参考（仅供基础参考，可能因 reuse session 失准）：${isoLocal} CST ${weekday}
-
-⚠️ **MUST 调用 get_current_time 的场景**（不要直接用上方时间锚）：
+⚠️ **MUST 调用 get_current_time 的场景**（系统不会预置时间，必须主动调工具）：
 - 用户问"现在几点 / 今天几号 / 星期几" → MUST 调 get_current_time 拿实时时间
 - create_task 算 start_at/end_at（"3 天后"等相对时间）→ MUST 调 get_current_time 拿基准
 - list_tasks 用 time='today' 等过滤 → MUST 调 get_current_time 拿具体 YYYY-MM-DD
 - 任何"今天/明天/本周/本月/Q1"判断 → MUST 调 get_current_time
 
 ⚠️ **禁止凭历史消息推断"今天"** — 历史消息可能是几天前
-⚠️ **禁止直接用 prompt 顶部时间作为答复** — reuse session 模式下该时间会被冻结
+⚠️ **本 prompt 不提供当前时间** — 系统已故意不放时间戳，强迫调工具是唯一来源
 
 [企微通知上下文规则]
 
